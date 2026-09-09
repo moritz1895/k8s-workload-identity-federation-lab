@@ -33,12 +33,14 @@ whoami_status() {
         -H "Authorization: Bearer $1" "$VALIDATOR_URL/whoami"
 }
 
-section "0. issuer / OIDC discovery advertised by the cluster"
-kubectl get --raw /.well-known/openid-configuration \
+section "0. OIDC discovery served by the stand-alone issuer endpoint"
+echo "GET https://issuer-web/.well-known/openid-configuration"
+curl -s --cacert /oidc/tls.crt https://issuer-web/.well-known/openid-configuration \
     | jq '{issuer, jwks_uri, id_token_signing_alg_values_supported}'
 
-section "1. cluster JWKS  (exactly what the validator fetches over the network)"
-kubectl get --raw /openid/v1/jwks | jq '.keys[] | {kid, kty, alg, use}'
+section "1. JWKS  (the validator follows jwks_uri from the discovery document)"
+curl -s --cacert /oidc/tls.crt https://issuer-web/openid/v1/jwks \
+    | jq '.keys[] | {kid, kty, alg, use}'
 
 section "2. mint an audience-bound token and decode its claims"
 GOOD=$(kubectl -n "$NS" create token consumer --audience "$AUD" --duration 10m)
