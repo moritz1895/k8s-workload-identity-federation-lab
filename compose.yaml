@@ -25,6 +25,9 @@ services:
       - --tls-san=k3s-server
       - --kube-apiserver-arg=service-account-issuer=https://k3s-server:6443
       - --kube-apiserver-arg=service-account-jwks-uri=https://k3s-server:6443/openid/v1/jwks
+      # k3s ships with anonymous auth OFF. The validator reads the discovery
+      # document and JWKS anonymously (see manifests/10-rbac-anonymous-oidc.yaml).
+      - --kube-apiserver-arg=anonymous-auth=true
     privileged: true
     tmpfs:
       - /run
@@ -36,19 +39,37 @@ services:
     volumes:
       - k3s-data:/var/lib/rancher/k3s
       - kubeconfig:/output
-      - ./manifests:/var/lib/rancher/k3s/server/manifests:ro
     networks:
       wifnet:
         aliases:
           - k3s-server
-    ports:
-      - "6443:6443"
+    # The API server is reached only over the compose network (by the validator
+    # and the demo container). No host port is published — nothing on the host
+    # talks to it, and 6443 is often already taken by Docker Desktop.
     healthcheck:
-      test: ["CMD", "k3s", "kubectl", "get", "--raw", "/openid/v1/jwks"]
+      test: ["CMD", "kubectl", "get", "--raw", "/readyz"]
       interval: 5s
       timeout: 5s
       retries: 40
-      start_period: 20s
+      start_period: 15s
+
+  # One-shot: applies the lab manifests (namespace, anonymous-OIDC RBAC, consumer
+  # deployment) once the API server is ready, then exits.
+  bootstrap:
+    build:
+      context: ./tools
+    image: wif-lab/tools
+    entrypoint: ["bash", "/work/bootstrap.sh"]
+    restart: "no"
+    volumes:
+      - kubeconfig:/kube:ro
+      - ./manifests:/manifests:ro
+      - ./tools:/work:ro
+    networks:
+      - wifnet
+    depends_on:
+      server:
+        condition: service_healthy
 
   # The "foreign" service: NOT in the cluster. Validates the pod's JWT offline
   # against the cluster JWKS (signature + iss + aud + exp) with Nimbus JOSE.
@@ -65,11 +86,14 @@ services:
     networks:
       wifnet:
         ipv4_address: 172.31.7.10
+    # Optional: expose the validator on the host for manual pokes (curl).
     ports:
-      - "8080:8080"
+      - "${VALIDATOR_HOST_PORT:-18080}:8080"
     depends_on:
       server:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 5s
@@ -77,7 +101,7 @@ services:
       retries: 30
       start_period: 40s
 
-  # On-demand verification harness. `docker compose run --rm demo`.
+  # On-demand verification harness: docker compose run --rm demo
   demo:
     build:
       context: ./tools

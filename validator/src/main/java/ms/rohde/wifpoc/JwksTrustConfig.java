@@ -37,9 +37,8 @@ class JwksTrustConfig {
 
     @Bean
     JWKSource<SecurityContext> jwkSource(WifProperties props) throws Exception {
-        DefaultResourceRetriever retriever =
-                new DefaultResourceRetriever(CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, SIZE_LIMIT_BYTES);
-        retriever.setSSLSocketFactory(trustOnly(props.clusterCa()));
+        DefaultResourceRetriever retriever = new DefaultResourceRetriever(
+                CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, SIZE_LIMIT_BYTES, true, trustOnly(props.clusterCa()));
 
         URL jwksUrl = URI.create(props.issuer() + "/openid/v1/jwks").toURL();
         return JWKSourceBuilder.<SecurityContext>create(jwksUrl, retriever)

@@ -51,7 +51,7 @@ class TokenValidatorTest {
         ValidationResult result = validator.validate(token);
 
         assertThat(result.valid()).isFalse();
-        assertThat(result.reason()).containsIgnoringCase("audience");
+        assertThat(result.reason()).containsIgnoringCase("aud");
     }
 
     @Test
