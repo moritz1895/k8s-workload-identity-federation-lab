@@ -17,6 +17,19 @@
     <name>wif-poc-validator</name>
     <description>Offline JWKS validator for Kubernetes workload identity federation (lab PoC)</description>
 
+    <organization>
+        <name>Moritz Rohde</name>
+    </organization>
+
+    <licenses>
+        <license>
+            <name>Proprietary — all rights reserved</name>
+            <url>https://github.com/moritz1895/k8s-workload-identity-federation-lab/blob/main/LICENSE</url>
+            <distribution>manual</distribution>
+            <comments>Not open source. Use only with the copyright holder's written permission.</comments>
+        </license>
+    </licenses>
+
     <properties>
         <java.version>25</java.version>
         <maven.compiler.release>25</maven.compiler.release>
