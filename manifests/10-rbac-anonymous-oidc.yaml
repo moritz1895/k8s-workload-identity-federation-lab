@@ -1,0 +1,19 @@
+# Lets the external validator fetch the OIDC discovery document and JWKS
+# without a credential. `system:service-account-issuer-discovery` is a built-in
+# ClusterRole that grants GET on the non-resource URLs
+# /.well-known/openid-configuration and /openid/v1/jwks.
+#
+# LAB ONLY: in a real setup the discovery/JWKS endpoints are usually published
+# at a separate public URL, not served anonymously off the API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: anonymous-service-account-issuer-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated

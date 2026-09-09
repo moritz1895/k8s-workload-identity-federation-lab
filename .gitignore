@@ -1,0 +1,8 @@
+.run/
+*.log
+validator/target/
+validator/.mvn/
+*.class
+.DS_Store
+.idea/
+*.iml

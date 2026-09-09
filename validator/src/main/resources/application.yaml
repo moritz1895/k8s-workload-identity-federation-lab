@@ -1,0 +1,14 @@
+wif:
+  issuer: ${WIF_ISSUER:https://k3s-server:6443}
+  audience: ${WIF_AUDIENCE:wif-demo-validator}
+  cluster-ca: ${WIF_CLUSTER_CA:/k3s/server/tls/server-ca.crt}
+
+server:
+  port: 8080
+  shutdown: graceful
+
+logging:
+  level:
+    root: INFO
+    com.nimbusds: INFO
+    ms.rohde.wifpoc: DEBUG

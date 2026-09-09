@@ -1,0 +1,98 @@
+name: wif-lab
+
+networks:
+  wifnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.7.0/24
+
+volumes:
+  k3s-data:
+  kubeconfig:
+
+services:
+  # Single-node k3s, running straight in a container (no k3d binary on the host).
+  # We set the ServiceAccount issuer flags directly so the token `iss` is a name
+  # the external validator can resolve on the shared Docker network.
+  server:
+    image: ${K3S_IMAGE:-rancher/k3s:v1.34.11-k3s1}
+    command:
+      - server
+      - --disable=traefik
+      - --disable=servicelb
+      - --disable=metrics-server
+      - --tls-san=k3s-server
+      - --kube-apiserver-arg=service-account-issuer=https://k3s-server:6443
+      - --kube-apiserver-arg=service-account-jwks-uri=https://k3s-server:6443/openid/v1/jwks
+    privileged: true
+    tmpfs:
+      - /run
+      - /var/run
+    environment:
+      - K3S_TOKEN=${K3S_TOKEN:-lab-not-a-secret-change-me}
+      - K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml
+      - K3S_KUBECONFIG_MODE=644
+    volumes:
+      - k3s-data:/var/lib/rancher/k3s
+      - kubeconfig:/output
+      - ./manifests:/var/lib/rancher/k3s/server/manifests:ro
+    networks:
+      wifnet:
+        aliases:
+          - k3s-server
+    ports:
+      - "6443:6443"
+    healthcheck:
+      test: ["CMD", "k3s", "kubectl", "get", "--raw", "/openid/v1/jwks"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  # The "foreign" service: NOT in the cluster. Validates the pod's JWT offline
+  # against the cluster JWKS (signature + iss + aud + exp) with Nimbus JOSE.
+  validator:
+    build:
+      context: ./validator
+    image: wif-lab/validator
+    environment:
+      - WIF_ISSUER=${WIF_ISSUER:-https://k3s-server:6443}
+      - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
+      - WIF_CLUSTER_CA=/k3s/server/tls/server-ca.crt
+    volumes:
+      - k3s-data:/k3s:ro
+    networks:
+      wifnet:
+        ipv4_address: 172.31.7.10
+    ports:
+      - "8080:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 40s
+
+  # On-demand verification harness. `docker compose run --rm demo`.
+  demo:
+    build:
+      context: ./tools
+    image: wif-lab/tools
+    environment:
+      - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
+      - VALIDATOR_URL=http://validator:8080
+    volumes:
+      - kubeconfig:/kube:ro
+      - ./tools:/work:ro
+    networks:
+      - wifnet
+    depends_on:
+      validator:
+        condition: service_healthy
+    profiles:
+      - demo
+    entrypoint: ["bash", "/work/demo.sh"]
