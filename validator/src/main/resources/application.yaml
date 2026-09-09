@@ -1,7 +1,7 @@
 wif:
-  issuer: ${WIF_ISSUER:https://k3s-server:6443}
+  issuer: ${WIF_ISSUER:https://issuer-web}
   audience: ${WIF_AUDIENCE:wif-demo-validator}
-  cluster-ca: ${WIF_CLUSTER_CA:/k3s/server/tls/server-ca.crt}
+  issuer-ca: ${WIF_ISSUER_CA:/oidc/tls.crt}
 
 server:
   port: 8080

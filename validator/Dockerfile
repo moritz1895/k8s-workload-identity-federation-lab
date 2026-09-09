@@ -3,9 +3,8 @@
 FROM maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /build
 COPY pom.xml .
-RUN mvn -B -q dependency:go-offline || true
 COPY src ./src
-RUN mvn -B -q clean package
+RUN --mount=type=cache,target=/root/.m2 mvn -B -q clean package
 
 FROM eclipse-temurin:25-jre-noble
 RUN apt-get update \

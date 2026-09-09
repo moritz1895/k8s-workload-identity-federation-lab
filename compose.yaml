@@ -10,11 +10,12 @@ networks:
 volumes:
   k3s-data:
   kubeconfig:
+  oidc-web:
 
 services:
   # Single-node k3s, running straight in a container (no k3d binary on the host).
-  # We set the ServiceAccount issuer flags directly so the token `iss` is a name
-  # the external validator can resolve on the shared Docker network.
+  # The ServiceAccount issuer is a URL served by a stand-alone endpoint, not the
+  # API server itself — see the `issuer-web` service.
   server:
     image: ${K3S_IMAGE:-rancher/k3s:v1.34.11-k3s1}
     command:
@@ -23,8 +24,8 @@ services:
       - --disable=servicelb
       - --disable=metrics-server
       - --tls-san=k3s-server
-      - --kube-apiserver-arg=service-account-issuer=https://k3s-server:6443
-      - --kube-apiserver-arg=service-account-jwks-uri=https://k3s-server:6443/openid/v1/jwks
+      - --kube-apiserver-arg=service-account-issuer=https://issuer-web
+      - --kube-apiserver-arg=service-account-jwks-uri=https://issuer-web/openid/v1/jwks
     privileged: true
     tmpfs:
       - /run
@@ -36,39 +37,77 @@ services:
     volumes:
       - k3s-data:/var/lib/rancher/k3s
       - kubeconfig:/output
-      - ./manifests:/var/lib/rancher/k3s/server/manifests:ro
     networks:
       wifnet:
         aliases:
           - k3s-server
-    ports:
-      - "6443:6443"
     healthcheck:
-      test: ["CMD", "k3s", "kubectl", "get", "--raw", "/openid/v1/jwks"]
+      test: ["CMD", "kubectl", "get", "--raw", "/readyz"]
       interval: 5s
       timeout: 5s
       retries: 40
-      start_period: 20s
+      start_period: 15s
 
-  # The "foreign" service: NOT in the cluster. Validates the pod's JWT offline
-  # against the cluster JWKS (signature + iss + aud + exp) with Nimbus JOSE.
+  # One-shot: applies the lab manifests and publishes the cluster's OIDC
+  # discovery document + JWKS into the oidc-web volume, then exits.
+  bootstrap:
+    build:
+      context: ./tools
+    image: wif-lab/tools
+    entrypoint: ["bash", "/work/bootstrap.sh"]
+    restart: "no"
+    volumes:
+      - kubeconfig:/kube:ro
+      - oidc-web:/oidc
+      - ./manifests:/manifests:ro
+      - ./tools:/work:ro
+    networks:
+      - wifnet
+    depends_on:
+      server:
+        condition: service_healthy
+
+  # Stand-alone OIDC issuer endpoint. This is the URL in the token's `iss` claim;
+  # the validator does discovery against it and never touches the API server.
+  issuer-web:
+    image: nginx:alpine
+    volumes:
+      - oidc-web:/oidc:ro
+      - ./tools/nginx-issuer.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      wifnet:
+        aliases:
+          - issuer-web
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  # The "foreign" service: NOT in the cluster. Validates the pod's JWT offline —
+  # OIDC discovery against issuer-web, then signature + iss + aud + exp (Nimbus).
   validator:
     build:
       context: ./validator
     image: wif-lab/validator
     environment:
-      - WIF_ISSUER=${WIF_ISSUER:-https://k3s-server:6443}
+      - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
-      - WIF_CLUSTER_CA=/k3s/server/tls/server-ca.crt
+      - WIF_ISSUER_CA=/oidc/tls.crt
     volumes:
-      - k3s-data:/k3s:ro
+      - oidc-web:/oidc:ro
     networks:
       wifnet:
         ipv4_address: 172.31.7.10
+    # Optional: expose the validator on the host for manual pokes (curl).
     ports:
-      - "8080:8080"
+      - "${VALIDATOR_HOST_PORT:-18080}:8080"
     depends_on:
-      server:
+      issuer-web:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
@@ -77,7 +116,7 @@ services:
       retries: 30
       start_period: 40s
 
-  # On-demand verification harness. `docker compose run --rm demo`.
+  # On-demand verification harness: docker compose run --rm demo
   demo:
     build:
       context: ./tools
@@ -87,6 +126,7 @@ services:
       - VALIDATOR_URL=http://validator:8080
     volumes:
       - kubeconfig:/kube:ro
+      - oidc-web:/oidc:ro
       - ./tools:/work:ro
     networks:
       - wifnet

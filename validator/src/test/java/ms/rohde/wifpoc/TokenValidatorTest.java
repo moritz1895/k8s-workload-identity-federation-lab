@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 
 class TokenValidatorTest {
 
-    private static final String ISSUER = "https://k3s-server:6443";
+    private static final String ISSUER = "https://issuer-web";
     private static final String AUDIENCE = "wif-demo-validator";
     private static final String SUBJECT = "system:serviceaccount:wif-demo:consumer";
 
@@ -51,7 +51,7 @@ class TokenValidatorTest {
         ValidationResult result = validator.validate(token);
 
         assertThat(result.valid()).isFalse();
-        assertThat(result.reason()).containsIgnoringCase("audience");
+        assertThat(result.reason()).containsIgnoringCase("aud");
     }
 
     @Test
