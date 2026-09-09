@@ -59,8 +59,6 @@ docs/                            die vollständige Dokumentation
 Dieses Projekt ist **proprietär** — siehe [LICENSE](LICENSE). Es ist bewusst **nicht**
 quelloffen lizenziert.
 
-Aktueller Stand: private Vorarbeit von Moritz Rohde. Einzelnen Personen kann vorab lesender
-Zugriff zur Sichtung und fachlichen Diskussion gewährt werden; das begründet kein Recht zur
-Weitergabe. Eine Übergabe an eine Abteilung oder eine Veröffentlichung erfolgt ausschließlich
-durch den Autor selbst — nicht durch Dritte, die die Vorarbeit in seiner Abwesenheit
-aufgreifen.
+Aktueller Stand: private Vorarbeit von Moritz Rohde, für Sichtung und fachliche Abstimmung.
+Zugriff bedeutet kein Weitergaberecht; über eine weitergehende Nutzung oder eine
+Veröffentlichung entscheidet der Autor.
