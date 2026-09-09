@@ -1,26 +1,28 @@
-# CLAUDE.md — project-local overrides
+# CLAUDE.md — projektlokale Abweichungen
 
-This is a **throwaway lab / PoC**. It deliberately deviates from the global `~/CLAUDE.md`
-in the following, scoped ways. The global file is unchanged and still applies everywhere else.
+Dies ist ein **Wegwerf-Lab / PoC**. Es weicht in den folgenden, klar abgegrenzten Punkten
+bewusst von der globalen `~/CLAUDE.md` ab. Die globale Datei bleibt unverändert und gilt
+überall sonst weiter.
 
-## Deliberate deviations
+## Bewusste Abweichungen
 
-| Global rule | Here | Why |
+| Globale Regel | Hier | Warum |
 |---|---|---|
-| Hexagonal architecture, `ports/adapters/core` package split | Flat package `ms.rohde.wifpoc`, ~4 classes | The validator is a single-purpose demo. Layering would add ceremony without teaching value. |
-| `ms.rohde:hexagonal-arch` annotations + ArchUnit test mandatory | Not used | Nothing to enforce in a flat 4-class service. |
-| Specialized coder/reviewer agents mandatory before Java code | Written directly | PoC scope; no domain model, no security surface beyond the one documented flow. |
-| MapStruct for DTO mapping | Not used | No DTO-to-entity mapping exists. |
-| Docker Compose file named `docker-compose.yml` | `compose.yaml` | Compose v2 canonical name; this repo is Compose-v2-only. |
+| Hexagonale Architektur, Aufteilung `ports/adapters/core` | Flaches Paket `ms.rohde.wifpoc`, ~4 Klassen | Der Validator ist eine Demo mit einem einzigen Zweck. Schichtung brächte Zeremonie ohne Lerngewinn. |
+| `ms.rohde:hexagonal-arch`-Annotationen + ArchUnit-Test verpflichtend | Nicht verwendet | In einem flachen Dienst mit 4 Klassen gibt es nichts zu erzwingen. |
+| Spezialisierte Coder-/Reviewer-Agenten vor Java-Code verpflichtend | Direkt geschrieben | PoC-Umfang; kein Domänenmodell, keine Sicherheitsfläche außer dem einen dokumentierten Ablauf. |
+| MapStruct für DTO-Mapping | Nicht verwendet | Es gibt kein DTO-zu-Entity-Mapping. |
+| Docker-Compose-Datei heißt `docker-compose.yml` | `compose.yaml` | Kanonischer Name für Compose v2; dieses Repo ist reines Compose-v2. |
 
-## Rules that still apply
+## Regeln, die weiter gelten
 
-- Java 25, Spring Boot 4.x (latest stable), latest stable dependencies, zero compiler warnings,
-  no deprecated APIs.
-- JSpecify `@NullMarked` at module/package level, `@Nullable` only where null is legitimate.
-- Log4j2 for logging. Java `record` for DTOs. No Lombok.
-- TDD: `TokenValidatorTest` is written against the validation contract and runs fully offline.
-- English identifiers, `UPPER_SNAKE_CASE` constants, intent-revealing names over comments.
-- Docs describe current state only — no changelog prose in README/JavaDoc.
-- Git: feature branch + PR, never self-merge, no `Claude-Session` footer (repo may be shared),
-  `Co-Authored-By` stays.
+- Java 25, Spring Boot 4.x (jeweils aktuellste stabile Version), aktuellste stabile
+  Abhängigkeiten, null Compiler-Warnungen, keine veralteten APIs.
+- JSpecify `@NullMarked` auf Modul-/Paketebene, `@Nullable` nur dort, wo null legitim ist.
+- Log4j2 zum Loggen. Java-`record` für DTOs. Kein Lombok.
+- TDD: `TokenValidatorTest` prüft den Validierungsvertrag und läuft vollständig offline.
+- Englische Bezeichner, `UPPER_SNAKE_CASE`-Konstanten, sprechende Namen statt Kommentaren.
+- Dokumentation beschreibt nur den IST-Zustand — keine Changelog-Prosa in README/JavaDoc.
+- Repo-Dokumentation (README, `docs/`) auf Deutsch; Code, Bezeichner und JavaDoc auf Englisch.
+- Git: Feature-Branch + PR, kein Self-Merge, kein `Claude-Session`-Footer (Repo kann geteilt
+  werden), `Co-Authored-By` bleibt.
