@@ -25,9 +25,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Wires the JWKS source. The validator trusts exactly one certificate — the one the stand-alone
- * issuer endpoint presents — runs OIDC discovery against the issuer URL to locate the JWKS, and
- * loads the keys from there. It never talks to the Kubernetes API server.
+ * Wires the JWKS source. TLS to the stand-alone issuer endpoint trusts only the internal CA from
+ * {@link WifProperties#issuerCa()}, not the JVM's default trust store. The validator runs OIDC
+ * discovery against the issuer URL to locate the JWKS and loads the keys from there; it never
+ * talks to the Kubernetes API server. Without a certificate path to that CA, startup fails.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(WifProperties.class)

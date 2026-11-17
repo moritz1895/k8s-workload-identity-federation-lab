@@ -19,9 +19,12 @@ Token **vollständig offline**:
 - `aud` enthält den konfigurierten Audience-Wert,
 - `exp` / `nbf` (mit 60 s Toleranz).
 
-Er ruft dafür **nie** den Kubernetes-API-Server (kein `TokenReview`). Die einzige
-Netzwerkverbindung nach außen ist die OIDC-Discovery + der JWKS-Abruf gegen `issuer-web`,
-einmalig beim Start und danach höchstens alle 5 Minuten zum Cache-Refresh.
+Er ruft dafür **nie** den Kubernetes-API-Server (kein `TokenReview`) und erreicht ihn auch
+über kein Netz. Die einzige Netzwerkverbindung nach außen ist die OIDC-Discovery + der
+JWKS-Abruf gegen `issuer-web` (`relying-net`), beim Start und danach zum Cache-Refresh.
+Nach einer Schlüsselrotation nimmt er Tokens mit der neuen `kid` an, sobald der Publisher das
+neue JWKS veröffentlicht hat; Tokens mit der vorherigen `kid` bleiben gültig, solange deren
+Schlüssel im JWKS steht (geprüft mit `demo post-rotation`).
 
 **Bibliotheken:** `nimbus-jose-jwt` 10.9.1 (JOSE/JWT-Verarbeitung), Spring Boot Web,
 Log4j2 statt Logback, JSpecify für Null-Annotationen. Details in
@@ -31,7 +34,7 @@ Log4j2 statt Logback, JSpecify für Null-Annotationen. Details in
 
 ## Konfigurationsparameter
 
-Gebunden über die Klasse `WifProperties` (`WifProperties.java:16`), ein Java-`record` mit
+Gebunden über die Klasse `WifProperties` (`WifProperties.java:17`), ein Java-`record` mit
 `@ConfigurationProperties(prefix = "wif")`.
 
 **Was ist `@ConfigurationProperties`?** Eine Spring-Boot-Annotation, die einen Satz
@@ -39,7 +42,7 @@ Konfigurationswerte (aus `application.yaml`, Umgebungsvariablen, …) typsicher 
 bindet. `prefix = "wif"` heißt: `wif.issuer` landet in `issuer`, `wif.audience` in `audience`,
 `wif.issuer-ca` (Kebab-Case) in `issuerCa`. Aktiviert wird die Bindung durch
 `@EnableConfigurationProperties(WifProperties.class)` auf `JwksTrustConfig`
-(`JwksTrustConfig.java:33`).
+(`JwksTrustConfig.java:34`).
 
 Werte-Kette in `application.yaml:1`:
 
@@ -47,7 +50,7 @@ Werte-Kette in `application.yaml:1`:
 wif:
   issuer:    ${WIF_ISSUER:https://issuer-web}
   audience:  ${WIF_AUDIENCE:wif-demo-validator}
-  issuer-ca: ${WIF_ISSUER_CA:/oidc/tls.crt}
+  issuer-ca: ${WIF_ISSUER_CA:/trust/ca.crt}
 ```
 
 `${ENV:default}` heißt: nimm die Umgebungsvariable, sonst den Default.
@@ -56,21 +59,21 @@ wif:
 |---|---|---|---|---|
 | `WIF_ISSUER` | `wif.issuer` | `issuer` (String) | `https://issuer-web` | Exakter Sollwert des `iss`-Claims. Zugleich die Basis-URL für die OIDC-Discovery (`issuer + "/.well-known/openid-configuration"`). |
 | `WIF_AUDIENCE` | `wif.audience` | `audience` (String) | `wif-demo-validator` | Wert, der in `aud` enthalten sein muss. |
-| `WIF_ISSUER_CA` | `wif.issuer-ca` | `issuerCa` (`java.nio.file.Path`) | `/oidc/tls.crt` | PEM-Datei mit dem (self-signed) Zertifikat, dem der Validator für die HTTPS-Verbindung zu `issuer-web` – und *nur* dafür – vertraut. |
+| `WIF_ISSUER_CA` | `wif.issuer-ca` | `issuerCa` (`java.nio.file.Path`) | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, dem der Validator für die HTTPS-Verbindung zu `issuer-web` – und *nur* dafür – vertraut. |
 | `SERVER_PORT` / `server.port` | – | – | `8080` | HTTP-Port des Dienstes (`application.yaml:7`). |
 
 Im Compose-Stack werden `WIF_ISSUER`, `WIF_AUDIENCE`, `WIF_ISSUER_CA` gesetzt
-(`compose.yaml:97`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/oidc/tls.crt`)
+(`compose.yaml:174`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/trust/ca.crt`)
 direkt (`entrypoint.sh:4`).
 
 Feste Werte im Code (keine Konfiguration):
 
 | Konstante | Wert | Ort |
 |---|---|---|
-| Verbindungs-/Lese-Timeout für Discovery + JWKS | 2000 ms | `JwksTrustConfig.java:38` |
-| Größenlimit der abgerufenen Dokumente | 64 KiB | `JwksTrustConfig.java:40` |
-| JWKS-Cache-Lebensdauer | 300 000 ms (5 min) | `JwksTrustConfig.java:41` |
-| JWKS-Cache-Refresh-Timeout | 30 000 ms | `JwksTrustConfig.java:42` |
+| Verbindungs-/Lese-Timeout für Discovery + JWKS | 2000 ms | `JwksTrustConfig.java:39` |
+| Größenlimit der abgerufenen Dokumente | 64 KiB | `JwksTrustConfig.java:41` |
+| JWKS-Cache-Lebensdauer | 300 000 ms (5 min) | `JwksTrustConfig.java:42` |
+| JWKS-Cache-Refresh-Timeout | 30 000 ms | `JwksTrustConfig.java:43` |
 | Akzeptierte Signatur-Algorithmen | `RS256`, `ES256` | `TokenValidator.java:23` |
 | Pflicht-Claims | `sub`, `iat`, `exp` | `TokenValidator.java:24` |
 | Clock-Skew-Toleranz | 60 s (Nimbus-Default) | implizit in `DefaultJWTClaimsVerifier` |
@@ -84,8 +87,8 @@ docker startet Container
         │
         ▼
 entrypoint.sh                       (validator/entrypoint.sh)
-  ├─ liest WIF_ISSUER_CA  (Default /oidc/tls.crt)
-  ├─ Schleife: warte bis /oidc/tls.crt existiert und nicht leer ist
+  ├─ liest WIF_ISSUER_CA  (Default /trust/ca.crt)
+  ├─ Schleife: warte bis /trust/ca.crt existiert und nicht leer ist
   │            (max. 180 s, sonst Exit 1)
   └─ exec java -XX:MaxRAMPercentage=75 -jar /app/app.jar
         │
@@ -93,9 +96,9 @@ entrypoint.sh                       (validator/entrypoint.sh)
 Spring Boot startet
         │
         ▼
-JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:45)
+JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:46)
   1. trustOnly(props.issuerCa())
-       -> liest tls.crt, baut KeyStore mit nur diesem Zertifikat,
+       -> liest ca.crt, baut KeyStore nur mit der internen CA,
           daraus TrustManagerFactory -> SSLContext -> SSLSocketFactory
   2. new DefaultResourceRetriever(connectTO, readTO, sizeLimit,
                                   disconnectAfter=true, sslSocketFactory)
@@ -109,7 +112,7 @@ JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:45)
         .build()                    ->  gecachter JWKSource
         │
         ▼
-JwksTrustConfig.tokenValidator(jwkSource, props)   (@Bean, JwksTrustConfig.java:59)
+JwksTrustConfig.tokenValidator(jwkSource, props)   (@Bean, JwksTrustConfig.java:60)
   -> new TokenValidator(jwkSource, issuer, audience)
         │
         ▼
@@ -132,7 +135,7 @@ soll auch keine Tokens annehmen.
 |---|---|
 | `WifPocApplication` | `@SpringBootApplication`-Einstiegspunkt, nur `main` (`WifPocApplication.java:9`). |
 | `WifProperties` | `record` mit `issuer`, `audience`, `issuerCa`; `@ConfigurationProperties(prefix="wif")`. |
-| `JwksTrustConfig` | `@Configuration`. Baut die cert-gepinnte `SSLSocketFactory`, macht OIDC-Discovery, stellt `JWKSource` und `TokenValidator` als Beans bereit. |
+| `JwksTrustConfig` | `@Configuration`. Baut die `SSLSocketFactory`, die nur der internen CA vertraut, macht OIDC-Discovery, stellt `JWKSource` und `TokenValidator` als Beans bereit. |
 | `TokenValidator` | Kapselt einen Nimbus `DefaultJWTProcessor`. Methode `validate(String)` → `ValidationResult`. Framework-frei, dadurch offline testbar. |
 | `ValidationResult` | `record (boolean valid, @Nullable Map claims, @Nullable String reason)` mit Fabrikmethoden `ok(...)` / `rejected(...)`. |
 | `TokenController` | `@RestController`. `GET /whoami`, `GET /healthz`. Zieht das Bearer-Token aus dem Header, ruft `validator.validate(...)`, mappt auf 200/401. |
@@ -175,8 +178,8 @@ hier: `DefaultJWTProcessor`, konfiguriert in `TokenValidator`s Konstruktor
 ### 1. Ressourcen-Abruf und Discovery – `JwksTrustConfig`
 
 - `DefaultResourceRetriever` ist Nimbus' HTTP-Client für das Laden von JSON-Dokumenten. Er
-  wird mit der cert-gepinnten `SSLSocketFactory` als **5. Konstruktor-Argument** erzeugt
-  (`JwksTrustConfig.java:46`):
+  wird mit der `SSLSocketFactory` (nur interne CA) als **5. Konstruktor-Argument** erzeugt
+  (`JwksTrustConfig.java:47`):
 
   ```java
   new DefaultResourceRetriever(connectTimeout, readTimeout, sizeLimit,
@@ -187,7 +190,7 @@ hier: `DefaultJWTProcessor`, konfiguriert in `TokenValidator`s Konstruktor
   In Nimbus 10.9.1 gibt es **keine** Setter-Methode `setSSLSocketFactory(...)`; die Factory
   kann nur über diesen 5-Argument-Konstruktor gesetzt werden. Deshalb wird genau diese
   Signatur verwendet.
-- `discoverJwksUri(...)` (`JwksTrustConfig.java:63`):
+- `discoverJwksUri(...)` (`JwksTrustConfig.java:64`):
   1. `GET {issuer}/.well-known/openid-configuration`, JSON parsen.
   2. Feld `issuer` aus dem Dokument lesen und **exakt** gegen `props.issuer()` vergleichen.
      Weicht es ab → `IllegalStateException`, Start bricht ab. (Schutz gegen
@@ -363,9 +366,9 @@ k3s-Tokens macht `tools/demo.sh` (siehe [../use-cases.md](../use-cases.md)).
 ## Weiterlesen
 
 - [architecture.md](architecture.md) – wo der Validator im Stack sitzt, feste IP, `hostAliases`
-- [trust-und-tls.md](trust-und-tls.md) – wie `trustOnly(...)` den Ein-Zertifikat-Truststore
+- [trust-und-tls.md](trust-und-tls.md) – wie `trustOnly(...)` den Truststore mit der internen CA
   baut und warum der 5-arg-`DefaultResourceRetriever` nötig ist
-- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – woher `/oidc/tls.crt` und die Metadaten
+- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – woher CA, Serverzertifikat und die Metadaten
   kommen
 - [build-und-betrieb.md](build-und-betrieb.md) – Multi-Stage-Build, Log4j2, `pom.xml`
 - [../domain.md](../domain.md) – das fachliche Modell hinter Token und Claims

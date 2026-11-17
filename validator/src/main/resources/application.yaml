@@ -1,7 +1,7 @@
 wif:
   issuer: ${WIF_ISSUER:https://issuer-web}
   audience: ${WIF_AUDIENCE:wif-demo-validator}
-  issuer-ca: ${WIF_ISSUER_CA:/oidc/tls.crt}
+  issuer-ca: ${WIF_ISSUER_CA:/trust/ca.crt}
 
 server:
   port: 8080

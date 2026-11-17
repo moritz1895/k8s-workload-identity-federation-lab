@@ -2,11 +2,13 @@
 
 ## Für wen ist das / was lernst du hier
 
-Diese Seite erzählt, was im Lab **tatsächlich passiert** - einmal beim Hochfahren
-(`docker compose up`) und einmal bei jeder Anfrage der Workload an den externen Dienst
-(`docker compose run --rm demo`). Die Schritte sind konkret an dem festgemacht, was der Code
-und [`tools/demo.sh`](../tools/demo.sh) wirklich tun: welche Claims geprüft werden, welche
-HTTP-Statuscodes zurückkommen und welche Ablehnungsgründe im Fehlerfall im Body stehen.
+Diese Seite erzählt, was im Lab **tatsächlich passiert** - bei jeder Anfrage der Workload
+an den externen Dienst, beim Hochfahren (`docker compose up`), bei jeder Veröffentlichung der
+Schlüssel durch den Publisher und bei einer Schlüsselrotation. Die Schritte sind konkret an
+dem festgemacht, was der Code, [`tools/demo.sh`](../tools/demo.sh) und
+[`tools/run-all-checks.sh`](../tools/run-all-checks.sh) wirklich tun: welche Claims geprüft
+werden, welche HTTP-Statuscodes zurückkommen und welche Ablehnungsgründe im Fehlerfall im
+Body stehen.
 
 Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
 [domain.md](domain.md) (Konzepte) und [kubernetes-primer.md](kubernetes-primer.md)
@@ -17,28 +19,29 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
 ## Wer spricht mit wem
 
 ```
-   ┌─────────────────────────── Docker-Netz "wifnet" (172.31.7.0/24) ───────────────────────────┐
-   │                                                                                            │
-   │  ┌──────────────────────┐        ┌──────────────────────┐       ┌────────────────────────┐  │
-   │  │  server (k3s)        │        │  issuer-web (nginx)  │       │  validator (Spring)    │  │
-   │  │                      │        │  https://issuer-web  │       │  172.31.7.10:8080      │  │
-   │  │  API-Server stellt   │        │  /.well-known/...    │◄──────│  OIDC-Discovery        │  │
-   │  │  Tokens aus,         │        │  /openid/v1/jwks     │  TLS  │  + JWKS laden          │  │
-   │  │  iss=https://issuer- │        └──────────┬───────────┘       │                        │  │
-   │  │  web                 │                   │ einmalig durch    │  prüft: Signatur,      │  │
-   │  │                      │                   │ bootstrap befüllt │  iss, aud, exp, nbf    │  │
-   │  │  ┌────────────────┐  │                                       └───────────▲────────────┘  │
-   │  │  │ Pod "consumer" │  │                                                   │               │
-   │  │  │ Token-Datei:   │  │   GET /whoami                                     │               │
-   │  │  │ /var/run/      │  │   Authorization: Bearer <JWT>                     │               │
-   │  │  │ secrets/tokens │  ├───────────────  (via hostAliases  ───────────────►┘               │
-   │  │  │ /sa-token      │  │                  validator.wif.local -> 172.31.7.10)              │
-   │  │  └────────────────┘  │                                                                   │
-   │  └──────────────────────┘                                                                   │
-   └────────────────────────────────────────────────────────────────────────────────────────────┘
+  cluster-net 172.31.7.0/24
+  ┌──────────────────────────────────┐
+  │  server (k3s)  172.31.7.2        │
+  │  API-Server, iss=https://        │      PUT  (mTLS, CN=jwks-publisher)
+  │  issuer-web, nur auf 172.31.7.2  │                                    ┌──────────────────────┐
+  │                                  │                                    │  issuer-web (nginx)  │
+  │  ┌──────────────────┐            │                                    │  172.31.7.20:8443    │
+  │  │ Pod jwks-        │ ───────────┼──── alle 15 s bei Änderung ──────► │  Upload, nur PUT     │
+  │  │ publisher        │            │                                    │                      │
+  │  └──────────────────┘            │                                    │  172.31.8.20:443     │
+  │  ┌──────────────────┐            │                                    │  Lesen, nur GET      │
+  │  │ Pod consumer     │            │                                    └──────────▲───────────┘
+  │  │ Token-Datei:     │            │                                               │ TLS, interne CA
+  │  │ /var/run/secrets/│            │                          relying-net          │ 172.31.8.0/24
+  │  │ tokens/sa-token  │            │                                    ┌──────────┴───────────┐
+  │  └────────┬─────────┘            │                                    │  validator (Spring)  │
+  └───────────┼──────────────────────┘                                    │  prüft: Signatur,    │
+              │  GET /whoami, Authorization: Bearer <JWT>                 │  iss, aud, exp, nbf  │
+              │  workload-net 172.31.9.0/24                               │  172.31.9.10:8080    │
+              └──── validator.wif.local -> 172.31.9.10 (hostAliases) ───► └──────────────────────┘
 
-   WICHTIG: Der Validator sendet NIE eine Anfrage an den API-Server (server).
-            Er spricht ausschließlich mit issuer-web.
+   WICHTIG: Der Validator sendet NIE eine Anfrage an den API-Server (server) und kann ihn
+            über kein Netz erreichen. Er spricht ausschließlich mit issuer-web.
 ```
 
 ---
@@ -59,7 +62,8 @@ Lab löst [`tools/demo.sh`](../tools/demo.sh) (Abschnitt 3) diesen Aufruf aus.
 
 ### Vorbedingungen
 
-- Cluster, `issuer-web` und Validator laufen; der Bootstrap (Use Case 2) ist durchgelaufen.
+- Cluster, `issuer-web` und Validator laufen; der Start (Use Case 2) ist durchgelaufen und
+  der Publisher hat die aktuellen Schlüssel veröffentlicht (Use Case 3).
 - Der Validator hat beim Start erfolgreich OIDC-Discovery gegen `https://issuer-web`
   gemacht: Das Feld `issuer` im Discovery-Dokument war exakt `https://issuer-web`, und die
   `jwks_uri` daraus wurde geladen. (Schlägt das fehl, startet der Validator gar nicht -
@@ -89,13 +93,13 @@ Lab löst [`tools/demo.sh`](../tools/demo.sh) (Abschnitt 3) diesen Aufruf aus.
 3. **Die Workload ruft den Validator auf.** Der Pod sendet
    `GET http://validator.wif.local:8080/whoami` mit dem Header
    `Authorization: Bearer <Inhalt der Token-Datei>`. Der Name `validator.wif.local` zeigt
-   per `hostAliases` auf `172.31.7.10` (den Validator). In `demo.sh`:
+   per `hostAliases` auf `172.31.9.10` (die Adresse des Validators in `workload-net`). In `demo.sh`:
    `kubectl -n wif-demo exec <pod> -- sh -c 'curl ... -H "Authorization: Bearer $(cat /var/run/secrets/tokens/sa-token)" ...'`.
 
 4. **Der Validator hat die Schlüssel bereits (Discovery beim Start, danach Cache).** Beim
    Hochfahren hat `JwksTrustConfig` das Discovery-Dokument von
-   `https://issuer-web/.well-known/openid-configuration` geholt (nur über die eine
-   vertraute TLS-Verbindung), das `issuer`-Feld gegen die Konfiguration geprüft und der
+   `https://issuer-web/.well-known/openid-configuration` geholt (TLS, Serverzertifikat muss
+   von der internen CA stammen), das `issuer`-Feld gegen die Konfiguration geprüft und der
    `jwks_uri` gefolgt. Die JWKS werden **5 Minuten** zwischengespeichert
    (`JWKS_CACHE_TTL_MS = 300000`) und bei Bedarf im Hintergrund aktualisiert. Der Validator
    fragt hierfür **niemals** den API-Server.
@@ -150,8 +154,8 @@ Bei einem abgelehnten Token:
 | # | Situation | Auslöser im Lab | Ergebnis | `reason` (Text) |
 |---|---|---|---|---|
 | **E1** | **Falsche Audience.** Token wurde für einen anderen Empfänger ausgestellt. | `demo.sh` Abschnitt 4: `kubectl create token consumer --audience "not-this-service"` | HTTP **401** | `JWT aud claim rejected` |
-| **E2** | **Abgelaufen.** `exp` liegt (mehr als 60 s) in der Vergangenheit. | `demo.sh` Abschnitt 6 (`DEMO_EXPIRY=1`): 10-Minuten-Token, dann warten, bis `/whoami` von `200` auf `401` kippt. | HTTP **401** | Text enthält `expired` (Nimbus: `Expired JWT`) |
-| **E3** | **Manipulierte Signatur.** Ein Zeichen des gültigen Tokens wurde verändert. | `demo.sh` Abschnitt 5: `TAMPERED="${GOOD%?}X"` | HTTP **401** | `Signed JWT rejected: Invalid signature` |
+| **E2** | **Abgelaufen.** `exp` liegt (mehr als 60 s) in der Vergangenheit. | `demo.sh` Abschnitt 7 (`DEMO_EXPIRY=1`): 10-Minuten-Token, dann warten, bis `/whoami` von `200` auf `401` kippt. | HTTP **401** | Text enthält `expired` (Nimbus: `Expired JWT`) |
+| **E3** | **Manipulierte Signatur.** Ein Zeichen des gültigen Tokens wurde verändert. | `demo.sh` Abschnitt 5: `tamper_signature`: erstes Signaturzeichen ersetzt (das letzte trägt nur teilweise Nutzbits) | HTTP **401** | `Signed JWT rejected: Invalid signature` |
 | **E4** | **Unbekannter Signaturschlüssel.** Das Token ist mit einem Schlüssel signiert, dessen `kid` nicht im JWKS steht. | Im Unit-Test `validate_givenUnknownSigningKey_thenRejected` (nicht in `demo.sh`). | HTTP **401** | Text im Sinne von `no matching key(s) found` |
 | **E5** | **Falscher Issuer.** `iss` im Token ist nicht `https://issuer-web`. | Unit-Test `validate_givenWrongIssuer_thenRejected`. | HTTP **401** | Text enthält `iss` |
 | **E6** | **Kein / falsch formatierter Header.** `Authorization` fehlt oder beginnt nicht mit `Bearer `. | Direkter `curl` ohne Header. | HTTP **401** | Body: `{"error":"missing_bearer_token"}` |
@@ -170,25 +174,34 @@ Bei einem abgelehnten Token:
   `JwksTrustConfig` beim Erzeugen der Beans eine `IllegalStateException` und der
   Spring-Kontext startet nicht. Das ist gewollt: Ein Validator mit fehlkonfiguriertem
   Vertrauensanker soll gar nicht erst laufen.
-- **Issuer-Zertifikat fehlt.** [`validator/entrypoint.sh`](../validator/entrypoint.sh)
-  wartet bis zu 180 s auf die Datei `/oidc/tls.crt` (die der Bootstrap erzeugt) und bricht
+- **Fremde CA.** Vertraut der Validator einer anderen CA als der, die das Serverzertifikat
+  von `issuer-web` ausgestellt hat, scheitert die Discovery mit `PKIX path building failed`
+  und der Validator beendet sich mit einem Fehlercode. Geprüft mit dem Service
+  `validator-foreign-ca` (Profil `negative`, `WIF_ISSUER_CA=/pki-demo/foreign-ca.crt`) in
+  `run-all-checks.sh`, Abschnitt 3.
+- **CA-Zertifikat fehlt.** [`validator/entrypoint.sh`](../validator/entrypoint.sh)
+  wartet bis zu 180 s auf die Datei `/trust/ca.crt` (die `pki-init` ablegt) und bricht
   danach mit einem Fehler ab.
 
 ---
 
-## Use Case 2: Cluster-Bootstrap (`docker compose up -d --build`)
+## Use Case 2: Lab starten (`docker compose up -d --build`)
 
 ### Akteure
 
 - **Docker Compose** - startet die Container in Abhängigkeitsreihenfolge.
+- **pki-init** - Einmal-Container, der die Lab-PKI anlegt ([`tools/pki-init.sh`](../tools/pki-init.sh)).
+- **sa-keys** - Einmal-Container für die ServiceAccount-Signaturschlüssel ([`tools/sa-keys.sh`](../tools/sa-keys.sh)).
 - **server** - der k3s-Cluster.
-- **bootstrap** - der Einmal-Container ([`tools/bootstrap.sh`](../tools/bootstrap.sh)).
-- **issuer-web** - der nginx, der danach die Metadaten ausliefert.
+- **bootstrap** - Einmal-Container, der den Cluster einrichtet ([`tools/bootstrap.sh`](../tools/bootstrap.sh)).
+- **jwks-publisher** - Deployment im Cluster, das die Metadaten hochlädt (Use Case 3).
+- **issuer-web** - der nginx, der die Metadaten ausliefert.
 - **validator** - startet zuletzt.
 
 ### Auslöser
 
-`docker compose up -d --build` auf dem Host.
+`docker compose up -d --build` auf dem Host. `docker compose run --rm demo` wartet anschließend
+über `depends_on`, bis der Validator gesund ist.
 
 ### Vorbedingungen
 
@@ -198,49 +211,55 @@ Bei einem abgelehnten Token:
 
 ### Hauptablauf
 
-1. **k3s startet** (`server`). Der API-Server wird mit
+1. **pki-init legt die Lab-PKI an** (`network_mode: none`). Fehlt noch eine CA, erzeugt es
+   die Root-CA `WIF Lab Internal Root CA` und stellt davon aus: das Serverzertifikat von
+   `issuer-web` (SAN `DNS:issuer-web`, `serverAuth`), das Client-Zertifikat des Publishers
+   (`CN=jwks-publisher`, `clientAuth`) und Material für Negativtests (Client-Zertifikat mit
+   `CN=not-the-publisher`, eine fremde CA samt Client-Zertifikat). Jedes Artefakt liegt in
+   einem eigenen Volume (`pki-ca`, `ca-trust`, `issuer-tls`, `publisher-tls`, `pki-demo`);
+   den CA-Schlüssel sieht nur `pki-init`. Bestehendes Material bleibt erhalten.
+
+2. **sa-keys init** legt den ersten Signaturschlüssel an, falls keiner existiert
+   (`signing.key`, dazu `verify.pub` mit allen Prüfschlüsseln) - im Volume `sa-keys`.
+
+3. **k3s startet** (`server`, `depends_on: sa-keys completed`). Der API-Server signiert mit
+   `service-account-signing-key-file=/sa-keys/signing.key`, veröffentlicht die Schlüssel aus
+   `service-account-key-file=/sa-keys/verify.pub` und läuft mit
    `service-account-issuer=https://issuer-web` und
-   `service-account-jwks-uri=https://issuer-web/openid/v1/jwks` gestartet. Ab jetzt trägt
-   jedes ausgestellte ServiceAccount-Token `iss = https://issuer-web`, und das
-   Discovery-Dokument des Clusters nennt bereits die externe `jwks_uri`. Compose wartet, bis
-   der Health-Check (`kubectl get --raw /readyz`) grün ist.
+   `service-account-jwks-uri=https://issuer-web/openid/v1/jwks`. Er lauscht nur auf
+   `172.31.7.2` in `cluster-net` (`--bind-address`). Compose wartet, bis
+   `kubectl get --raw /readyz` grün ist.
 
-2. **bootstrap läuft einmal durch** (`depends_on: server healthy`):
-   1. Es kopiert die von k3s erzeugte Admin-Kubeconfig und ersetzt die Loopback-Adresse
-      durch den Netz-Namen `k3s-server:6443`, damit `kubectl` aus dem Container funktioniert.
-   2. `kubectl apply -f /manifests` legt Namespace `wif-demo`, ServiceAccount `consumer` und
-      das Deployment `consumer` an. Danach `kubectl rollout status deployment/consumer`
-      (wartet bis der Pod bereit ist, Timeout 120 s).
-   3. Falls noch nicht vorhanden, erzeugt `openssl` ein **selbst-signiertes TLS-Zertifikat**
-      für `issuer-web` (`CN=issuer-web`, SAN `DNS:issuer-web`, 10 Jahre gültig) und legt
-      `tls.crt` / `tls.key` in das geteilte Volume `oidc-web`.
-   4. `kubectl get --raw /.well-known/openid-configuration` und
-      `kubectl get --raw /openid/v1/jwks` holen die OIDC-Metadaten des Clusters und
-      schreiben sie als `openid-configuration.json` und `jwks.json` in dasselbe Volume.
-      Weil der API-Server bereits mit dem externen Issuer konfiguriert ist, stimmen `issuer`
-      und `jwks_uri` in diesen Dateien schon - sie werden unverändert übernommen.
-   5. Der Container beendet sich (`restart: "no"`). Alle Schritte sind idempotent und laufen
-      bei jedem `up` erneut.
+4. **issuer-web startet** (`depends_on: pki-init completed`) mit Serverzertifikat aus
+   `issuer-tls` und CA aus `ca-trust`. Es liefert zunächst nichts aus (`404`) und gilt erst
+   als `healthy`, wenn der Publisher das JWKS hochgeladen hat (Healthcheck: Datei
+   `/oidc/openid/v1/jwks` existiert und ist nicht leer).
 
-3. **issuer-web startet** (`depends_on: bootstrap completed successfully`). nginx liefert
-   aus dem Volume `oidc-web` aus:
-   - `https://issuer-web/.well-known/openid-configuration` (TLS mit dem Bootstrap-Zertifikat),
-   - `https://issuer-web/openid/v1/jwks`,
-   - alles andere: `404`.
-   - zusätzlich `http://issuer-web/healthz` (nur für den Container-Health-Check).
+5. **bootstrap läuft einmal durch** (`depends_on: server healthy, pki-init completed`):
+   1. Admin-Kubeconfig kopieren und die Server-Adresse auf `k3s-server:6443` umschreiben.
+   2. Namespaces `wif-demo` und `wif-publisher` anlegen.
+   3. Secret `jwks-publisher-mtls` (Client-Zertifikat + Schlüssel) und ConfigMap
+      `internal-ca` (Root-Zertifikat) in `wif-publisher` anlegen.
+   4. `kubectl apply -f /manifests`, dann auf den Rollout von `jwks-publisher` und
+      `consumer` warten (je 180 s).
+   5. Beenden (`restart: "no"`). Alle Schritte sind idempotent.
 
-4. **validator startet** (`depends_on: issuer-web healthy`). `entrypoint.sh` wartet auf
-   `/oidc/tls.crt`, dann startet die JVM. Beim Hochfahren macht der Validator die einmalige
+   `bootstrap` veröffentlicht selbst nichts und spricht `issuer-web` nicht an.
+
+6. **Der Publisher lädt hoch** (Use Case 3). Danach wird `issuer-web` `healthy`.
+
+7. **validator startet** (`depends_on: issuer-web healthy`). `entrypoint.sh` wartet auf
+   `/trust/ca.crt`, dann startet die JVM. Beim Hochfahren macht der Validator die
    OIDC-Discovery (siehe Use Case 1, Schritt 4) und ist danach unter `:8080` bereit
-   (`/healthz` liefert `{"status":"UP"}`; auf dem Host erreichbar unter dem in `.env`
-   gesetzten Port, Standard `localhost:18080`).
+   (`/healthz` liefert `{"status":"UP"}`; auf dem Host unter dem in `.env` gesetzten Port,
+   Standard `localhost:18080`).
 
-5. **demo läuft nicht automatisch mit.** Der Service `demo` steckt hinter einem
-   Compose-Profil und wird nur mit `docker compose run --rm demo` gestartet (Use Case 1).
+8. **demo läuft nicht automatisch mit.** `demo` und `validator-foreign-ca` stecken hinter
+   Compose-Profilen und laufen nur mit `docker compose run --rm ...`.
 
 ### Nachbedingungen
 
-- Im Cluster läuft der `consumer`-Pod mit projiziertem Token.
+- Im Cluster laufen `consumer` (mit projiziertem Token) und `jwks-publisher`.
 - `issuer-web` liefert Discovery-Dokument und JWKS aus.
 - Der Validator ist bereit und hat die JWKS geladen - ohne je den API-Server berührt zu
   haben.
@@ -250,26 +269,129 @@ Bei einem abgelehnten Token:
 | Situation | Ergebnis |
 |---|---|
 | k3s wird nicht rechtzeitig `ready` | `bootstrap` startet nicht (Compose-Abhängigkeit), `up` schlägt fehl. |
-| `consumer`-Rollout überschreitet 120 s | `bootstrap.sh` bricht mit Fehler ab (`set -e`), `issuer-web` und `validator` starten nicht. |
-| Discovery-Dokument des Clusters nennt einen anderen `issuer` als `WIF_ISSUER` | Validator wirft beim Start `IllegalStateException`, Container wird nicht `healthy`. |
-| `/oidc/tls.crt` erscheint nicht innerhalb von 180 s | `validator/entrypoint.sh` beendet sich mit Fehlercode 1. |
+| Rollout von `jwks-publisher` oder `consumer` überschreitet 180 s | `bootstrap.sh` bricht mit Fehler ab (`set -e`). |
+| Publisher kann nicht hochladen (z. B. Zertifikat abgelehnt) | `issuer-web` wird nie `healthy`, der Validator startet nicht. Ursache im Log von `jwks-publisher` und `issuer-web`. |
+| Discovery-Dokument nennt einen anderen `issuer` als `WIF_ISSUER` | Validator wirft beim Start `IllegalStateException`, Container wird nicht `healthy`. |
+| `/trust/ca.crt` erscheint nicht innerhalb von 180 s | `validator/entrypoint.sh` beendet sich mit Fehlercode 1. |
 
 ---
 
-## Verifikation auf einen Blick (`docker compose run --rm demo`)
+## Use Case 3: Publisher veröffentlicht Discovery-Dokument und JWKS
+
+### Akteure
+
+- **jwks-publisher** - Pod im Namespace `wif-publisher`, ServiceAccount `jwks-publisher`
+  ([`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml)).
+- **API-Server** - Quelle der Metadaten.
+- **issuer-web** - Ziel des Uploads (Listener `:8443`).
+
+### Auslöser
+
+Der Publisher-Pod startet, danach alle 15 Sekunden (`PUBLISH_INTERVAL_SECONDS`).
+
+### Vorbedingungen
+
+- Der ServiceAccount `jwks-publisher` ist per ClusterRoleBinding an die eingebaute
+  ClusterRole `system:service-account-issuer-discovery` gebunden (nur `GET` auf
+  `/.well-known/openid-configuration` und `/openid/v1/jwks`).
+- Secret `jwks-publisher-mtls` und ConfigMap `internal-ca` sind eingehängt (`/mtls`, `/trust`).
+- `issuer-web` ist im Pod per `hostAliases` als `172.31.7.20` (Adresse in `cluster-net`)
+  bekannt.
+
+### Hauptablauf
+
+1. **Je Durchlauf** (alle 15 s) holt der Publisher beide Dokumente vom API-Server
+   (`https://kubernetes.default.svc`, eigenes ServiceAccount-Token, Cluster-CA).
+2. Er liest, was `issuer-web` gerade öffentlich ausliefert (`https://issuer-web`, `:443`).
+3. Er bildet je einen SHA-256 über beide Stände. Stimmen sie überein, passiert nichts.
+   Liefert `issuer-web` etwas aus, das der Publisher nicht selbst hochgeladen hat, loggt er
+   eine Warnung (`WARNING issuer serves content this publisher did not upload`) und fährt
+   mit dem Upload fort.
+4. **Bei einer Abweichung** lädt er per `PUT` hoch, zuerst das JWKS, dann das
+   Discovery-Dokument, an `https://issuer-web:8443/...` - mit Client-Zertifikat
+   (`/mtls/tls.crt`) und Prüfung des Serverzertifikats gegen `/trust/ca.crt`.
+5. `issuer-web` prüft das Client-Zertifikat gegen die interne CA und den `CN`, speichert die
+   Dokumente unter ihrem URL-Pfad im Volume `oidc-web` und protokolliert den Upload mit dem
+   DN des Clients.
+6. Der Publisher loggt
+   `publisher: published JWKS sha256=<hash> kids=[ ... ] previous=[ ... ]`.
+
+### Fehlerfälle (Schreibzugriff)
+
+| # | Situation | Auslöser im Lab | Ergebnis |
+|---|---|---|---|
+| **U1** | Upload ohne Client-Zertifikat | `demo.sh` Abschnitt 6 | HTTP **400** (nginx: kein Zertifikat gesendet) |
+| **U2** | Client-Zertifikat einer fremden CA (`CN=jwks-publisher`) | `demo.sh` Abschnitt 6, `/pki-demo/foreign-publisher.crt` | HTTP **400** (Zertifikatsprüfung fehlgeschlagen) |
+| **U3** | Zertifikat der internen CA, aber `CN=not-the-publisher` | `demo.sh` Abschnitt 6, `/pki-demo/wrong-cn.crt` | HTTP **403** |
+| **U3b** | Zertifikat der internen CA, `CN=jwks-publisher` nur im Feld `O` versteckt | `demo.sh` Abschnitt 6, `/pki-demo/smuggled-cn.crt` | HTTP **403** (exakter DN-Vergleich) |
+| **U4** | `PUT` auf den öffentlichen Listener `:443` | `demo.sh` Abschnitt 6 | HTTP **403** (`limit_except GET`) |
+| **U5** | Upload-Listener aus `relying-net` | `run-all-checks.sh` Abschnitt 2: `172.31.8.20:8443` vom Validator | nicht erreichbar (`:8443` lauscht nur auf `172.31.7.20`) |
+| - | API-Server nicht lesbar | - | Log `reading from the API server failed`, neuer Versuch nach 15 s |
+| - | Upload scheitert | - | Log `upload failed`, neuer Versuch nach 15 s |
+
+Nach U1-U4 prüft `demo.sh`, dass das veröffentlichte JWKS weiterhin Schlüssel enthält.
+
+---
+
+## Use Case 4: Signaturschlüssel rotieren
+
+### Akteure
+
+- **Betreiber** (im Lab `run-all-checks.sh`, Abschnitt 4).
+- **sa-keys**, **server**, **jwks-publisher**, **validator**.
+
+### Ablauf
+
+1. `docker compose run --rm demo pre-rotation` - prägt ein Token mit 1 h Laufzeit, speichert
+   es und die aktuell veröffentlichten `kid`s im Volume `demo-state` und prüft, dass der
+   Validator es annimmt.
+2. `docker compose run --rm sa-keys rotate` - der bisherige öffentliche Schlüssel wird zu
+   `previous.pub`, ein neuer Schlüssel wird `signing.key`; `verify.pub` enthält danach beide
+   öffentlichen Schlüssel. Ältere als der vorherige fallen heraus.
+3. `docker compose restart server` und `docker compose up -d --wait server` - kube-apiserver
+   liest die Schlüsseldateien nur beim Start.
+4. Der Publisher erkennt das geänderte JWKS beim nächsten Durchlauf und lädt es hoch.
+5. `docker compose run --rm demo post-rotation` - wartet bis zu 120 s auf eine neue `kid` am
+   Issuer-Endpoint, prägt ein neues Token und prüft:
+   - das neue Token trägt die neue `kid` und wird angenommen (**200**),
+   - das Token von vor der Rotation wird weiterhin angenommen (**200**), weil der vorherige
+     Schlüssel im JWKS bleibt.
+
+### Grenzen
+
+Der alte Schlüssel bleibt bis zur nächsten Rotation im JWKS. Das ist nur sicher, solange
+zwischen zwei Rotationen mehr Zeit liegt als maximale Token-Laufzeit plus JWKS-Cache-TTL des
+Validators (5 min). Siehe [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
+
+---
+
+## Verifikation auf einen Blick
+
+### `docker compose run --rm demo` (Phase `all`)
 
 | Abschnitt in `demo.sh` | Was passiert | Erwartung |
 |---|---|---|
-| 0 | `GET https://issuer-web/.well-known/openid-configuration` (mit `--cacert /oidc/tls.crt`) | `issuer` = `https://issuer-web`, `jwks_uri` gesetzt |
-| 1 | `GET https://issuer-web/openid/v1/jwks` | genau ein Schlüssel, `kty` RSA, `alg` `RS256` |
+| 0 | `GET https://issuer-web/.well-known/openid-configuration` (mit `--cacert /trust/ca.crt`) | `issuer` = `https://issuer-web`, `jwks_uri` gesetzt |
+| 1 | `GET https://issuer-web/openid/v1/jwks` | Schlüssel mit `kty` RSA, `alg` `RS256` |
 | 2 | `kubectl create token consumer --audience wif-demo-validator --duration 10m` + Payload dekodieren | Claims wie in Use Case 1, Schritt 2 |
 | 3 | Pod ruft mit dem **projizierten** Token `/whoami` auf | **HTTP 200** + Claims |
 | 4 | Token mit `--audience not-this-service` | **HTTP 401**, `JWT aud claim rejected` |
 | 5 | letztes Zeichen des gültigen Tokens ersetzt | **HTTP 401**, `Signed JWT rejected: Invalid signature` |
-| 6 (nur `DEMO_EXPIRY=1`) | 10-Minuten-Token, dann pollen bis Ablauf | Statuswechsel **200 → 401** |
+| 6 | Upload-Versuche U1-U4 | **400, 400, 403, 403**; JWKS unverändert |
+| 7 (nur `DEMO_EXPIRY=1`) | 10-Minuten-Token, dann pollen bis Ablauf | Statuswechsel **200 → 401** |
 
 Schlägt eine Erwartung fehl, bricht `demo.sh` mit rotem `FAIL:` und Exit-Code 1 ab. Am Ende:
-`PASS: all checks passed`.
+`PASS: phase 'all': all checks passed`.
+
+### `tools/run-all-checks.sh` (auf dem Host)
+
+| Abschnitt | Was passiert | Erwartung |
+|---|---|---|
+| lab up | `docker compose up -d --build` | alle Services gesund |
+| 1 | `demo all` | wie oben |
+| 2 | vom Validator aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.8.20:8443` | keine Verbindung |
+| 3 | `validator-foreign-ca` | Exit-Code ungleich 0 (`PKIX`) |
+| 4 | Rotation (Use Case 4) | neue und alte Tokens werden angenommen |
 
 ---
 
@@ -277,5 +399,7 @@ Schlägt eine Erwartung fehl, bricht `demo.sh` mit rotem `FAIL:` und Exit-Code 1
 
 - [Domain / Konzepte](domain.md) - Trust Anchor, offline vs. online, Glossar.
 - [Kubernetes-Primer](kubernetes-primer.md) - jeder benutzte Kubernetes-Baustein.
-- [ADR 0001](adr/0001-offline-jwks-statt-tokenreview.md) und
-  [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - die zwei zentralen Design-Entscheidungen.
+- [ADR 0001](adr/0001-offline-jwks-statt-tokenreview.md),
+  [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) und
+  [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - die zentralen
+  Design-Entscheidungen.

@@ -43,9 +43,14 @@ In [`compose.yaml`](../compose.yaml) wird k3s mit ein paar Extras gestartet:
 | `--disable=traefik`, `--disable=servicelb`, `--disable=metrics-server` | Schaltet mitgelieferte Zusatzkomponenten ab, die dieses Lab nicht braucht. |
 | `--kube-apiserver-arg=service-account-issuer=https://issuer-web` | Legt fest, welche URL als `iss`-Claim in jedes ausgestellte ServiceAccount-Token geschrieben wird. |
 | `--kube-apiserver-arg=service-account-jwks-uri=https://issuer-web/openid/v1/jwks` | Legt fest, welche `jwks_uri` im Discovery-Dokument des Clusters steht. |
+| `--kube-apiserver-arg=service-account-signing-key-file=/sa-keys/signing.key` | Der private Schlüssel, mit dem der API-Server Tokens signiert (erzeugt von `sa-keys`). |
+| `--kube-apiserver-arg=service-account-key-file=/sa-keys/verify.pub` | Die öffentlichen Schlüssel, mit denen Tokens geprüft werden - und die im JWKS erscheinen. Nach einer Rotation stehen hier der neue und der vorherige Schlüssel. |
+| `--bind-address=172.31.7.2`, `--node-ip=172.31.7.2`, `--advertise-address=172.31.7.2` | Der API-Server lauscht nur auf seiner Adresse im Netz `cluster-net`; aus den anderen Netzen ist er nicht erreichbar. |
+| `--tls-san=k3s-server` | Trägt den Namen `k3s-server` ins Serverzertifikat des API-Servers ein, damit `kubectl` aus `bootstrap` und `demo` ihn unter diesem Namen erreicht. |
 
-Der Cluster verweist mit diesen zwei Parametern also **auf den externen Issuer-Endpoint**,
-nicht auf sich selbst.
+Der Cluster verweist mit `service-account-issuer` und `service-account-jwks-uri` also **auf
+den externen Issuer-Endpoint**, nicht auf sich selbst. kube-apiserver liest die
+Schlüsseldateien nur beim Start; eine Rotation braucht deshalb einen Neustart von `server`.
 
 ---
 
@@ -58,10 +63,11 @@ sich in die Quere zu kommen.
 **Wozu:** Trennung. Verschiedene Teams, Umgebungen oder Anwendungen bekommen eigene
 Namespaces. Rechte (RBAC) lassen sich pro Namespace vergeben.
 
-**In diesem PoC:** Ein Namespace `wif-demo`, angelegt in
-[`manifests/00-namespace.yaml`](../manifests/00-namespace.yaml). ServiceAccount und
-Deployment des Labs leben darin. Deshalb enthält der `sub`-Claim des Tokens den Namespace:
-`system:serviceaccount:wif-demo:consumer`.
+**In diesem PoC:** Zwei Namespaces, angelegt in
+[`manifests/00-namespace.yaml`](../manifests/00-namespace.yaml): `wif-demo` für die
+Workload `consumer` - deshalb enthält der `sub`-Claim ihres Tokens den Namespace:
+`system:serviceaccount:wif-demo:consumer` - und `wif-publisher` für den `jwks-publisher`
+samt seinem Client-Zertifikat.
 
 ---
 
@@ -86,6 +92,25 @@ ein Deployment `consumer` mit `replicas: 1`. Der Pod enthält nur ein `curl`-Ima
 von selbst, er wartet nur. Die eigentliche Anfrage an den Validator wird von außen per
 `kubectl exec` ausgelöst (durch [`tools/demo.sh`](../tools/demo.sh)). Der Pod ist hier
 schlicht der Ort, an dem das projizierte Token liegt.
+
+Das zweite Deployment, `jwks-publisher` in
+[`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml), läuft ebenfalls auf
+`curlimages/curl`. Sein Shell-Skript liegt in der ConfigMap `jwks-publisher-script`: Es liest
+alle 15 Sekunden Discovery-Dokument und JWKS vom API-Server und lädt sie bei einer Änderung
+zu `issuer-web` hoch.
+
+---
+
+## Secret und ConfigMap
+
+**Was:** Eine **ConfigMap** hält Konfigurationsdaten (Dateien, Werte), ein **Secret** dasselbe
+für vertrauliche Daten (Schlüssel, Passwörter). Beide lassen sich als Dateien in einen Pod
+einhängen.
+
+**In diesem PoC:** `bootstrap` legt in `wif-publisher` das Secret `jwks-publisher-mtls`
+(Client-Zertifikat und Schlüssel des Publishers, eingehängt unter `/mtls`) und die ConfigMap
+`internal-ca` (Root-Zertifikat der internen CA, unter `/trust`) an. In einem echten Cluster
+liefert diese cert-manager oder die PKI-Anbindung der Plattform.
 
 ---
 
@@ -213,21 +238,26 @@ beantwortet: "Darf *dieser* Nutzer / ServiceAccount *diese* Aktion (`get`, `list
 oder `ClusterRole` (clusterweit) und weist sie per `RoleBinding` / `ClusterRoleBinding` einem
 Subjekt zu.
 
-**In diesem PoC:** Es gibt **kein einziges** RBAC-Manifest. Das ist Absicht:
+**In diesem PoC:** Es gibt genau **ein** RBAC-Objekt, die ClusterRoleBinding
+`jwks-publisher-issuer-discovery` in
+[`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml):
 
+- Der ServiceAccount `jwks-publisher` bekommt die eingebaute ClusterRole
+  `system:service-account-issuer-discovery`. Sie erlaubt nur `GET` auf
+  `/.well-known/openid-configuration` und `/openid/v1/jwks` - genau das, was der Publisher
+  liest. Keine weiteren Rechte, keine Admin-Kubeconfig im Pod.
 - Der `consumer`-ServiceAccount **braucht keine Rechte**. Der Pod ruft den API-Server
   überhaupt nicht auf - er benutzt sein Token nur, um sich beim *externen* Validator
   auszuweisen.
 - Der `bootstrap`-Container benutzt die **Administrator-Kubeconfig**, die k3s beim Start
-  erzeugt (Datei `kubeconfig.yaml` im geteilten Volume). Damit hat er ohnehin volle Rechte
+  erzeugt (Datei `kubeconfig.yaml` im Volume `kubeconfig`). Damit hat er ohnehin volle Rechte
   und braucht keine zusätzliche Rolle.
 
-Dass der Validator die Discovery-Metadaten **ohne** jedes Cluster-Recht bekommt, liegt genau
-daran, dass sie von `issuer-web` ausgeliefert werden und nicht vom API-Server. Die
-Alternative - anonymer Lesezugriff direkt am API-Server über die eingebaute ClusterRole
-`system:service-account-issuer-discovery` - ist in
-[ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) beschrieben und wird hier bewusst
-nicht verwendet.
+Der Validator bekommt die Discovery-Metadaten **ohne** jedes Cluster-Recht, weil sie von
+`issuer-web` ausgeliefert werden und nicht vom API-Server. Die Leserolle bekommt nur der
+Publisher im Cluster, nicht anonyme Aufrufer von außen
+([ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md),
+[ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md)).
 
 ---
 
@@ -242,21 +272,20 @@ k3s bringt zusätzlich einen **Auto-Deploy-Ordner** mit (`/var/lib/rancher/k3s/s
 Alles, was dort liegt, wendet k3s beim Start automatisch an.
 
 **Warum dieser PoC den bootstrap-Container nimmt:** Der Kommentar in
-[`tools/bootstrap.sh`](../tools/bootstrap.sh) fasst die Aufgabe zusammen - der Container
-erledigt **zwei** Dinge, die ohnehin *nach* dem Hochfahren des Clusters und von einem Client
-mit Cluster-Zugriff passieren müssen:
+[`tools/bootstrap.sh`](../tools/bootstrap.sh) fasst die Aufgabe zusammen. Der Container
+erledigt alles, was *nach* dem Hochfahren des Clusters und von einem Client mit
+Cluster-Zugriff passieren muss:
 
-1. die Lab-Manifeste anwenden (`kubectl apply -f /manifests`) und auf den Rollout des
-   `consumer`-Deployments warten,
-2. die OIDC-Metadaten des Clusters (`/.well-known/openid-configuration` und
-   `/openid/v1/jwks`) mit `kubectl get --raw` aus dem Cluster holen und in das von
-   `issuer-web` ausgelieferte Volume schreiben - plus das selbst-signierte TLS-Zertifikat
-   für `issuer-web` erzeugen.
+1. die Namespaces anlegen,
+2. dem Publisher Secret `jwks-publisher-mtls` und ConfigMap `internal-ca` aus den Volumes
+   der Lab-PKI geben (die Dateien liegen außerhalb des Clusters, im Auto-Deploy-Ordner hätte
+   k3s sie nicht),
+3. die Lab-Manifeste anwenden (`kubectl apply -f /manifests`) und auf den Rollout von
+   `jwks-publisher` und `consumer` warten.
 
-Weil Schritt 2 sowieso einen Container mit `kubectl` und Cluster-Zugriff braucht, erledigt
-derselbe Container auch gleich Schritt 1. Alles rund um die Cluster-Einrichtung liegt so an
-einer Stelle. Der `bootstrap`-Service läuft bei jedem `docker compose up` einmal durch und
-beendet sich dann (`restart: "no"`); die Aktionen sind idempotent.
+Die Veröffentlichung der Metadaten ist **nicht** seine Aufgabe; die übernimmt der
+`jwks-publisher` im Cluster. Der `bootstrap`-Service läuft bei jedem `docker compose up` einmal
+durch und beendet sich dann (`restart: "no"`); die Aktionen sind idempotent.
 
 ---
 
@@ -273,15 +302,19 @@ des Clusters.
 
 ```yaml
 hostAliases:
-  - ip: "172.31.7.10"
+  - ip: "172.31.9.10"
     hostnames:
       - validator.wif.local
 ```
 
-Der Validator hat im Docker-Netz `wifnet` die feste IP `172.31.7.10`
+Der Validator hat im Docker-Netz `workload-net` die feste IP `172.31.9.10`
 ([`compose.yaml`](../compose.yaml)). Der Pod ruft ihn unter
 `http://validator.wif.local:8080/whoami` auf; der `hostAliases`-Eintrag sorgt dafür, dass
-dieser Name im Pod auf `172.31.7.10` zeigt.
+dieser Name im Pod auf `172.31.9.10` zeigt.
+
+Ebenso im Publisher ([`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml)):
+`issuer-web` zeigt dort auf `172.31.7.20`, die Adresse von `issuer-web` im Netz
+`cluster-net`, auf der auch der Upload-Listener `:8443` lauscht.
 
 ---
 
@@ -293,8 +326,8 @@ Konstrukt, unter dem eine Gruppe von Pods über einen stabilen Namen erreichbar 
 wie `meine-app.mein-namespace.svc.cluster.local` beantwortet CoreDNS.
 
 **Warum der Validator fehlt:** Der Validator ist **kein Cluster-Objekt**. Er ist ein
-separater Docker-Container auf dem gemeinsamen Docker-Netz, von Kubernetes gar nicht
-verwaltet. CoreDNS hat also keinen Eintrag für ihn und *kann* keinen haben. Deshalb wird
+separater Docker-Container, von Kubernetes gar nicht verwaltet (dasselbe gilt für
+`issuer-web`). CoreDNS hat also keinen Eintrag für ihn und *kann* keinen haben. Deshalb wird
 sein Name im Pod über `hostAliases` fest verdrahtet, statt über DNS aufgelöst zu werden.
 Das ist im Kleinen genau die Situation echter Workload Identity Federation: Die Workload
 redet mit etwas **außerhalb** ihrer Plattform.
@@ -306,3 +339,4 @@ redet mit etwas **außerhalb** ihrer Plattform.
 - [Use Cases](use-cases.md) - der komplette Ablauf Schritt für Schritt, inklusive Bootstrap und aller Fehlerfälle.
 - [Domain / Konzepte](domain.md) - falls du zurück zu den Grundbegriffen willst (Trust Anchor, offline vs. online).
 - [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - warum die Metadaten von `issuer-web` statt vom API-Server kommen.
+- [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - wie der Publisher sie dorthin bringt.

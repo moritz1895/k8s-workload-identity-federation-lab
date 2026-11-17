@@ -10,7 +10,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                 discovery against {@code issuer + "/.well-known/openid-configuration"} to find
  *                 the JWKS
  * @param audience the exact value that must appear in the token's {@code aud} claim
- * @param issuerCa PEM file with the CA (or self-signed cert) the issuer endpoint presents for TLS
+ * @param issuerCa PEM file with the internal CA certificate(s); the issuer endpoint's TLS
+ *                 certificate must chain to one of them
  */
 @ConfigurationProperties(prefix = "wif")
 public record WifProperties(String issuer, String audience, Path issuerCa) {

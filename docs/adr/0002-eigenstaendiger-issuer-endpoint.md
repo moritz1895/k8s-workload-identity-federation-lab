@@ -1,7 +1,7 @@
 # ADR 0002: Eigenständiger Issuer-Endpoint statt anonymer Discovery am API-Server
 
 **Datum:** 2026-09-09
-**Status:** Angenommen
+**Status:** Angenommen; Veröffentlichungsweg, TLS-Vertrauen und Netzaufbau abgelöst durch [ADR 0003](0003-getrennte-vertrauensbereiche-interne-pki.md)
 
 ## Für wen ist das / was lernst du hier
 

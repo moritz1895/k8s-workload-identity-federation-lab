@@ -1,35 +1,97 @@
-# Bootstrap und Aussteller-Endpunkt
+# PKI, Bootstrap, Publisher und Issuer-Endpoint
 
 **Für wen / was lernst du hier:** Du kennst JWT/JWKS, aber nicht Kubernetes-Werkzeuge wie
-`kubectl` oder OpenSSL-Aufrufe. Diese Seite geht `tools/bootstrap.sh` Schritt für Schritt
-durch – die kubeconfig-Umschreibung, das Erzeugen eines self-signed Zertifikats, das
-Herauskopieren von Discovery-Dokument und JWKS – und erklärt danach die nginx-Konfiguration
-`tools/nginx-issuer.conf`.
+`kubectl` oder OpenSSL-Aufrufe. Diese Seite geht die Bausteine durch, die Discovery-Dokument
+und JWKS vom API-Server zum Issuer-Endpoint bringen: die Lab-PKI (`tools/pki-init.sh`), die
+Signaturschlüssel (`tools/sa-keys.sh`), die Cluster-Einrichtung (`tools/bootstrap.sh`), den
+`jwks-publisher` (`manifests/10-publisher.yaml`) und die nginx-Konfiguration
+`tools/nginx-issuer.conf`. Die Entscheidung dahinter:
+[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
 
 ---
 
-## Was der Bootstrap leisten muss
+## Der Weg der Metadaten
 
 Der Kubernetes-API-Server *kann* selbst ein OIDC-Discovery-Dokument und ein JWKS ausliefern
 (unter `/.well-known/openid-configuration` und `/openid/v1/jwks`). In einem echten
-Federation-Setup will man aber, dass diese Metadaten von einem **stabilen, öffentlichen
-Endpunkt** kommen, der nicht der API-Server ist – der API-Server ist oft privat, wechselt
-Adressen und soll nicht von Fremddiensten angesprochen werden.
+Federation-Setup sollen diese Metadaten aber von einem **stabilen, öffentlichen Endpunkt**
+kommen, der nicht der API-Server ist ([ADR 0002](../adr/0002-eigenstaendiger-issuer-endpoint.md)).
 
-Das Lab bildet das nach: `bootstrap` kopiert die Metadaten *einmal* aus dem Cluster in ein
-Volume, und der nginx-Service `issuer-web` liefert sie von dort aus. Der Validator redet
-danach nur mit `issuer-web`.
+Im Lab:
 
-`bootstrap` läuft als Einmal-Container (`compose.yaml:53`), nachdem der `server` gesund ist,
-und wird bei jedem `docker compose up` erneut ausgeführt.
+```
+API-Server ──GET (SA-Token, Leserolle)──► jwks-publisher (Pod) ──PUT (mTLS)──► issuer-web :8443
+                                                                                    │
+                                                         Volume oidc-web ◄──────────┘
+                                                                │
+                                         issuer-web :443 ──GET──► validator
+```
+
+Wer das JWKS am Issuer-Endpoint austauschen kann, kann beliebige Tokens ausstellen, die der
+Validator akzeptiert. Deshalb darf nur ein Client mit dem Publisher-Zertifikat der internen
+CA schreiben, und nur aus dem Cluster-Netz.
+
+---
+
+## `tools/pki-init.sh` – die Lab-PKI
+
+Läuft als Einmal-Container `pki-init` ohne Netz. Er steht für die interne PKI der
+Organisation, deren Root-Zertifikat real bereits auf allen Systemen verteilt ist.
+
+| Artefakt | Volume | Inhalt |
+|---|---|---|
+| Root-CA | `pki-ca` (nur `pki-init`) | `ca.crt`, `ca.key` – RSA 3072, 10 Jahre, `CN=WIF Lab Internal Root CA` |
+| Vertrauensanker | `ca-trust` | Kopie von `ca.crt` |
+| Serverzertifikat `issuer-web` | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer-web`, SAN `DNS:issuer-web`, `extendedKeyUsage=serverAuth` |
+| Client-Zertifikat Publisher | `publisher-tls` | `tls.crt` / `tls.key`, `CN=jwks-publisher`, `extendedKeyUsage=clientAuth` |
+| Negativtests | `pki-demo` | `wrong-cn.*` (interne CA, `CN=not-the-publisher`), `smuggled-cn.*` (interne CA, `CN=jwks-publisher` nur im Feld `O`), `foreign-ca.crt`, `foreign-publisher.*` (fremde CA, `CN=jwks-publisher`) |
+
+Die End-Zertifikate sind RSA 2048 und 825 Tage gültig. Das Skript ist idempotent: Existiert
+die CA, bleibt sie; nur fehlende Zertifikate werden ausgestellt. Erzeugt es eine neue CA,
+verwirft es alle vorhandenen End-Zertifikate und stellt sie von der neuen CA aus.
+
+**Warum `subjectAltName=DNS:issuer-web`?** Moderne TLS-Clients (Java, curl) prüfen den
+angefragten Hostnamen ausschließlich gegen die **SAN**-Liste des Zertifikats. Validator und
+Publisher rufen `https://issuer-web/...` auf, also **muss** `issuer-web` als SAN im
+Zertifikat stehen. Details: [trust-und-tls.md](trust-und-tls.md).
+
+---
+
+## `tools/sa-keys.sh` – Signaturschlüssel und Rotation
+
+Der API-Server signiert ServiceAccount-Tokens mit eigenen Schlüsseldateien aus dem Volume
+`sa-keys` (statt mit dem k3s-eigenen Schlüssel):
+
+| Datei | Bedeutung |
+|---|---|
+| `signing.key` | privater RSA-2048-Schlüssel, `service-account-signing-key-file` |
+| `current.pub` | öffentlicher Teil von `signing.key` |
+| `previous.pub` | öffentlicher Teil des vorherigen Schlüssels (nach einer Rotation) |
+| `verify.pub` | `current.pub` + `previous.pub`, `service-account-key-file` – diese Schlüssel erscheinen im JWKS |
+
+- **`init`** (Standard beim `up`): legt `signing.key` an, wenn keiner existiert, und baut
+  `verify.pub`.
+- **`rotate`** (`docker compose run --rm sa-keys rotate`): `current.pub` wird zu
+  `previous.pub`, ein neuer Schlüssel wird `signing.key`. Schlüssel älter als der vorherige
+  fallen heraus.
+
+kube-apiserver liest die Dateien nur beim Start. Nach `rotate` also
+`docker compose restart server`. Danach signiert der Cluster mit dem neuen Schlüssel, das
+JWKS enthält beide, und der Publisher veröffentlicht es beim nächsten Durchlauf. Tokens von
+vor der Rotation bleiben gültig, bis zur nächsten Rotation. Ablauf und Test:
+[../use-cases.md](../use-cases.md#use-case-4-signaturschlüssel-rotieren).
 
 ---
 
 ## `tools/bootstrap.sh` Schritt für Schritt
 
+Läuft als Einmal-Container `bootstrap` mit der Admin-Kubeconfig, nachdem `server` gesund und
+`pki-init` fertig ist, und bei jedem `docker compose up` erneut. `bootstrap` spricht
+`issuer-web` nicht an.
+
 ### Kopf: strikte Fehlerbehandlung
 
-`tools/bootstrap.sh:7`
+`tools/bootstrap.sh:9`
 
 ```bash
 set -euo pipefail
@@ -39,173 +101,152 @@ set -euo pipefail
 - `-u` – unbekannte Variable = Fehler.
 - `-o pipefail` – eine Pipe `a | b` schlägt fehl, wenn *irgendein* Glied fehlschlägt.
 
-Zusammen: Das Skript läuft entweder sauber durch oder endet mit einem Fehler-Exit-Code – und
-dann startet `issuer-web` wegen `service_completed_successfully` gar nicht erst.
-
 ### Schritt 1 – kubeconfig auf den Docker-Netz-Namen umschreiben
 
-`tools/bootstrap.sh:9`
+`tools/bootstrap.sh:11`
 
 ```bash
 KCFG=/tmp/kubeconfig
-sed -e 's#https://127.0.0.1:6443#https://k3s-server:6443#' \
-    -e 's#https://0.0.0.0:6443#https://k3s-server:6443#' \
-    /kube/kubeconfig.yaml > "$KCFG"
+sed -E 's#server: https://[^/]+:6443#server: https://k3s-server:6443#' /kube/kubeconfig.yaml > "$KCFG"
 export KUBECONFIG="$KCFG"
 ```
 
-**Was ist eine kubeconfig?** Eine YAML-Datei, die `kubectl` sagt: *unter welcher URL* der
+**Was ist eine kubeconfig?** Eine YAML-Datei, die `kubectl` sagt, *unter welcher URL* der
 API-Server erreichbar ist und *mit welchen Zertifikaten* man sich ausweist. k3s schreibt sie
-ins Volume `kubeconfig` (`compose.yaml:35`).
+ins Volume `kubeconfig`.
 
-**Das Problem:** k3s trägt die Server-Adresse als `https://127.0.0.1:6443` ein – also
-"localhost". Das stimmt *innerhalb des server-Containers*, aber nicht im `bootstrap`-Container:
-dort wäre `127.0.0.1` der Bootstrap-Container selbst.
+**Das Problem:** Die Server-Adresse in der kubeconfig stimmt nur *innerhalb des
+server-Containers*. `sed` ersetzt jede `https://<host>:6443` durch `https://k3s-server:6443` –
+den Alias des Servers in `cluster-net`. Dass der TLS-Handshake mit diesem Namen klappt, liegt
+an `--tls-san=k3s-server` ([trust-und-tls.md](trust-und-tls.md)).
 
-**Die Lösung:** `sed` ersetzt die Adresse durch `https://k3s-server:6443` – den Docker-Netz-
-Alias des Servers (`compose.yaml:42`). Port `6443` ist der Standard-Port des Kubernetes-API-
-Servers. Die umgeschriebene Kopie landet in `/tmp/kubeconfig`, und `export KUBECONFIG=…` sagt
-allen folgenden `kubectl`-Aufrufen, diese Datei zu benutzen.
+> Dieselbe Umschreibung steht wortgleich in `tools/demo.sh`.
 
-Dass der TLS-Handshake mit dem neuen Namen `k3s-server` klappt, liegt am Flag
-`--tls-san=k3s-server` des Servers (`compose.yaml:26`) – dazu [trust-und-tls.md](trust-und-tls.md).
+### Schritt 2 – Namespaces anlegen
 
-> Dieselbe Umschreibung steht wortgleich in `tools/demo.sh:13`.
-
-### Schritt 2 – Lab-Manifeste anwenden
-
-`tools/bootstrap.sh:15`
+`tools/bootstrap.sh:16`
 
 ```bash
-kubectl apply -f /manifests
-kubectl -n wif-demo rollout status deployment/consumer --timeout=120s
+kubectl apply -f /manifests/00-namespace.yaml
 ```
 
-- `kubectl apply -f /manifests` – wendet **alle** YAML-Dateien im Verzeichnis an (per Bind
-  Mount aus `./manifests`, `compose.yaml:62`). Das sind:
-  - `00-namespace.yaml` – legt den Namespace `wif-demo` an (ein Namespace ist ein logischer
-    Ordner im Cluster).
-  - `20-consumer.yaml` – ein **ServiceAccount** `consumer` (die Maschinen-Identität) und ein
-    **Deployment** `consumer` (eine verwaltete Pod-Instanz), das ein *projiziertes*
-    ServiceAccount-Token mit `audience: wif-demo-validator` und `expirationSeconds: 600` in den
-    Pod einhängt.
-- `kubectl … rollout status deployment/consumer` – **blockiert**, bis das Deployment wirklich
-  einen laufenden Pod hat (oder nach 120 s aufgibt). So ist sichergestellt, dass die
-  Demo später einen Pod zum `exec` findet.
+Legt `wif-demo` und `wif-publisher` an. Das muss vor Schritt 3 passieren, weil Secret und
+ConfigMap in `wif-publisher` liegen.
 
-**Warum `automountServiceAccountToken: false` im Manifest?** Damit Kubernetes *nicht*
-zusätzlich das Standard-Token (mit `aud` = API-Server) einhängt. Der Pod soll nur das eine,
-bewusst auf `wif-demo-validator` ausgestellte Token besitzen.
-
-### Schritt 3 – ein self-signed Serverzertifikat für `issuer-web` erzeugen
+### Schritt 3 – Client-Zertifikat und CA für den Publisher
 
 `tools/bootstrap.sh:19`
 
 ```bash
-if [ ! -s /oidc/tls.crt ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout /oidc/tls.key -out /oidc/tls.crt \
-        -subj "/CN=issuer-web" -addext "subjectAltName=DNS:issuer-web"
-fi
+kubectl -n wif-publisher create secret tls jwks-publisher-mtls \
+    --cert=/publisher-tls/tls.crt --key=/publisher-tls/tls.key \
+    --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n wif-publisher create configmap internal-ca \
+    --from-file=ca.crt=/trust/ca.crt \
+    --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-**Was ist ein self-signed Zertifikat?** Normalerweise unterschreibt eine
-**Certificate Authority (CA)** ein Serverzertifikat, und Clients vertrauen der CA. Ein
-*self-signed* ("selbstsigniertes") Zertifikat unterschreibt sich mit seinem eigenen Schlüssel
-selbst – es ist zugleich Zertifikat und (implizite) CA. Kein öffentlicher Client vertraut ihm
-automatisch; man muss es explizit ins Vertrauen aufnehmen. Genau das tut der Validator (siehe
-[trust-und-tls.md](trust-und-tls.md)).
+`create … --dry-run=client -o yaml | kubectl apply -f -` erzeugt das Objekt nur als YAML und
+wendet es dann an – damit ist der Schritt idempotent. Im Publisher-Pod landen Secret unter
+`/mtls` und ConfigMap unter `/trust`. In einem echten Cluster übernähme das cert-manager oder
+die PKI-Anbindung der Plattform.
 
-Die `openssl req`-Optionen:
+### Schritt 4 – Manifeste anwenden und warten
 
-| Option | Bedeutung |
+`tools/bootstrap.sh:27`
+
+```bash
+kubectl apply -f /manifests
+kubectl -n wif-publisher rollout status deployment/jwks-publisher --timeout=180s
+kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
+```
+
+- `00-namespace.yaml` – die beiden Namespaces (erneut, idempotent).
+- `10-publisher.yaml` – ServiceAccount, ClusterRoleBinding, Skript-ConfigMap und Deployment
+  des Publishers (siehe unten).
+- `20-consumer.yaml` – ServiceAccount `consumer` und Deployment `consumer` mit projiziertem
+  Token (`audience: wif-demo-validator`, `expirationSeconds: 600`) und
+  `automountServiceAccountToken: false`, damit der Pod nur dieses eine Token besitzt.
+
+`rollout status` **blockiert**, bis die Deployments einen laufenden Pod haben (oder nach
+180 s aufgeben).
+
+---
+
+## `jwks-publisher` – Veröffentlichung aus dem Cluster
+
+Definiert in `manifests/10-publisher.yaml`.
+
+| Objekt | Zweck |
 |---|---|
-| `-x509` | Erzeuge ein fertiges Zertifikat, nicht nur einen Signieranfrage-Request (CSR). |
-| `-newkey rsa:2048` | Erzeuge zugleich einen neuen 2048-Bit-RSA-Schlüssel. |
-| `-nodes` | "no DES" – privaten Schlüssel **nicht** mit Passwort verschlüsseln (nginx soll ihn ohne Eingabe lesen). |
-| `-days 3650` | 10 Jahre gültig. |
-| `-keyout /oidc/tls.key` / `-out /oidc/tls.crt` | Zielpfade für Schlüssel und Zertifikat – beide im geteilten Volume `oidc-web`. |
-| `-subj "/CN=issuer-web"` | Setzt den Common Name, damit `openssl` nicht interaktiv nachfragt. |
-| `-addext "subjectAltName=DNS:issuer-web"` | **Der wichtige Teil.** |
+| ServiceAccount `jwks-publisher` (`wif-publisher`) | Identität des Publishers gegenüber dem API-Server. |
+| ClusterRoleBinding `jwks-publisher-issuer-discovery` | Bindet die eingebaute ClusterRole `system:service-account-issuer-discovery` – nur `GET` auf die zwei Discovery-Pfade. |
+| ConfigMap `jwks-publisher-script` | Das Shell-Skript `publish.sh`. |
+| Deployment `jwks-publisher` | `curlimages/curl`, eine Replik, hängt Skript (`/scripts`), Secret (`/mtls`) und CA (`/trust`) ein; `hostAliases`: `issuer-web` → `172.31.7.20`. |
 
-**Warum `subjectAltName=DNS:issuer-web`?** Moderne TLS-Clients (auch die Java-Bibliothek
-Nimbus, die der Validator nutzt) prüfen bei der **Hostname-Verification** den angefragten
-Hostnamen ausschließlich gegen die **SAN**-Liste (Subject Alternative Name) des Zertifikats –
-der veraltete `CN` zählt dafür nicht mehr. Der Validator ruft `https://issuer-web/...` auf,
-also **muss** `issuer-web` als SAN im Zertifikat stehen, sonst scheitert der Handshake mit
-"No subject alternative DNS name matching issuer-web found".
+Ablauf von `publish.sh`:
 
-**Warum die Guard-Bedingung `if [ ! -s /oidc/tls.crt ]`?** `-s` heißt "Datei existiert und ist
-nicht leer". Da `bootstrap` bei jedem `up` läuft, würde ein neues Zertifikat bei jedem Start
-das alte ersetzen. Der Guard sorgt dafür, dass das Zertifikat **nur einmal** erzeugt wird und
-über Neustarts hinweg stabil bleibt (solange das Volume `oidc-web` nicht mit `down -v`
-gelöscht wird). Stabil heißt: `issuer-web` und `validator` müssen nicht bei jedem `up` neu
-aufeinander abgestimmt werden.
+Eine **Schleife** alle `PUBLISH_INTERVAL_SECONDS` (15):
 
-### Schritt 4 – Discovery-Dokument und JWKS aus dem Cluster kopieren
+1. Discovery-Dokument und JWKS von `https://kubernetes.default.svc` holen, mit dem
+   ServiceAccount-Token und der Cluster-CA aus `/var/run/secrets/kubernetes.io/serviceaccount`.
+   Das Token geht über eine Header-Datei an `curl` (`-H @file`), nicht über die
+   Kommandozeile.
+2. Lesen, was `issuer-web` gerade öffentlich ausliefert (`PUBLIC_URL`, Default
+   `https://issuer-web`, also `:443`).
+3. SHA-256 über beide Stände bilden. Gleich → nichts tun.
+4. Sonst per `curl -T` (`PUT`) an `PUBLISH_TARGET` (Default `https://issuer-web:8443`)
+   hochladen: erst `/openid/v1/jwks`, dann `/.well-known/openid-configuration`.
+   Client-Zertifikat `/mtls/tls.crt`, Serverprüfung gegen `/trust/ca.crt`.
+   Log: `publisher: published JWKS sha256=<hash> kids=[ <neu> ] previous=[ <ausgeliefert> ]`.
+5. Liefert `issuer-web` etwas aus, das der Publisher nicht selbst hochgeladen hat (fremder
+   Upload, geleertes Volume), loggt er zusätzlich
+   `publisher: WARNING issuer serves content this publisher did not upload ...` und stellt
+   den Stand des Clusters wieder her.
+6. Fehler beim Lesen oder Hochladen werden geloggt; der nächste Durchlauf versucht es neu.
 
-`tools/bootstrap.sh:26`
+Weil das JWKS des API-Servers sich bei einer Rotation ändert, erkennt der Publisher sie ohne
+eigenen Mechanismus. Gegenüber `issuer-web` weist er sich **nie** mit einem
+ServiceAccount-Token aus: Ein solches Token würde gegen genau die Schlüssel geprüft, die er
+gerade veröffentlicht.
 
-```bash
-kubectl get --raw /.well-known/openid-configuration > /oidc/openid-configuration.json
-kubectl get --raw /openid/v1/jwks                   > /oidc/jwks.json
-```
-
-`kubectl get --raw <pfad>` ruft einen HTTP-Pfad direkt am API-Server ab und gibt die
-**rohe** Antwort aus – hier JSON. Das läuft über die Admin-kubeconfig, also mit voller
-Cluster-Berechtigung; ein Fremddienst hätte diesen Zugriff nicht.
-
-- `/.well-known/openid-configuration` → das OIDC-Discovery-Dokument. Weil der API-Server mit
-  `service-account-issuer=https://issuer-web` gestartet wurde, steht dort bereits
-  `"issuer": "https://issuer-web"` und `"jwks_uri": "https://issuer-web/openid/v1/jwks"` –
-  **es muss nichts umgeschrieben werden**, die Dateien werden 1:1 abgelegt.
-- `/openid/v1/jwks` → das JWK Set mit den öffentlichen ServiceAccount-Signaturschlüsseln von
-  k3s (RSA, `RS256`). Diese Schlüssel sind die eigentliche Vertrauenswurzel für die
-  Token-Prüfung.
-
-Beide Dateien landen im Volume `oidc-web`, aus dem `issuer-web` (und lesend auch `validator`)
-sie sieht.
-
-### Schritt 5 – Abschluss
-
-`tools/bootstrap.sh:32`
+Log ansehen:
 
 ```bash
-echo "bootstrap: done — ..."
-cat /oidc/openid-configuration.json
+docker compose exec server kubectl -n wif-publisher logs deploy/jwks-publisher
 ```
-
-Gibt das kopierte Discovery-Dokument ins Log aus (nützlich für `docker compose logs
-bootstrap`) und endet mit Exit 0. Genau darauf wartet `issuer-web` per
-`service_completed_successfully`.
 
 ---
 
 ## `tools/nginx-issuer.conf`
 
-Diese Datei wird in den `issuer-web`-Container als `/etc/nginx/conf.d/default.conf` eingehängt
-(`compose.yaml:76`). Sie enthält **zwei** `server`-Blöcke.
+Wird in `issuer-web` als `/etc/nginx/conf.d/default.conf` eingehängt. Beide `server`-Blöcke
+nutzen `root /oidc` – die Dokumente liegen im Volume `oidc-web` unter ihrem URL-Pfad
+(`/oidc/.well-known/openid-configuration`, `/oidc/openid/v1/jwks`), sodass Lese- und
+Schreibseite dieselbe Ablage teilen.
 
-### Block 1 – der HTTPS-Aussteller
+### Block 1 – Lesen (`:443`)
 
-`tools/nginx-issuer.conf:6`
+`tools/nginx-issuer.conf:14`
 
 ```nginx
 server {
     listen 443 ssl;
     server_name issuer-web;
 
-    ssl_certificate     /oidc/tls.crt;
-    ssl_certificate_key /oidc/tls.key;
+    ssl_certificate     /tls/tls.crt;
+    ssl_certificate_key /tls/tls.key;
+
+    root /oidc;
 
     location = /.well-known/openid-configuration {
+        limit_except GET { deny all; }
         default_type application/json;
-        alias /oidc/openid-configuration.json;
     }
 
     location = /openid/v1/jwks {
+        limit_except GET { deny all; }
         default_type application/json;
-        alias /oidc/jwks.json;
     }
 
     location / {
@@ -214,59 +255,83 @@ server {
 }
 ```
 
-- **`listen 443 ssl`** – HTTPS auf dem Standard-Port. `ssl_certificate` / `ssl_certificate_key`
-  zeigen auf die von `bootstrap` erzeugten Dateien im geteilten Volume.
-- **`location = /pfad`** – das `=` bedeutet "exakt dieser Pfad, nichts anderes". Nur die zwei
-  bekannten OIDC-Pfade werden bedient.
-- **`alias /oidc/...json`** – liefert diese Datei aus dem Volume als Antwort.
-- **`default_type application/json`** – **notwendig**, weil die Dateien `openid-configuration.json`
-  bzw. `jwks.json` heißen, aber unter *endungslosen* URLs (`/.well-known/openid-configuration`,
-  `/openid/v1/jwks`) ausgeliefert werden. nginx rät den `Content-Type` sonst aus der URL-Endung;
-  ohne Endung fiele es auf `application/octet-stream` zurück. `default_type` erzwingt
-  `Content-Type: application/json`, was OIDC-Clients (und Nimbus) erwarten.
-- **`location / { return 404; }`** – alles andere gibt es hier nicht.
+- **`listen 443 ssl`** auf allen Adressen – erreichbar aus `relying-net` (Validator) und aus
+  `cluster-net` (der Publisher liest hier den veröffentlichten Stand).
+- **Serverzertifikat** aus `issuer-tls`, ausgestellt von der internen CA.
+- **`location = /pfad`** – nur die zwei bekannten OIDC-Pfade; alles andere `404`.
+- **`limit_except GET { deny all; }`** – nur `GET` (und damit `HEAD`); ein `PUT` hier ergibt
+  `403`.
+- **`default_type application/json`** – die Dateien haben keine Endung; ohne diese Zeile fiele
+  nginx auf `application/octet-stream` zurück. OIDC-Clients (und Nimbus) erwarten JSON.
 
-### Block 2 – der Plain-HTTP-Healthcheck
+### Block 2 – Upload (`:8443`, mTLS)
 
-`tools/nginx-issuer.conf:29`
+`tools/nginx-issuer.conf:38`
 
 ```nginx
 server {
-    listen 80;
-    location = /healthz {
-        return 200 "ok\n";
+    listen 172.31.7.20:8443 ssl;
+    server_name issuer-web;
+
+    ssl_certificate         /tls/tls.crt;
+    ssl_certificate_key     /tls/tls.key;
+    ssl_client_certificate  /trust/ca.crt;
+    ssl_verify_client       on;
+    ssl_verify_depth        1;
+
+    access_log /var/log/nginx/access.log upload;
+
+    root /oidc;
+    client_body_temp_path /oidc/.tmp;
+    client_max_body_size  64k;
+
+    location = /openid/v1/jwks {
+        if ($publisher_ok = 0) { return 403; }
+        limit_except PUT { deny all; }
+        dav_methods PUT;
+        create_full_put_path on;
+        dav_access user:rw group:r all:r;
     }
+    # ... derselbe Block für /.well-known/openid-configuration, sonst 404
 }
 ```
 
-Ein getrennter Klartext-HTTP-Server nur für den Docker-Healthcheck. Warum nicht den
-HTTPS-Endpunkt prüfen? Weil das Healthcheck-Tool im Alpine-Image das minimalistische
-busybox-`wget` ist, das self-signed Zertifikate nicht ohne Weiteres akzeptiert. Ein
-Klartext-`/healthz` ist einfacher und für einen reinen Lebendigkeitstest ausreichend.
+| Direktive | Wirkung |
+|---|---|
+| `listen 172.31.7.20:8443` | nur auf der Adresse in `cluster-net` – aus `relying-net` nicht erreichbar |
+| `ssl_client_certificate` + `ssl_verify_client on` | Client-Zertifikat ist Pflicht und muss von der internen CA stammen. Fehlt es oder stammt es von einer anderen CA, antwortet nginx mit `400`. |
+| `ssl_verify_depth 1` | Kette höchstens Client → Root, keine Zwischen-CAs |
+| `map $ssl_client_s_dn $publisher_ok` (auf `http`-Ebene) | Schreibrecht nur bei exakt dem DN `CN=jwks-publisher,O=WIF Lab`, sonst `403`. Ein exakter Vergleich statt einer Teilstring-Suche verhindert, dass `CN=jwks-publisher` in einem anderen DN-Feld (z. B. `O=x\,CN=jwks-publisher`) durchrutscht. |
+| `limit_except PUT` | nur `PUT` auf die zwei Pfade |
+| `dav_methods PUT`, `create_full_put_path on` | nginx speichert den Body als Datei unter dem Pfad und legt fehlende Verzeichnisse an |
+| `client_max_body_size 64k` | Obergrenze für hochgeladene Dokumente |
+| `access_log … upload` | Logformat mit `client_dn="$ssl_client_s_dn"` und `verify=$ssl_client_verify` |
 
-### Die IPv6- / `127.0.0.1`-Falle
+`issuer-web` prüft den **Inhalt** der hochgeladenen Dokumente nicht. Wer das
+Publisher-Zertifikat besitzt, kann jedes JWKS hochladen (siehe ADR 0003, Kompromisse).
 
-Der Healthcheck (`compose.yaml:85`) lautet:
+### Healthcheck
+
+`compose.yaml:160`
 
 ```yaml
-test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+test: ["CMD", "test", "-s", "/oidc/openid/v1/jwks"]
 ```
 
-Mit `http://localhost/healthz` würde das busybox-`wget` den Namen `localhost` zuerst zu der
-IPv6-Adresse `::1` auflösen. nginx lauscht hier aber nur auf IPv4 (`listen 80` ohne
-`[::]:80`), sodass die Verbindung zu `::1` scheitert und `wget` – je nach busybox-Version –
-den Fehler nicht sauber auf IPv4 zurückfällt. Die **literale** IPv4-Adresse `127.0.0.1`
-umgeht die Namensauflösung komplett und trifft nginx direkt. Deshalb im Healthcheck bewusst
-`127.0.0.1` statt `localhost`.
+`issuer-web` gilt als gesund, sobald das JWKS als nicht-leere Datei existiert – also nach dem
+ersten Upload des Publishers. Erst dann startet der Validator.
+
+Die Log-Zeile `can not modify /etc/nginx/conf.d/default.conf (read-only file system?)` beim
+Start ist harmlos: Das Startskript des nginx-Images will die schreibgeschützt eingehängte
+Config anpassen; diese Config braucht das nicht.
 
 ---
 
 ## Weiterlesen
 
-- [architecture.md](architecture.md) – der ganze Stack und die Startreihenfolge
-- [trust-und-tls.md](trust-und-tls.md) – SAN, Hostname-Verification, warum der Validator dem
-  self-signed Zertifikat vertraut
-- [validator.md](validator.md) – wie der Validator die kopierten Metadaten benutzt
-- [build-und-betrieb.md](build-und-betrieb.md) – das `tools/`-Image und häufige Probleme
-- [../kubernetes-primer.md](../kubernetes-primer.md) – ServiceAccount, Deployment, projiziertes Token
+- [architecture.md](architecture.md) – der ganze Stack, Netze und Startreihenfolge
+- [trust-und-tls.md](trust-und-tls.md) – SAN, Hostname-Verification, mTLS, interne CA
+- [validator.md](validator.md) – wie der Validator die Metadaten benutzt
+- [build-und-betrieb.md](build-und-betrieb.md) – das `tools/`-Image, Rotation, häufige Probleme
+- [../kubernetes-primer.md](../kubernetes-primer.md) – ServiceAccount, RBAC, Secret, projiziertes Token
 - [../use-cases.md](../use-cases.md) – die Abläufe end to end
