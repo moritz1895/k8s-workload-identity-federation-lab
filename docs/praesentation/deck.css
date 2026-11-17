@@ -1,0 +1,72 @@
+body { font-family: 'Inter', sans-serif; color: #1d2530; }
+section { padding: 128px; background: #fafaf8; display: flex; flex-direction: column; gap: 32px; }
+section h2 { font-size: 56px; font-weight: 700; line-height: 1.1; color: #1d2530; }
+
+/* Cover */
+section.cover { justify-content: center; gap: 28px; }
+.cover h1 { font-size: 96px; font-weight: 700; line-height: 1.05; }
+.cover .kicker { font-size: 28px; font-weight: 600; letter-spacing: 2px; color: #2563a8; }
+.cover .lead { font-size: 36px; line-height: 1.35; color: #4a5562; width: 1300px; }
+.cover .meta { font-size: 26px; color: #4a5562; }
+
+/* Stichpunkte */
+.pts { font-size: 26px; line-height: 1.35; color: #1d2530; padding-left: 36px; }
+.pts li { margin-top: 4px; margin-bottom: 4px; }
+.note { font-size: 26px; line-height: 1.35; color: #4a5562; }
+
+/* Diagramme */
+.host { position: relative; width: 1664px; }
+.box { position: absolute; box-sizing: border-box; background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.box .t { font-size: 28px; font-weight: 700; line-height: 1.2; text-align: center; color: #1d2530; }
+.box .d { font-size: 24px; line-height: 1.25; text-align: center; color: #4a5562; }
+.box.accent { background: #e8f0f9; border-color: #2563a8; }
+.box.anchor { background: #fbeee2; border-color: #c2621a; }
+.box.ok { background: #e6f3eb; border-color: #2e7d4f; }
+.lbl { position: absolute; font-size: 24px; line-height: 1.3; color: #3b4652; }
+.panel { position: absolute; box-sizing: border-box; background: #efefec; border-radius: 16px; }
+.panel.blue { background: #eaf1f9; }
+.ph { position: absolute; font-size: 28px; font-weight: 700; line-height: 1.2; color: #1d2530; }
+.warn { position: absolute; box-sizing: border-box; font-size: 24px; line-height: 1.3; color: #b3261e; background: #fbe9e7; border: 2px solid #b3261e; border-radius: 12px; padding: 12px 16px; text-align: center; }
+.ln { color: #4a5562; border-width: 3px; }
+.ln.dash { border-style: dashed; }
+.ln.life { color: #b4bcc6; border-width: 2px; border-style: dashed; }
+
+/* Karten (Aufbau) */
+.flow { display: flex; align-items: stretch; }
+.card { flex: 1; box-sizing: border-box; background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.card .num { font-size: 24px; font-weight: 700; color: #2563a8; }
+.card h3 { font-size: 30px; font-weight: 700; line-height: 1.2; }
+.cl { font-size: 24px; line-height: 1.3; color: #3b4652; padding-left: 28px; }
+.cl li { margin-top: 4px; margin-bottom: 4px; }
+.fc { width: 48px; height: 0; align-self: center; color: #4a5562; border-width: 3px; }
+
+/* Token-Anatomie */
+.jwt { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 24px; }
+.part { background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ptag { align-self: flex-start; font-size: 26px; font-weight: 700; padding: 6px 16px; border-radius: 8px; }
+.ptag.h { background: #e8f0f9; color: #1f4f86; }
+.ptag.p { background: #fbeee2; color: #8a4512; }
+.ptag.s { background: #e6f3eb; color: #22603c; }
+.claims { display: flex; flex-direction: column; gap: 6px; }
+.code { font-family: 'JetBrains Mono', monospace; font-size: 24px; line-height: 1.3; color: #1d2530; }
+.sig { font-size: 24px; line-height: 1.3; color: #1d2530; }
+.chk-h { font-size: 24px; font-weight: 700; color: #4a5562; }
+
+/* Tabellen */
+.tbl { width: 1664px; font-size: 26px; color: #1d2530; }
+.tbl .head { background: #e7e9ec; }
+.tbl .pass { color: #2e7d4f; }
+.tbl .fail { color: #b3261e; }
+
+/* Offline/Online */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; }
+.col { display: flex; flex-direction: column; gap: 16px; }
+.colh { font-size: 30px; font-weight: 700; color: #1d2530; }
+.sh { font-size: 24px; font-weight: 700; color: #4a5562; }
+
+/* Demo */
+.demo { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; }
+.term { background: #1d2530; border-radius: 12px; padding: 32px; display: flex; flex-direction: column; gap: 8px; }
+.term .cmd { font-family: 'JetBrains Mono', monospace; font-size: 26px; line-height: 1.3; color: #f2f2ef; }
+.term .cmt { font-family: 'JetBrains Mono', monospace; font-size: 24px; line-height: 1.3; color: #9fb0c2; }
+.term .gap { height: 12px; }

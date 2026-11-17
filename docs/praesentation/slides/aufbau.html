@@ -1,0 +1,40 @@
+<section id="aufbau">
+<h2>Aufbau: Startreihenfolge mit docker compose up</h2>
+<div class="flow">
+<div class="card">
+<p class="num">1</p>
+<h3>server (k3s)</h3>
+<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">2</p>
+<h3>bootstrap</h3>
+<ul class="cl"><li>legt Namespace, ServiceAccount und Pod an</li><li>erzeugt TLS-Zertifikat für issuer-web</li><li>kopiert Discovery + JWKS aus dem Cluster</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">3</p>
+<h3>issuer-web</h3>
+<ul class="cl"><li>nginx liefert genau zwei Dateien per HTTPS</li><li>alles andere: 404</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">4</p>
+<h3>validator</h3>
+<ul class="cl"><li>lädt Discovery + JWKS</li><li>startet nur, wenn der Issuer passt</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">5</p>
+<h3>demo</h3>
+<ul class="cl"><li>auf Abruf gestartet</li><li>End-to-End-Test: Gut- und Fehlerfälle</li></ul>
+</div>
+</div>
+<ul class="pts">
+<li>Auf dem Host nur Docker + Compose v2 – alles andere läuft in Containern</li>
+<li>Reihenfolge über Compose-Abhängigkeiten: Der nächste Dienst startet erst, wenn der vorige bereit bzw. erfolgreich beendet ist</li>
+<li>Weil der Cluster schon mit externem Issuer startet, trägt jedes Token iss = https://issuer-web</li>
+</ul>
+<aside>Ein docker compose up baut das komplette Lab. Der bootstrap-Container läuft einmal durch und beendet sich; danach liefert issuer-web nur noch statische Dateien aus.</aside>
+</section>

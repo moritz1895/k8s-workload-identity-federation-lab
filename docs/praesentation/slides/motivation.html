@@ -1,0 +1,18 @@
+<section id="motivation">
+<h2>Vom Client-Zertifikat zur Workload Identity</h2>
+<table class="tbl">
+<tr class="head"><th style="width:20%">Aspekt</th><th style="width:38%">Heute: mTLS-Client-Zertifikat</th><th style="width:42%">Ziel: Workload Identity (PoC)</th></tr>
+<tr><td>Was der Client besitzt</td><td>Keystore mit privatem Schlüssel</td><td>nichts Dauerhaftes – die Plattform stellt das Token bereit</td></tr>
+<tr><td>Bereitstellung</td><td>Enrollment, teils manuell, wiederkehrend</td><td>automatisch, vom Cluster ausgestellt und erneuert</td></tr>
+<tr><td>Gültigkeit</td><td>lang – bis zum Zertifikatsablauf</td><td>10 Minuten</td></tr>
+<tr><td>Bei Diebstahl</td><td>Zugriff bis Ablauf oder Sperrung</td><td>Zugriff höchstens bis exp, nur bei diesem einen Dienst (aud)</td></tr>
+<tr><td>Widerruf</td><td>Zertifikat sperren</td><td>kein Widerruf vor exp – die kurze Laufzeit begrenzt den Schaden</td></tr>
+<tr><td>Identitätsmerkmale</td><td>Merkmale im Subject-DN</td><td>Claims: sub, Namespace, ServiceAccount</td></tr>
+<tr><td>Rechte</td><td>Subject-DN → Spring-Security-Authorities</td><td>analog denkbar: Claims → Authorities (nicht Teil des PoC)</td></tr>
+</table>
+<ul class="pts">
+<li>Der Server prüft weiter Identität und mappt auf Rechte – nur die Quelle wechselt vom Zertifikat zum signierten Token</li>
+<li>Ein Bearer-Token braucht weiterhin TLS zum Server (einseitig, ohne Client-Zertifikat) – im Lab vereinfacht über HTTP</li>
+</ul>
+<aside>Ehrliche Gegenüberstellung: Beim Widerruf ist das Zertifikat formal im Vorteil, weil es gesperrt werden kann. Das Token kann nicht zurückgezogen werden, gilt aber nur 10 Minuten und nur für einen Dienst. Das Mapping von Claims auf Authorities ist im PoC nicht umgesetzt; der Validator gibt die Claims nur zurück.</aside>
+</section>
