@@ -1,0 +1,19 @@
+<section id="fehlerfaelle">
+<h2>Gut- und Fehlerfälle</h2>
+<table class="tbl">
+<tr class="head"><th style="width:8%">Fall</th><th style="width:46%">Situation</th><th style="width:26%">Im Lab ausgelöst durch</th><th style="width:20%">Antwort</th></tr>
+<tr><td>OK</td><td>Gültiges Token des Pods</td><td>demo.sh</td><td class="pass">200 + Claims</td></tr>
+<tr><td>E1</td><td>Falsche Audience – Token für einen anderen Dienst</td><td>demo.sh</td><td class="fail">401</td></tr>
+<tr><td>E2</td><td>Abgelaufen – exp überschritten</td><td>demo.sh (DEMO_EXPIRY=1)</td><td class="fail">401</td></tr>
+<tr><td>E3</td><td>Manipulierte Signatur – ein Zeichen geändert</td><td>demo.sh</td><td class="fail">401</td></tr>
+<tr><td>E4</td><td>Unbekannter Schlüssel – kid nicht im JWKS</td><td>Unit-Test</td><td class="fail">401</td></tr>
+<tr><td>E5</td><td>Falscher Issuer</td><td>Unit-Test</td><td class="fail">401</td></tr>
+<tr><td>E6</td><td>Kein Bearer-Header</td><td>curl ohne Header</td><td class="fail">401</td></tr>
+<tr><td>E7</td><td>Kein gültiges JWT-Format</td><td>Unit-Test</td><td class="fail">401</td></tr>
+</table>
+<ul class="pts">
+<li>Jede Ablehnung liefert HTTP 401 mit kurzem Grund, z. B. „JWT aud claim rejected“</li>
+<li>Fehlkonfiguration fällt schon beim Start auf: Passt der Issuer nicht oder fehlt das Zertifikat, startet der Validator nicht</li>
+</ul>
+<aside>E1 bis E3 zeigt das Demo-Skript live, E2 nur auf Wunsch, weil man dafür rund 10 Minuten warten muss (Mindestlaufzeit der TokenRequest-API). E4, E5 und E7 sind über Unit-Tests abgedeckt, die komplett offline laufen.</aside>
+</section>

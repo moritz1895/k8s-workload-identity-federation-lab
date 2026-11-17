@@ -1,0 +1,31 @@
+<section id="vertrauen">
+<h2>Vertrauenskette: Warum offline prüfen reicht</h2>
+<!-- host 1664x480
+ A1 0,0,380,170 (bottom mid 190,170)          A2 428,0,808,170 (bottom mid 832,170)
+ chain top 330 h 150: C1 0 ; C2 428 ; C3 856 ; C4 1284 ; width 380 ; mid y 405 ; centers 190, 618, 1046, 1474
+ A1->C1 190,170->190,330 ; A2 drop 832,170->832,300 ; bar 618..1046 @300 ; stubs 618,1046 300->330
+ chain 380->428, 808->856, 1236->1284 @405
+-->
+<div class="host" style="height:480px">
+<div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: erwarteter Issuer</p><p class="d">fest konfiguriert: https://issuer-web</p></div>
+<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: TLS-Zertifikat von issuer-web</p><p class="d">nur dieses eine Zertifikat gilt – keine öffentlichen CAs, kein curl -k</p></div>
+<div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss exakt dem Anker entsprechen</p></div>
+<div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">issuer-Feld muss passen, nennt jwks_uri</p></div>
+<div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
+<div class="box ok" style="left:1284px; top:330px; width:380px; height:150px"><p class="t">Signatur gültig</p><p class="d">Schlüssel per kid gewählt und verifiziert</p></div>
+<x-connector class="ln" x1="190" y1="170" x2="190" y2="330"></x-connector>
+<x-connector class="ln" x1="832" y1="170" x2="832" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="1046" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="618" y2="330"></x-connector>
+<x-connector class="ln" x1="1046" y1="300" x2="1046" y2="330"></x-connector>
+<x-connector class="ln" x1="380" y1="405" x2="428" y2="405"></x-connector>
+<x-connector class="ln" x1="808" y1="405" x2="856" y2="405"></x-connector>
+<x-connector class="ln" x1="1236" y1="405" x2="1284" y2="405"></x-connector>
+</div>
+<ul class="pts">
+<li>Nur zwei Dinge sind fest im Validator hinterlegt: der erwartete Issuer und das TLS-Zertifikat von issuer-web</li>
+<li>Alles Weitere – Discovery, Schlüssel, Signatur – wird daraus abgeleitet, ohne Rückfrage beim Cluster</li>
+<li>Passt der Issuer im Discovery-Dokument nicht, startet der Validator gar nicht (gewollt)</li>
+</ul>
+<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt der Validator über die eine vertraute TLS-Verbindung das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
+</section>

@@ -1,0 +1,34 @@
+<section id="problem">
+<h2>Ausgangssituation: Identität über Client-Zertifikate</h2>
+<!-- host 1664x530
+ panelL 0,0,800,550   panelR 864,0,800,550
+ A1 40,60,360,130   A2 40,230,360,130   A3 40,400,360,130   (center x 220)
+ B1 904,60,360,130  B2 904,230,360,130  B3 904,400,360,130  (center x 1084)
+-->
+<div class="host" style="height:530px">
+<div class="panel" style="left:0px; top:0px; width:800px; height:530px"></div>
+<div class="panel blue" style="left:864px; top:0px; width:800px; height:530px"></div>
+<p class="ph" style="left:40px; top:16px; width:720px">Heute: mTLS mit Client-Zertifikat</p>
+<p class="ph" style="left:904px; top:16px; width:720px">Ziel: Workload Identity</p>
+<div class="box" style="left:40px; top:60px; width:360px; height:130px"><p class="t">PKI / Enrollment</p><p class="d">Zertifikat beantragen und ausrollen</p></div>
+<div class="box" style="left:40px; top:230px; width:360px; height:130px"><p class="t">Client</p><p class="d">Keystore mit privatem Schlüssel</p></div>
+<div class="box" style="left:40px; top:400px; width:360px; height:130px"><p class="t">Server</p><p class="d">mappt Subject-DN auf Authorities</p></div>
+<div class="box accent" style="left:904px; top:60px; width:360px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster</p></div>
+<div class="box" style="left:904px; top:230px; width:360px; height:130px"><p class="t">Workload</p><p class="d">kein privater Schlüssel, kein Enrollment</p></div>
+<div class="box" style="left:904px; top:400px; width:360px; height:130px"><p class="t">Server</p><p class="d">prüft Signatur und Claims</p></div>
+<x-connector class="ln" x1="220" y1="190" x2="220" y2="230"></x-connector>
+<x-connector class="ln" x1="220" y1="360" x2="220" y2="400"></x-connector>
+<x-connector class="ln" x1="1084" y1="190" x2="1084" y2="230"></x-connector>
+<x-connector class="ln" x1="1084" y1="360" x2="1084" y2="400"></x-connector>
+<p class="lbl" style="left:430px; top:196px; width:340px">langlebig, oft manuell – Erneuerung wiederkehrend</p>
+<p class="lbl" style="left:430px; top:366px; width:340px">mTLS-Handshake: Zertifikat mit speziellen DN-Merkmalen</p>
+<p class="lbl" style="left:1294px; top:196px; width:340px">stellt automatisch ein Token aus: 10 min gültig, nur für diesen Dienst</p>
+<p class="lbl" style="left:1294px; top:366px; width:340px">als Bearer-Token im HTTP-Header</p>
+</div>
+<ul class="pts">
+<li>Heute besitzt jeder Client einen Keystore mit privatem Schlüssel – manuell enrollt, wiederkehrend erneuert</li>
+<li>Gestohlener Keystore = Zugriff bis zum Ablauf oder bis das Zertifikat gesperrt ist</li>
+<li>Ziel: Die Workload besitzt nichts Dauerhaftes – die Plattform bestätigt ihre Identität per kurzlebigem Token</li>
+</ul>
+<aside>Unser heutiger Weg: mutual TLS mit speziell gestalteten Client-Zertifikaten. Der Server liest Merkmale im Subject-DN und mappt sie auf Rollen bzw. Spring-Security-Authorities. Das Problem ist nicht die Prüfung auf Serverseite, sondern dass jeder Client einen privaten Schlüssel besitzen, enrollen und pflegen muss. Workload Identity dreht das um: Die Plattform, auf der die Software läuft, bestätigt deren Identität.</aside>
+</section>

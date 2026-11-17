@@ -1,0 +1,31 @@
+<section id="demo">
+<h2>Live-Demo</h2>
+<div class="demo">
+<div class="term">
+<p class="cmt"># einmalig</p>
+<p class="cmd">cp .env.example .env</p>
+<div class="gap"></div>
+<p class="cmt"># k3s + issuer-web + Validator starten</p>
+<p class="cmd">docker compose up -d --build</p>
+<div class="gap"></div>
+<p class="cmt"># Ende-zu-Ende-Prüfung</p>
+<p class="cmd">docker compose run --rm demo</p>
+<div class="gap"></div>
+<p class="cmt"># alles wieder entfernen</p>
+<p class="cmd">docker compose down -v</p>
+</div>
+<div class="col">
+<p class="colh">Was die Demo zeigt</p>
+<ol class="pts">
+<li>Discovery-Dokument von issuer-web</li>
+<li>JWKS über die jwks_uri</li>
+<li>Token ausstellen und Claims dekodieren</li>
+<li>Pod → Validator: 200</li>
+<li>Falsche Audience: 401</li>
+<li>Manipulierte Signatur: 401</li>
+<li>optional: echtes Ablaufen nach ~10 min: 401</li>
+</ol>
+</div>
+</div>
+<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2. Das Ablaufen (DEMO_EXPIRY=1) nur zeigen, wenn Zeit ist.</aside>
+</section>
