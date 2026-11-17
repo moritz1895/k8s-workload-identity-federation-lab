@@ -383,15 +383,22 @@ Validators (5 min). Siehe [ADR 0003](adr/0003-getrennte-vertrauensbereiche-inter
 Schlägt eine Erwartung fehl, bricht `demo.sh` mit rotem `FAIL:` und Exit-Code 1 ab. Am Ende:
 `PASS: phase 'all': all checks passed`.
 
+### `docker compose run --rm demo authz`
+
+Die Prüfungen 8–21 zum Autorisierungsserver (Workload → Keycloak → `service-r`) mit
+Erwartungen stehen in der
+[Feature-Spezifikation, Abschnitt 12](features/keycloak-autorisierungsserver.md#12-testfälle).
+
 ### `tools/run-all-checks.sh` (auf dem Host)
 
 | Abschnitt | Was passiert | Erwartung |
 |---|---|---|
 | lab up | `docker compose up -d --build` | alle Services gesund |
 | 1 | `demo all` | wie oben |
-| 2 | vom Validator aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.8.20:8443` | keine Verbindung |
+| 1b | `demo authz` | wie oben |
+| 2 | von Validator und `service-r` aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.8.20:8443`; von Keycloak aus zusätzlich `172.31.7.20:8443` | keine Verbindung |
 | 3 | `validator-foreign-ca` | Exit-Code ungleich 0 (`PKIX`) |
-| 4 | Rotation (Use Case 4) | neue und alte Tokens werden angenommen |
+| 4 | Rotation (Use Case 4) | neue und alte Tokens werden angenommen; Keycloak nimmt eine Client-Assertion mit der neuen `kid` an |
 
 ---
 

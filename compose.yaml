@@ -2,10 +2,12 @@ name: wif-lab
 
 # Three separate trust / network zones:
 #   cluster-net  — the cluster and the one way out of it: the issuer's upload listener
-#   relying-net  — the issuer's public read listener and the relying party (validator)
-#   workload-net — the path workloads in the cluster use to call the validator
-# The validator never shares a network with the API server's listener, and no
-# volume is shared between the cluster side and the validator.
+#   relying-net  — the issuer's public read listener and the relying parties
+#                  (validator, keycloak, service-r)
+#   workload-net — the path workloads in the cluster use to call validator,
+#                  keycloak and service-r
+# No relying party shares a network with the API server's listener, and no
+# volume is shared between the cluster side and the relying parties.
 networks:
   cluster-net:
     driver: bridge
@@ -32,6 +34,7 @@ volumes:
   ca-trust:
   issuer-tls:
   publisher-tls:
+  keycloak-tls:
   pki-demo:
   demo-state:
 
@@ -50,6 +53,7 @@ services:
       - ca-trust:/pki/trust
       - issuer-tls:/pki/issuer
       - publisher-tls:/pki/publisher
+      - keycloak-tls:/pki/keycloak
       - pki-demo:/pki/demo
       - ./tools:/work:ro
 
@@ -210,7 +214,133 @@ services:
       - negative
     restart: "no"
 
-  # Verification harness: docker compose run --rm demo [all|pre-rotation|post-rotation]
+  # Authorization server of the domain that owns R, S and T. Production start mode,
+  # HTTPS only, but single node with the embedded file database (lab only).
+  # Accepts the cluster's ServiceAccount tokens as client assertions (Kubernetes
+  # identity provider `lab-cluster`, keys from issuer-web) and issues access
+  # tokens whose scopes are the realm's client-scope assignments.
+  # Only on relying-net: workloads reach it through keycloak-gateway, which exposes
+  # nothing but the domain realm's public endpoints. Admin console on the host only.
+  keycloak:
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.2}
+    command: ["start", "--import-realm"]
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-lab-not-a-secret-change-me}
+      - KC_HOSTNAME=https://keycloak:8443
+      - KC_HOSTNAME_ADMIN=https://localhost:${KEYCLOAK_HOST_PORT:-18443}
+      - KC_DB=dev-file
+      - KC_HTTP_ENABLED=false
+      - KC_HTTPS_CERTIFICATE_FILE=/tls/tls.crt
+      - KC_HTTPS_CERTIFICATE_KEY_FILE=/tls/tls.key
+      - KC_TRUSTSTORE_PATHS=/trust/ca.crt
+      - KC_CACHE=local
+      - KC_HEALTH_ENABLED=true
+      - KC_HTTP_MANAGEMENT_SCHEME=http
+      - KC_FEATURES_DISABLED=identity-brokering-api,twitter-broker
+      - KC_SPI_STICKY_SESSION_ENCODER__INFINISPAN__SHOULD_ATTACH_ROUTE=false
+      - JAVA_OPTS_KC_HEAP=-XX:MaxRAMPercentage=70
+    volumes:
+      - keycloak-tls:/tls:ro
+      - ca-trust:/trust:ro
+      - ./keycloak/realm-domain-rst.json:/opt/keycloak/data/import/realm-domain-rst.json:ro
+    networks:
+      relying-net:
+        ipv4_address: 172.31.8.30
+        aliases:
+          - keycloak
+    # No published port: Docker makes a published container port reachable from
+    # the other bridge networks too, which would expose the admin API to workloads.
+    mem_limit: 1g
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+      issuer-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  # The workloads' only way to Keycloak: forwards /realms/domain-rst/ (discovery,
+  # token, certs) and answers 404 for everything else (admin API, master realm).
+  # Presents Keycloak's certificate, so pods use the same issuer URL as R.
+  keycloak-gateway:
+    image: ${NGINX_IMAGE:-nginx:1.29-alpine}
+    volumes:
+      - keycloak-tls:/tls:ro
+      - ca-trust:/trust:ro
+      - ./tools/nginx-keycloak-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      relying-net:
+        ipv4_address: 172.31.8.31
+      workload-net:
+        ipv4_address: 172.31.9.30
+    mem_limit: 64m
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # Admin console from the host, only on demand:
+  #   docker compose --profile admin up -d keycloak-admin   ->  https://localhost:18443/admin/
+  #   docker compose stop keycloak-admin
+  # While it runs, its published port is reachable from the workload network too.
+  keycloak-admin:
+    image: ${NGINX_IMAGE:-nginx:1.29-alpine}
+    volumes:
+      - keycloak-tls:/tls:ro
+      - ca-trust:/trust:ro
+      - ./tools/nginx-keycloak-admin.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      relying-net:
+        ipv4_address: 172.31.8.32
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18443}:8443"
+    mem_limit: 64m
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    profiles:
+      - admin
+
+  # Resource server R of the domain: a plain Spring Security resource server.
+  # Trusts only access tokens of the domain realm addressed to service-r alone
+  # and maps their scopes to authorities; it knows no workload names.
+  service-r:
+    build:
+      context: ./service-r
+    image: wif-lab/service-r
+    environment:
+      - KC_REALM_ISSUER=${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}
+      - SERVICE_R_AUDIENCE=${SERVICE_R_AUDIENCE:-service-r}
+      - SERVICE_R_TRUST_CA=/trust/ca.crt
+    volumes:
+      - ca-trust:/trust:ro
+    networks:
+      relying-net:
+        ipv4_address: 172.31.8.40
+      workload-net:
+        ipv4_address: 172.31.9.40
+    ports:
+      - "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8080"
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  # Verification harness:
+  #   docker compose run --rm demo [all|authz|pre-rotation|post-rotation]
   demo:
     build:
       context: ./tools
@@ -218,6 +348,7 @@ services:
     environment:
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
       - VALIDATOR_URL=http://validator:8080
+      - KC_REALM_ISSUER=${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}
     volumes:
       - kubeconfig:/kube:ro
       - ca-trust:/trust:ro
@@ -229,6 +360,10 @@ services:
       - relying-net
     depends_on:
       validator:
+        condition: service_healthy
+      service-r:
+        condition: service_healthy
+      keycloak-gateway:
         condition: service_healthy
     profiles:
       - demo

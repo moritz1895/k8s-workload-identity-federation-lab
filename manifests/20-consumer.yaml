@@ -23,27 +23,53 @@ spec:
     spec:
       serviceAccountName: consumer
       automountServiceAccountToken: false
-      # The validator lives outside the cluster, reachable on workload-net at a
-      # fixed IP. CoreDNS knows nothing about it, so we pin the name here.
+      # Validator, keycloak and service-r live outside the cluster, reachable on
+      # workload-net at fixed IPs. CoreDNS knows nothing about them, so we pin the
+      # names here.
       hostAliases:
         - ip: "172.31.9.10"
           hostnames:
             - validator.wif.local
+        - ip: "172.31.9.30"
+          hostnames:
+            - keycloak
+        - ip: "172.31.9.40"
+          hostnames:
+            - service-r.wif.local
       containers:
         - name: consumer
           image: curlimages/curl:8.11.1
           command: ["sleep", "infinity"]
           volumeMounts:
-            - name: sa-token
+            - name: tokens
               mountPath: /var/run/secrets/tokens
               readOnly: true
+            - name: internal-ca
+              mountPath: /etc/internal-ca
+              readOnly: true
+            - name: authz-client
+              mountPath: /opt/authz
+              readOnly: true
       volumes:
-        - name: sa-token
+        - name: tokens
           projected:
             sources:
+              # Each token is bound to exactly one recipient through its `aud` claim.
               - serviceAccountToken:
-                  # audience is bound into the token's `aud` claim; the validator
-                  # rejects anything that is not exactly this value.
+                  # the validator rejects anything that is not exactly this value
                   audience: wif-demo-validator
                   expirationSeconds: 600
                   path: sa-token
+              - serviceAccountToken:
+                  # the domain realm's issuer URL; Keycloak accepts the token only
+                  # as a client assertion for this realm
+                  audience: https://keycloak:8443/realms/domain-rst
+                  expirationSeconds: 600
+                  path: kc-token
+        - name: internal-ca
+          configMap:
+            name: internal-ca
+        - name: authz-client
+          configMap:
+            name: authz-client
+            defaultMode: 0555

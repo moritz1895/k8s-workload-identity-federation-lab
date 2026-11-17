@@ -3,6 +3,8 @@
 *.log
 validator/target/
 validator/.mvn/
+service-r/target/
+service-r/.mvn/
 *.class
 .DS_Store
 .idea/

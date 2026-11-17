@@ -63,7 +63,7 @@ wif:
 | `SERVER_PORT` / `server.port` | – | – | `8080` | HTTP-Port des Dienstes (`application.yaml:7`). |
 
 Im Compose-Stack werden `WIF_ISSUER`, `WIF_AUDIENCE`, `WIF_ISSUER_CA` gesetzt
-(`compose.yaml:174`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/trust/ca.crt`)
+(`compose.yaml`, Dienst `validator`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/trust/ca.crt`)
 direkt (`entrypoint.sh:4`).
 
 Feste Werte im Code (keine Konfiguration):

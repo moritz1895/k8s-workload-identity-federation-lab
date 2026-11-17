@@ -1,7 +1,7 @@
 # ADR 0004: Keycloak als Autorisierungsserver pro Fachbereich
 
 **Datum:** 2026-11-17
-**Status:** Vorgeschlagen (ergänzt [ADR 0001](0001-offline-jwks-statt-tokenreview.md) bis
+**Status:** Angenommen (ergänzt [ADR 0001](0001-offline-jwks-statt-tokenreview.md) bis
 [ADR 0003](0003-getrennte-vertrauensbereiche-interne-pki.md))
 
 ## Für wen ist das / was lernst du hier
@@ -36,6 +36,11 @@ würde diese Verantwortung an eine Stelle ziehen, die die Dienste nicht kennt.
   Scopes im Code auf Endpunkte ab und kennt keine Workloads.
 - **Ressourcendienste sind Standard-Spring-Resource-Server**, die nur Issuer-URL, Audienz
   und Scope-Namen kennen.
+- **Eine Audienz pro Access-Token.** Eine Workload holt je Ressourcendienst ein eigenes
+  Token; ein Dienst lehnt Tokens mit weiteren Audienzen ab, damit kein anderer Dienst ein
+  Token bei ihm wiederverwenden kann.
+- **Workloads erreichen nur die Realm-Endpunkte**, nicht Admin-API oder Master-Realm (im Lab
+  über ein Gateway vor Keycloak).
 - **Realm als Code.** Im Lab per JSON-Import; im Unternehmen per keycloak-config-cli oder
   Terraform über Pull Requests mit 4-Augen-Review, Keycloak-Admin-Events als Audit.
 
@@ -58,10 +63,13 @@ würde diese Verantwortung an eine Stelle ziehen, die die Dienste nicht kennt.
 - **Kein Replay-Schutz** für ServiceAccount-Tokens als Client-Assertion; begrenzt nur durch
   die Laufzeit von höchstens zehn Minuten und die Audienz-Bindung an den Realm.
 - **Entzug wirkt verzögert** um die Restlaufzeit des Access-Tokens.
+- **Cluster-RBAC wird Teil der Autorisierungsgrenze.** Wer Tokens für einen ServiceAccount
+  anfordern oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes.
+- **Mehr Token-Anfragen**, weil jede Workload je Zieldienst ein eigenes Access-Token hält.
 - **Keycloak hat keinen Freigabe-Workflow** für Admin-Änderungen; das 4-Augen-Prinzip hängt
   am Git-Prozess und an eingeschränktem UI-Schreibzugriff.
-- **Speicherbedarf im Lab:** ein Keycloak im Dev-Modus (rund 0,5–0,75 GB) und ein weiterer
-  JVM-Dienst.
+- **Speicherbedarf im Lab:** ein Keycloak (gemessen rund 630 MiB) und ein weiterer
+  JVM-Dienst (`service-r`, rund 160 MiB).
 
 ## Alternativen
 

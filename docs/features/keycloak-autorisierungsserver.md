@@ -1,6 +1,6 @@
 # Feature-Spezifikation: Keycloak als Autorisierungsserver pro Fachbereich
 
-**Status:** Entwurf, vor der Umsetzung
+**Status:** umgesetzt
 **Bezug:** Issue #3 (Mapping von Token-Claims auf Spring-Security-Authorities),
 [ADR 0004](../adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md)
 
@@ -30,8 +30,9 @@ Fehlerfälle automatisch.
 
 ## 2. Abgrenzung (nicht Teil dieses Features)
 
-- **Kein Produktivbetrieb von Keycloak.** Keycloak läuft im Dev-Modus mit eingebetteter
-  H2-Datenbank, ohne Cluster/HA, ohne externe Datenbank, ohne Tuning. Die Konfiguration ist
+- **Kein Produktivbetrieb von Keycloak.** Keycloak läuft im `start`-Modus, aber als einzelner
+  Knoten mit eingebetteter Datei-Datenbank (`KC_DB=dev-file`), ohne Cluster/HA, ohne externe
+  Datenbank, ohne Tuning. Die Konfiguration ist
   ausdrücklich keine Vorlage für den Betrieb.
 - **Nur ein Fachbereich.** Im Lab gibt es genau einen Realm (`domain-rst`) und einen
   Ressourcendienst (R). S, T und der fremde Fachbereich (O, P, Q) existieren nur als
@@ -112,7 +113,8 @@ Der Pod bekommt über ein `projected`-Volume ein zweites ServiceAccount-Token un
 
 ### Schritt 2 – Token-Anfrage an Keycloak
 
-Die Workload ruft den Token-Endpunkt des Realms auf:
+Die Workload ruft den Token-Endpunkt des Realms auf. Der Name `keycloak` zeigt im Pod auf
+`keycloak-gateway`, das nur `/realms/domain-rst/` an Keycloak weiterleitet:
 
 ```
 POST https://keycloak:8443/realms/domain-rst/protocol/openid-connect/token
@@ -127,12 +129,13 @@ Keycloak (föderierte Client-Authentisierung, voll unterstützt ab 26.6):
 1. liest `iss` des ServiceAccount-Tokens und findet den Kubernetes-Identity-Provider
    `lab-cluster` mit Issuer `https://issuer-web`;
 2. lädt über `https://issuer-web/.well-known/openid-configuration` die `jwks_uri` und die
-   Schlüssel (TLS mit Zertifikat der Lab-CA; Keycloak vertraut der Lab-CA über seinen
-   Truststore) und hält sie im Cache;
+   Schlüssel (TLS mit Zertifikat der Lab-CA; `KC_TRUSTSTORE_PATHS` ergänzt Keycloaks
+   Default-Truststore um die Lab-CA) und hält sie im Cache;
 3. prüft Signatur, `exp`, `nbf` und dass `aud` die Realm-Issuer-URL ist;
 4. sucht den Client, der an `lab-cluster` gebunden ist und als föderiertes Subject genau
    den `sub` des Tokens trägt;
-5. lehnt ab, wenn einer dieser Schritte scheitert (`401 invalid_client`).
+5. lehnt ab, wenn einer dieser Schritte scheitert: `400 invalid_client` bei falscher
+   Audienz, sonst `401 invalid_client`.
 
 Ein Client-Secret gibt es nicht. Die Client-ID (`workload-a`) ist eine lokale Bezeichnung im
 Realm; die Verbindung zur Workload entsteht ausschließlich über Identity-Provider + `sub`.
@@ -144,14 +147,17 @@ Keycloak stellt ein Access-Token aus:
 | Claim | Wert |
 |---|---|
 | `iss` | `https://keycloak:8443/realms/domain-rst` |
-| `aud` | `service-r` (aus dem Audience-Mapper der angefragten `r:*`-Scopes) |
-| `scope` | die angefragten Scopes; ein dem Client nicht zugeordneter Scope führt zur Ablehnung (`invalid_scope`) |
-| `azp` / `client_id` | `workload-a` |
-| `exp` | Ausstellungszeit + 300 s (Realm-Einstellung `accessTokenLifespan`) |
+| `aud` | `service-r` (aus dem Audience-Mapper der angefragten `r:*`-Scopes; als String) |
+| `scope` | die angefragten Scopes in nicht garantierter Reihenfolge; ein dem Client nicht zugeordneter Scope führt zur Ablehnung (`invalid_scope`) |
+| `typ` | `Bearer` |
+| `azp` | `workload-a` |
+| `sub` | UUID des Service-Account-Benutzers des Clients |
+| `exp` | `iat` + 300 s (Realm-Einstellung `accessTokenLifespan`) |
 
 Die Client-Scope-Zuordnung **ist** die Autorisierungsregel: „`workload-a` darf
 `r:orders:read` und `r:orders:write` bekommen“. Scopes sind dem Client als **optionale**
-Client-Scopes zugeordnet; der Client fordert pro Zielaudienz nur, was er braucht. Der Realm
+Client-Scopes zugeordnet; der Client fordert pro Ressourcendienst ein eigenes Token mit nur
+den Scopes dieses Dienstes an (eine Audienz pro Token, siehe AK14). Der Realm
 hat keine Standard-Scopes (kein `profile`, `email`, `roles`), der Client hat
 `fullScopeAllowed: false`.
 
@@ -159,11 +165,15 @@ hat keine Standard-Scopes (kein `profile`, `email`, `roles`), der Client hat
 
 Die Workload fragt nicht pro Aufruf ein neues Token an. Sie hält das Access-Token im
 Speicher und erneuert es, sobald die Restlaufzeit unter 60 s fällt. Für die Erneuerung
-liest sie `kc-token` jedes Mal neu (das kubelet tauscht die Datei rechtzeitig aus).
+liest sie `kc-token` jedes Mal neu. Das kubelet tauscht die Datei erst nach rund acht
+Minuten aus; bis dahin legt die Workload dasselbe ServiceAccount-Token erneut vor, was
+Keycloak für Kubernetes-Tokens akzeptiert.
 
 Im Lab übernimmt das ein Shell-Skript `access-token.sh` im Pod (ConfigMap), das das Token
-samt Ablaufzeit unter `/tmp` ablegt und bei Bedarf erneuert; es protokolliert jede neue
-Token-Anfrage. In einer Spring-Anwendung übernimmt das ein `OAuth2AuthorizedClientManager`
+samt Ablaufzeit unter `/tmp` ablegt (`umask 077`, atomar geschrieben, Schlüssel = SHA-256
+der sortierten Scope-Liste) und bei Bedarf erneuert; es protokolliert jede neue
+Token-Anfrage. curl liest die Client-Assertion direkt aus der Datei
+(`client_assertion@<datei>`), sodass das Token in keiner Argumentliste steht. In einer Spring-Anwendung übernimmt das ein `OAuth2AuthorizedClientManager`
 mit `client_credentials` und einer Client-Assertion aus der Token-Datei.
 
 ### Schritt 5 – Prüfung in Dienst R
@@ -171,16 +181,19 @@ mit `client_credentials` und einer Client-Assertion aus der Token-Datei.
 `service-r` ist ein Standard-Spring-Boot-4-Dienst mit Spring Security OAuth2 Resource
 Server – keine eigene Prüfkette:
 
-- **Issuer:** `spring.security.oauth2.resourceserver.jwt.issuer-uri` = Realm-Issuer. Spring
-  macht beim ersten Bedarf Discovery und cacht das JWKS (Standard-Cache von
-  `NimbusJwtDecoder`).
+- **Issuer:** `service-r.issuer` = Realm-Issuer. `NimbusJwtDecoder.withIssuerLocation`,
+  eingepackt in `SupplierJwtDecoder`, macht die Discovery beim ersten Token (bei Fehlschlag
+  erneut mit dem nächsten) und cacht das JWKS. R startet damit unabhängig von Keycloak.
 - **TLS:** R vertraut für Keycloak nur der Lab-CA (gleiches Prinzip wie der `validator`
   gegenüber `issuer-web`).
-- **Audienz:** ein zusätzlicher Validator verlangt `service-r` in `aud`
-  (`spring.security.oauth2.resourceserver.jwt.audiences`).
+- **Audienz:** ein zusätzlicher Validator verlangt, dass `aud` genau `["service-r"]` ist
+  (`service-r.audience`). Ein Token mit mehreren Audienzen wird abgelehnt, damit ein anderer
+  Dienst ein für ihn mit ausgestelltes Token nicht bei R wiederverwenden kann.
+- **Token-Typ und Client:** `typ` muss `Bearer` sein, `azp` vorhanden.
 - **Algorithmus:** nur `RS256`.
 - **Authorities:** `JwtAuthenticationConverter` mit `JwtGrantedAuthoritiesConverter` bildet
-  jeden Eintrag aus `scope` auf `SCOPE_<scope>` ab, z. B. `SCOPE_r:orders:read`.
+  jeden Eintrag aus `scope` auf `SCOPE_<scope>` ab, z. B. `SCOPE_r:orders:read`. Principal
+  ist `azp`.
 - **Endpunkte** (`SecurityFilterChain`, `authorizeHttpRequests`):
 
   | Endpunkt | verlangte Authority |
@@ -189,12 +202,12 @@ Server – keine eigene Prüfkette:
   | `POST /orders` | `SCOPE_r:orders:write` |
   | `DELETE /orders/{id}` | `SCOPE_r:orders:admin` |
   | `GET /healthz` | keine |
-  | alles andere | abgelehnt (`denyAll`) |
+  | alles andere (auch `GET /orders/`) | abgelehnt (`denyAll`) |
 
 - **Antworten:** ohne oder mit ungültigem Token `401` mit `WWW-Authenticate: Bearer
   error="invalid_token"`; gültiges Token ohne passenden Scope `403` mit
-  `error="insufficient_scope"`. Bei Erfolg liefert R ein JSON mit `client_id`, `scope` und
-  dem aufgerufenen Endpunkt (Daten sind Attrappen, kein Speicher).
+  `error="insufficient_scope"`. Bei Erfolg liefert R ein JSON mit `clientId` (aus `azp`),
+  `scopes` und dem aufgerufenen Endpunkt (Daten sind Attrappen, kein Speicher).
 
 ### Die Aufteilung der Regeln
 
@@ -218,8 +231,8 @@ bleibt unverändert.
 Begründung: Der `validator` demonstriert die direkte Föderation ohne Autorisierungsserver
 (ADR 0001–0003), und alle bestehenden Prüfungen hängen an ihm. Ein Umbau zum
 Resource-Server würde zwei Vertrauensmodelle in einem Dienst mischen (eigene
-Nimbus-Kette für SA-Tokens, Spring-Resource-Server für Keycloak-Tokens). Der neue Dienst
-besteht dagegen nur aus Standard-Spring-Konfiguration und zwei bis drei Klassen; genau das
+Nimbus-Kette für SA-Tokens, Spring-Resource-Server für Keycloak-Tokens). Der eigene Dienst
+besteht dagegen nur aus Standard-Spring-Konfiguration und wenigen kleinen Klassen; genau das
 soll das Lab als Vorlage für Issue #3 zeigen. Preis: ein zweiter JVM-Dienst
 (Speicherbedarf siehe Abschnitt 7).
 
@@ -231,34 +244,50 @@ Für `service-r` gelten dieselben projektlokalen Abweichungen wie für den `vali
 | Dienst | Netz | Adresse | Zweck |
 |---|---|---|---|
 | `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer-web`; R liest JWKS von Keycloak |
-| `keycloak` | `workload-net` | 172.31.9.30 | Pods holen Tokens |
+| `keycloak-gateway` | `relying-net` | 172.31.8.31 | Weiterleitung zu Keycloak |
+| `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (nur `/realms/domain-rst/`) |
+| `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole vom Host, nur Profil `admin` |
 | `service-r` | `relying-net` | 172.31.8.40 | liest Discovery/JWKS von Keycloak |
 | `service-r` | `workload-net` | 172.31.9.40 | Pods rufen R auf |
 
-Pods erreichen `keycloak` und `service-r.wif.local` über `hostAliases`. Keycloak sitzt nicht
-in `cluster-net` und erreicht den API-Server nicht. Der Issuer-Hostname ist fest
-(`KC_HOSTNAME=https://keycloak:8443`), damit Pods und R denselben `iss` sehen.
+Keycloak hängt nur in `relying-net` und veröffentlicht keinen Host-Port: Docker macht einen
+veröffentlichten Port auch aus den anderen Bridge-Netzen erreichbar (im Lab gemessen), das
+hätte den Workloads die Admin-API geöffnet. Pods lösen `keycloak` per `hostAliases` auf das
+Gateway auf; es zeigt das Keycloak-Zertifikat, leitet nur `GET`/`POST` unter
+`/realms/domain-rst/` weiter (normalisierter Pfad, kein Ausbruch per `../`) und antwortet
+sonst `404`. Die Admin-Konsole läuft über den Proxy `keycloak-admin`, der nur bei Bedarf
+gestartet wird (`docker compose --profile admin up -d keycloak-admin`); solange er läuft, ist
+auch sein Port aus `workload-net` erreichbar. Keycloak sitzt nicht in `cluster-net` und
+erreicht den API-Server nicht. Der Issuer-Hostname ist fest
+(`KC_HOSTNAME=https://keycloak:8443`), damit Pods und R denselben `iss` sehen. Details:
+[../technical/autorisierungsserver.md](../technical/autorisierungsserver.md#erreichbarkeit-gateway-und-admin-zugang).
 
 ### TLS
 
-`pki-init` stellt zusätzlich ein Serverzertifikat `CN=keycloak`, SAN `DNS:keycloak` aus
-(Volume `keycloak-tls`). Keycloak spricht nur HTTPS (`KC_HTTP_ENABLED=false`). Keycloak
-vertraut `issuer-web` über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`. `bootstrap` legt die
-ConfigMap `internal-ca` zusätzlich im Namespace `wif-demo` an, damit die Pods Keycloak und R
-über TLS prüfen können.
+`pki-init` stellt zusätzlich ein Serverzertifikat `CN=keycloak`, SAN `DNS:keycloak`,
+`DNS:localhost`, `IP:127.0.0.1` aus (Volume `keycloak-tls`, Schlüssel gehört uid 1000);
+Keycloak, `keycloak-gateway` und `keycloak-admin` zeigen es. Keycloak spricht nur HTTPS
+(`KC_HTTP_ENABLED=false`) und vertraut `issuer-web` über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
+(zusätzlich zu seinem Default-Truststore). `bootstrap` legt die ConfigMap `internal-ca`
+zusätzlich im Namespace `wif-demo` an, damit die Pods Keycloak über TLS prüfen können.
+Workload → R läuft im Lab über HTTP (siehe Abschnitt 8).
 
 ### Realm als Code
 
 Der Realm liegt als `keycloak/realm-domain-rst.json` im Repo und wird beim Start mit
-`start-dev --import-realm` geladen. Inhalt:
+`start --import-realm` angelegt, wenn er noch nicht existiert (`IGNORE_EXISTING`; der Import
+legt den Realm nur an und gleicht ihn später nicht ab). Die Keycloak-Datenbank liegt im
+Container; ein neu erstellter Container hat neue Realm-Schlüssel, gecachte Access-Tokens
+werden dann ungültig. Inhalt:
 
 - Realm `domain-rst`, `accessTokenLifespan: 300`, keine Standard-Client-Scopes.
-- Identity-Provider `lab-cluster`, Typ Kubernetes, Issuer `https://issuer-web`.
+- Identity-Provider `lab-cluster`, `providerId: kubernetes`, `config.issuer: https://issuer-web`.
 - Client-Scopes `r:orders:read`, `r:orders:write`, `r:orders:admin`, `s:inventory:read`;
   jeder `r:*`-Scope mit Audience-Mapper `service-r`, `s:inventory:read` mit `service-s`;
   `include.in.token.scope: true`.
 - Clients (alle `serviceAccountsEnabled: true`, `standardFlowEnabled: false`,
-  `fullScopeAllowed: false`, Client-Authentisierung „föderiert“, gebunden an `lab-cluster`):
+  `fullScopeAllowed: false`, `clientAuthenticatorType: federated-jwt` mit den Attributen
+  `jwt.credential.issuer: lab-cluster` und `jwt.credential.sub: <föderiertes Subject>`):
 
   | Client | föderiertes Subject | optionale Client-Scopes |
   |---|---|---|
@@ -269,34 +298,41 @@ Der Realm liegt als `keycloak/realm-domain-rst.json` im Repo und wird beim Start
 
 ## 7. Konfiguration
 
-Neue Einträge in `compose.yaml`, `.env.example` und der Konfigurationstabelle der README:
+Einträge in `compose.yaml`, `.env.example` und der Konfigurationstabelle der README:
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
-| `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image (zum Zeitpunkt der Spezifikation aktuellste Version). |
+| `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image. |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Lab-Admin der Admin-Konsole. Kein Geheimnis, nur Lab. |
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | `lab-not-a-secret-change-me` | Passwort dazu. Nur Lab. |
-| `KEYCLOAK_HOST_PORT` | `18443` | Host-Port der Admin-Konsole (HTTPS, Lab-CA). |
-| `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer; Audienz des `kc-token` und `issuer-uri` von R. |
+| `KEYCLOAK_HOST_PORT` | `18443` | Host-Port des Admin-Proxys `keycloak-admin` (`127.0.0.1`, HTTPS, Lab-CA, nur Profil `admin`); geht auch in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
+| `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer; Audienz des `kc-token` und `service-r.issuer`. |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die R im Access-Token verlangt. |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R. |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R (`127.0.0.1`). |
 
-Feste Keycloak-Einstellungen im Compose-Service (nicht in `.env`): `start-dev
---import-realm`, `KC_HOSTNAME=https://keycloak:8443`, `KC_HTTP_ENABLED=false`,
+Feste Keycloak-Einstellungen im Compose-Service (nicht in `.env`): `start --import-realm`,
+`KC_DB=dev-file`, `KC_HOSTNAME=https://keycloak:8443`,
+`KC_HOSTNAME_ADMIN=https://localhost:${KEYCLOAK_HOST_PORT}`, `KC_HTTP_ENABLED=false`,
 `KC_HTTPS_CERTIFICATE_FILE` / `KC_HTTPS_CERTIFICATE_KEY_FILE` aus `keycloak-tls`,
-`KC_TRUSTSTORE_PATHS=/trust/ca.crt`, `KC_HEALTH_ENABLED=true`, `KC_FEATURES` laut
-Umsetzungsaufgabe U1.
+`KC_TRUSTSTORE_PATHS=/trust/ca.crt`, `KC_CACHE=local`, `KC_HEALTH_ENABLED=true`,
+`KC_HTTP_MANAGEMENT_SCHEME=http` (Health auf Port 9000), `KC_FEATURES_DISABLED` und die
+Sticky-Session-Option gegen Warnungen im Log. Der `start`-Modus ist gewählt, weil der
+Dev-Modus immer HTTP auf 8080 öffnet. Details:
+[../technical/autorisierungsserver.md](../technical/autorisierungsserver.md).
 
-Neue Konfiguration von `service-r` (`application.yaml`, per Umgebung überschreibbar):
-`spring.security.oauth2.resourceserver.jwt.issuer-uri=${KC_REALM_ISSUER}`,
-`…jwt.audiences=${SERVICE_R_AUDIENCE}`, `…jwt.jws-algorithms=RS256`, Truststore nur mit
-`/trust/ca.crt` (Spring-SSL-Bundle).
+Konfiguration von `service-r` (`application.yaml`, per Umgebung überschreibbar):
+`service-r.issuer=${KC_REALM_ISSUER}`, `service-r.audience=${SERVICE_R_AUDIENCE}`; RS256 ist
+im `JwtDecoder` fest eingestellt. `entrypoint.sh` baut aus `SERVICE_R_TRUST_CA`
+(`/trust/ca.crt`) einen PKCS12-Truststore nur mit der Lab-CA und setzt ihn als JVM-Default.
+Der Container läuft als `USER 10001`.
 
-**Speicherbedarf.** Keycloak (Quarkus auf der JVM, Dev-Modus mit H2) braucht erwartet
-500–750 MB; `mem_limit: 1g`, Heap über `JAVA_OPTS_KC_HEAP=-XX:MaxRAMPercentage=70`.
-`service-r` erwartet 150–250 MB, `mem_limit: 384m`. Die tatsächlichen Werte werden bei der
-Umsetzung mit `docker stats` gemessen und in `docs/technical/` festgehalten. Der Dev-Modus
-ist keine Produktivkonfiguration.
+`keycloak-gateway` und `keycloak-admin` sind nginx-Container (`${NGINX_IMAGE}`,
+`mem_limit: 64m`) mit `tools/nginx-keycloak-gateway.conf` bzw.
+`tools/nginx-keycloak-admin.conf`.
+
+**Speicherbedarf** (gemessen mit `docker stats`): Keycloak ~626 MiB bei `mem_limit: 1g`
+(Heap über `JAVA_OPTS_KC_HEAP=-XX:MaxRAMPercentage=70`), `service-r` ~156 MiB bei
+`mem_limit: 384m`; zum Vergleich der `validator` ~257 MiB.
 
 ## 8. Betriebsmodell im Unternehmen
 
@@ -313,8 +349,20 @@ ist keine Produktivkonfiguration.
 - **Schreibzugriff über die UI** ist für Menschen eingeschränkt (lesend für Fachbereichs-
   Admins, schreibend nur als Break-Glass mit nachträglicher Übernahme in Git).
 - **Audit:** Keycloak-Admin-Events (mit Darstellung der Änderung) dokumentieren jede
-  Änderung, auch die des Deploy-Werkzeugs; die Git-Historie dokumentiert Antrag und
-  Freigabe.
+  Änderung, auch die des Deploy-Werkzeugs, und werden an ein externes System geliefert; die
+  Git-Historie dokumentiert Antrag und Freigabe.
+- **Ein Schreiber.** keycloak-config-cli oder Terraform läuft in der CI als einziger
+  Schreiber des Realms; eine Drift-Erkennung meldet Abweichungen zwischen Git und Keycloak.
+  Im Lab legt `--import-realm` den Realm dagegen nur einmal an (`IGNORE_EXISTING`).
+- **Cluster-RBAC gehört zur Autorisierungsgrenze.** Wer Tokens für einen ServiceAccount
+  anfordern (`serviceaccounts/token`) oder Pods mit dessen `serviceAccountName` anlegen
+  darf, bekommt dessen Scopes. Diese Rechte sind entsprechend restriktiv zu vergeben.
+- **Transport zu den Diensten.** Im Lab rufen Workloads R und den Validator über HTTP auf.
+  In Produktion läuft das über TLS oder mTLS (z. B. Service Mesh); optional binden DPoP oder
+  mTLS-gebundene Tokens das Access-Token an den Client.
+- **Admin-Zugang** nur aus einem getrennten Verwaltungsnetz. Im Lab startet der Proxy
+  `keycloak-admin` nur bei Bedarf, weil ein veröffentlichter Docker-Port auch aus
+  `workload-net` erreichbar ist.
 
 ## 9. Ausweichlösung: eigener Spring-Autorisierungsserver
 
@@ -345,8 +393,8 @@ Gegeben `consumer` mit gültigem `kc-token`,
 wenn er `client_credentials` mit diesem Token als Client-Assertion und
 `scope=r:orders:read r:orders:write` anfragt,
 dann liefert Keycloak `200` und ein Access-Token mit `iss=<Realm-Issuer>`,
-`aud` enthält `service-r`, `scope` enthält genau `r:orders:read r:orders:write`,
-`client_id=workload-a`.
+`aud=service-r`, `typ=Bearer`, `scope` enthält als Menge genau `r:orders:read` und
+`r:orders:write` (Reihenfolge beliebig), `azp=workload-a`.
 
 **AK2 – nicht zugeordneter Scope wird nicht vergeben**
 Gegeben `reader`, wenn er `scope=r:orders:read r:orders:write` anfragt,
@@ -359,7 +407,8 @@ dann antwortet Keycloak `401` mit `error=invalid_client`.
 
 **AK4 – SA-Token mit falscher Audienz**
 Gegeben `consumer`, wenn er sein `sa-token` (Audienz `wif-demo-validator`) als
-Client-Assertion verwendet, dann antwortet Keycloak `401 invalid_client`.
+Client-Assertion verwendet, dann antwortet Keycloak `400 invalid_client`
+(„Invalid token audience“).
 
 **AK5 – fremder Cluster**
 Gegeben ein JWT mit `iss=https://other-cluster`, `sub=system:serviceaccount:wif-demo:consumer`,
@@ -370,7 +419,7 @@ signiert ist.
 
 **AK6 – erlaubter Aufruf**
 Gegeben ein Access-Token aus AK1, wenn `consumer` `GET /orders` und `POST /orders` bei R
-aufruft, dann antwortet R jeweils `200` und nennt `client_id=workload-a`.
+aufruft, dann antwortet R jeweils `200` und nennt `clientId=workload-a` (aus `azp`).
 
 **AK7 – fehlender Scope**
 Gegeben ein Access-Token von `reader`, wenn er `POST /orders` aufruft, dann antwortet R
@@ -395,70 +444,122 @@ genau eine Token-Anfrage an Keycloak (eine Log-Zeile „requested new access tok
 
 **AK12 – Netztrennung**
 Keycloak erreicht den API-Server weder über `172.31.7.2:6443` noch über `172.31.9.2:6443`
-und nicht den Upload-Listener `172.31.7.20:8443`.
+und den Upload-Listener weder über `172.31.7.20:8443` noch über `172.31.8.20:8443`.
 
 **AK13 – bestehendes Verhalten**
 Alle bestehenden Prüfungen von `tools/run-all-checks.sh` laufen unverändert durch.
+
+**AK14 – eine Audienz pro Token**
+Gegeben ein Access-Token von `consumer` für `scope=r:orders:read s:inventory:read`
+(`aud` = `service-r` und `service-s`), wenn er `GET /orders` aufruft, dann antwortet R `401`.
+R akzeptiert nur Tokens mit `aud` genau `["service-r"]`, `typ=Bearer` und vorhandenem `azp`.
+
+**AK15 – Admin-Oberfläche für Workloads unerreichbar**
+Gegeben der Pod `stranger`, wenn er über `https://keycloak:8443` `GET /admin/realms`,
+`GET /admin/master/console/` oder einen Password-Grant am Master-Realm versucht, dann
+antwortet das Gateway `404`. Ein Pfad `/realms/domain-rst/../master/…` erreicht den
+Master-Realm nicht. Keycloak selbst (`172.31.8.30:8443`, `:9000`) ist aus dem Pod nicht
+erreichbar; die Realm-Discovery über das Gateway liefert `200`.
 
 ## 12. Testfälle
 
 ### Unit- und Slice-Tests in `service-r` (offline, TDD)
 
 Mit einem lokal erzeugten RSA-Schlüssel und einem `JwtDecoder` gegen diesen Schlüssel
-(gleiche Validatoren wie in Produktion: Issuer, Audienz, Zeitstempel):
+(gleiche Validatoren wie in Produktion: Issuer, Audienz, Token-Typ, `azp`, Zeitstempel):
+
+`OrdersEndpointSecurityTest`:
 
 - `getOrders_givenReadScope_thenReturns200`
+- `postOrders_givenWriteScope_thenReturns200`
 - `postOrders_givenOnlyReadScope_thenReturns403`
 - `deleteOrder_givenReadAndWriteScope_thenReturns403`
+- `deleteOrder_givenAdminScope_thenReturns200`
 - `getOrders_givenWrongAudience_thenReturns401`
+- `getOrders_givenAudienceAsPlainString_thenReturns200`
+- `getOrders_givenTokenForSeveralAudiences_thenReturns401`
+- `getOrders_givenIdTokenType_thenReturns401`
+- `getOrders_givenNoClientId_thenReturns401`
+- `getOrders_givenHs256SignedWithRealmPublicKey_thenReturns401`
+- `getOrdersWithTrailingSlash_givenReadScope_thenReturns403`
 - `getOrders_givenWrongIssuer_thenReturns401`
 - `getOrders_givenExpiredToken_thenReturns401`
 - `getOrders_givenTamperedSignature_thenReturns401`
+- `getOrders_givenTokenSignedByForeignKey_thenReturns401`
 - `getOrders_givenNoToken_thenReturns401`
 - `unmappedPath_givenAllScopes_thenReturns403`
-- `convert_givenScopeClaim_thenMapsToScopeAuthorities` (Converter)
 
-### Neue Ende-zu-Ende-Prüfungen in `tools/demo.sh` (neuer Modus `authz`)
+`ScopeAuthoritiesTest`:
+
+- `convert_givenScopeClaim_thenMapsToScopeAuthorities`
+
+### Ende-zu-Ende-Prüfungen in `tools/demo.sh` (Modus `authz`)
 
 | # | Prüfung | Erwartung |
 |---|---|---|
-| 8 | Realm-Discovery von Keycloak über TLS mit Lab-CA | `issuer` = Realm-Issuer |
-| 9 | `consumer` holt Access-Token (AK1), Claims dekodieren | `aud`, `scope`, `client_id` wie erwartet |
+| 8 | Realm-Discovery von Keycloak über TLS mit Lab-CA, bis zu 60 s wiederholt (beim ersten Start meldet `/health/ready` schon `UP`, während der Realm noch `503` liefert) | `issuer` = Realm-Issuer |
+| 9 | `consumer` holt Access-Token (AK1), Claims dekodieren | `aud`, `scope` (als Menge), `azp` wie erwartet |
 | 10 | `reader` fordert Lese- und Schreib-Scope, dann nur Lese-Scope (AK2) | `400 invalid_scope`, dann nur `r:orders:read` |
 | 11 | `stranger` fordert Token (AK3) | `401 invalid_client` |
-| 12 | `sa-token` als Client-Assertion (AK4) | `401 invalid_client` |
+| 12 | `sa-token` als Client-Assertion (AK4) | `400 invalid_client` |
 | 13 | JWT fremder Cluster / fremder Schlüssel (AK5) | `401 invalid_client` |
 | 14 | `consumer` → R `GET`/`POST /orders` (AK6) | `200` |
 | 15 | `reader` → R `POST /orders`, `consumer` → `DELETE` (AK7) | `403` |
 | 16 | Token mit `aud=service-s` → R (AK8) | `401` |
+| 16b | Token für R und S zugleich → R (AK14) | `401` |
 | 17 | manipuliertes Access-Token → R (AK9) | `401` |
 | 18 | `kc-token` direkt → R (AK10) | `401` |
 | 19 | dreimal `access-token.sh` (AK11) | eine Token-Anfrage |
-| 20 | optional `DEMO_EXPIRY=1`: Access-Token nach `exp` + 60 s → R (AK9) | `401` |
+| 20 | `stranger`: Admin-API, Admin-Konsole, Master-Realm-Password-Grant, Pfad-Traversal, Keycloak direkt, Realm-Discovery über das Gateway (AK15) | `404`/`404`/`404`, bleibt im Realm, unerreichbar, `200` |
+| 21 | optional `DEMO_EXPIRY=1`: Access-Token nach `exp` + 60 s → R (AK9) | `401` |
 
-### Erweiterungen von `tools/run-all-checks.sh`
+`demo.sh` leert zu Beginn von `authz` die Token-Caches aller Pods und übergibt Tokens nie
+als Argument: Bearer-Tokens per `kubectl exec -i` auf stdin an `curl -H @-`,
+Client-Assertions per `client_assertion@-` bzw. `@<datei>`.
+
+### Abschnitte in `tools/run-all-checks.sh`
 
 - Abschnitt „1b. authorization server demo“: `docker compose run --rm demo authz`.
-- Abschnitt 2 um die Sicht von Keycloak ergänzt (AK12), mit `bash`-`/dev/tcp`, da das
-  Keycloak-Image kein `curl` enthält.
-- Abschnitt 4 (Rotation): nach `post-rotation` zusätzlich `consumer` holt erneut ein
-  Access-Token. Erwartung: Keycloak akzeptiert das mit dem neuen Schlüssel signierte
-  `kc-token`, sobald der Publisher das neue JWKS veröffentlicht hat.
+- Abschnitt 2 prüft die Netztrennung auch aus Sicht von `service-r` und Keycloak (AK12);
+  bei Keycloak mit `bash`-`/dev/tcp`, da das Image kein `curl` enthält, abgesichert durch
+  eine Positivprobe auf den Lese-Listener `172.31.8.20:443`.
+- Abschnitt 4 (Rotation): `post-rotation` prägt zusätzlich per `kubectl create token` ein
+  Token mit Realm-Audienz und neuer `kid` und legt es direkt als Client-Assertion vor.
+  Erwartung: `200`.
 
-## 13. Umsetzungsaufgaben mit Klärungsbedarf
+## 13. Geklärte Punkte und offene Umsetzungsaufgabe
 
-- **U1 – Feature-Flags und Konfigurationsfelder verifizieren.** Für Keycloak 26.8.2 klären,
-  ob föderierte Client-Authentisierung und Kubernetes-Identity-Provider ohne
-  `KC_FEATURES` aktiv sind oder Flags brauchen (in Quellen für ältere Versionen genannt:
-  `client-auth-federated`, `kubernetes-service-accounts`). Ebenso die exakten Namen im
-  Realm-JSON: Typ des Identity-Providers, `clientAuthenticatorType` (berichtet:
-  `federated-jwt`) und die Client-Attribute für Identity-Provider und föderiertes Subject.
-  Ergebnis in `docs/technical/` dokumentieren.
-- **U2 – Verhalten bei nicht zugeordnetem Scope.** Prüfen, dass Keycloak einen angefragten,
-  aber dem Client nicht zugeordneten Scope mit `invalid_scope` ablehnt (AK2) statt ihn
-  stillschweigend wegzulassen; AK2 ggf. an das tatsächliche Verhalten anpassen.
-- **U3 – JWKS-Cache von Keycloak bei Rotation.** Prüfen, ob Keycloak bei einer unbekannten
-  `kid` das JWKS neu lädt; sonst Wartezeit in der Rotationsprüfung ergänzen.
+Geklärt (gemessen im Lab mit Keycloak 26.8.2, Details in
+[../technical/autorisierungsserver.md](../technical/autorisierungsserver.md)):
+
+- **Feature-Flags und Realm-Felder.** `client-auth-federated` und
+  `kubernetes-service-accounts` sind standardmäßig aktiv; `KC_FEATURES` ist nicht nötig.
+  Identity-Provider: `providerId: kubernetes`, `config.issuer`. Client:
+  `clientAuthenticatorType: federated-jwt`, Attribute `jwt.credential.issuer` (= Alias des
+  Identity-Providers) und `jwt.credential.sub`. Keycloak lädt die Cluster-Schlüssel lazy über
+  `<issuer>/.well-known/openid-configuration` von `issuer-web`.
+- **Nicht zugeordneter Scope.** Keycloak lehnt mit `400 invalid_scope` („Invalid scopes: …“)
+  ab und lässt den Scope nicht stillschweigend weg (AK2).
+- **Weitere Fehlerantworten.** Unregistrierte Workload und gefälschte Assertions (fremder
+  Issuer; `issuer-web` mit echter `kid`, aber fremdem Schlüssel): `401 invalid_client`.
+  Falsche Audienz: `400 invalid_client` („Invalid token audience“).
+- **Wiederverwendung.** Dasselbe ServiceAccount-Token wird mehrfach als Client-Assertion
+  akzeptiert; für Kubernetes-Tokens gibt es keine Einmal-Prüfung. Darauf beruht die
+  Cache-Erneuerung, solange das kubelet dieselbe Datei hält.
+- **JWKS-Cache bei Rotation.** Bei einer unbekannten `kid` lädt Keycloak das JWKS neu; eine
+  Assertion mit dem rotierten Schlüssel wird ohne Wartezeit akzeptiert.
+- **Access-Token.** `aud` ist der String `"service-r"`, `azp` die Client-ID, `sub` die UUID
+  des Service-Account-Benutzers, `exp = iat + 300`; die Reihenfolge in `scope` ist nicht
+  garantiert.
+- **Audienz pro Token.** Ein Access-Token trägt genau eine Audienz; eine Workload, die R, S
+  und T aufruft, holt je Dienst ein eigenes Token. R lehnt Tokens mit mehreren Audienzen ab
+  (AK14), damit S ein für sich mit ausgestelltes Token nicht bei R wiederverwenden kann.
+- **Netzplatzierung von Keycloak.** Ein veröffentlichter Docker-Port ist auch aus den anderen
+  Bridge-Netzen erreichbar, unabhängig von der Host-Bindung. Keycloak veröffentlicht deshalb
+  keinen Port; Workloads erreichen nur `keycloak-gateway` (AK15).
+
+Offen:
+
 - **U4 – Spring-Client in der Workload.** Für die Beschreibung in Schritt 4 klären, wie ein
   `OAuth2AuthorizedClientManager` eine fertige Client-Assertion aus einer Datei verwendet
   (eigener Parameter-Converter für `client_credentials`).
@@ -467,13 +568,10 @@ Mit einem lokal erzeugten RSA-Schlüssel und einem `JwtDecoder` gegen diesen Sch
 
 1. **Scope-Schema:** Reicht `<dienst>:<ressource>:<aktion>`, oder braucht es einen
    Fachbereichs-Präfix, damit Scopes über Realms hinweg eindeutig bleiben?
-2. **Audienz pro Dienst oder pro Dienstgruppe:** Im Lab ein `aud` pro Dienst (`service-r`).
-   Soll eine Workload, die R, S und T nacheinander aufruft, je Dienst ein eigenes Token
-   holen (engere Bindung) oder ein Token mit mehreren Audienzen (weniger Anfragen)?
-3. **Bindung an den Cluster:** Ein Identity-Provider pro Cluster oder pro
+2. **Bindung an den Cluster:** Ein Identity-Provider pro Cluster oder pro
    Cluster-Verbund? Wer meldet einen neuen Cluster beim Fachbereich an?
-4. **Merkmale aus dem heutigen DN:** `<Anwendungskontext>` und `<Betriebsumgebung>` haben im
+3. **Merkmale aus dem heutigen DN:** `<Anwendungskontext>` und `<Betriebsumgebung>` haben im
    Token keine direkte Entsprechung. Werden sie über getrennte Realms/Cluster,
    Namespace-Konventionen oder eigene Scopes abgebildet?
-5. **Access-Token-Laufzeit:** 300 s im Lab. Welche Laufzeit akzeptieren die Fachbereiche,
+4. **Access-Token-Laufzeit:** 300 s im Lab. Welche Laufzeit akzeptieren die Fachbereiche,
    da ein entzogener Scope erst mit Ablauf des Tokens wirkt?

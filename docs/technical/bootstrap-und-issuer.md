@@ -43,6 +43,7 @@ Organisation, deren Root-Zertifikat real bereits auf allen Systemen verteilt ist
 | Root-CA | `pki-ca` (nur `pki-init`) | `ca.crt`, `ca.key` – RSA 3072, 10 Jahre, `CN=WIF Lab Internal Root CA` |
 | Vertrauensanker | `ca-trust` | Kopie von `ca.crt` |
 | Serverzertifikat `issuer-web` | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer-web`, SAN `DNS:issuer-web`, `extendedKeyUsage=serverAuth` |
+| Serverzertifikat Keycloak | `keycloak-tls` | `tls.crt` / `tls.key`, `CN=keycloak`, SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 1000:0`, `chmod 400`, weil Keycloak als uid 1000 läuft |
 | Client-Zertifikat Publisher | `publisher-tls` | `tls.crt` / `tls.key`, `CN=jwks-publisher`, `extendedKeyUsage=clientAuth` |
 | Negativtests | `pki-demo` | `wrong-cn.*` (interne CA, `CN=not-the-publisher`), `smuggled-cn.*` (interne CA, `CN=jwks-publisher` nur im Feld `O`), `foreign-ca.crt`, `foreign-publisher.*` (fremde CA, `CN=jwks-publisher`) |
 
@@ -91,7 +92,7 @@ Läuft als Einmal-Container `bootstrap` mit der Admin-Kubeconfig, nachdem `serve
 
 ### Kopf: strikte Fehlerbehandlung
 
-`tools/bootstrap.sh:9`
+`tools/bootstrap.sh:10`
 
 ```bash
 set -euo pipefail
@@ -103,7 +104,7 @@ set -euo pipefail
 
 ### Schritt 1 – kubeconfig auf den Docker-Netz-Namen umschreiben
 
-`tools/bootstrap.sh:11`
+`tools/bootstrap.sh:12`
 
 ```bash
 KCFG=/tmp/kubeconfig
@@ -124,7 +125,7 @@ an `--tls-san=k3s-server` ([trust-und-tls.md](trust-und-tls.md)).
 
 ### Schritt 2 – Namespaces anlegen
 
-`tools/bootstrap.sh:16`
+`tools/bootstrap.sh:17`
 
 ```bash
 kubectl apply -f /manifests/00-namespace.yaml
@@ -135,38 +136,47 @@ ConfigMap in `wif-publisher` liegen.
 
 ### Schritt 3 – Client-Zertifikat und CA für den Publisher
 
-`tools/bootstrap.sh:19`
+`tools/bootstrap.sh:20`
 
 ```bash
 kubectl -n wif-publisher create secret tls jwks-publisher-mtls \
     --cert=/publisher-tls/tls.crt --key=/publisher-tls/tls.key \
     --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n wif-publisher create configmap internal-ca \
-    --from-file=ca.crt=/trust/ca.crt \
-    --dry-run=client -o yaml | kubectl apply -f -
+for namespace in wif-publisher wif-demo; do
+    kubectl -n "$namespace" create configmap internal-ca \
+        --from-file=ca.crt=/trust/ca.crt \
+        --dry-run=client -o yaml | kubectl apply -f -
+done
 ```
 
 `create … --dry-run=client -o yaml | kubectl apply -f -` erzeugt das Objekt nur als YAML und
 wendet es dann an – damit ist der Schritt idempotent. Im Publisher-Pod landen Secret unter
-`/mtls` und ConfigMap unter `/trust`. In einem echten Cluster übernähme das cert-manager oder
+`/mtls` und ConfigMap unter `/trust`. In `wif-demo` brauchen die Demo-Pods die ConfigMap
+(`/etc/internal-ca`), um Keycloak per TLS zu prüfen. In einem echten Cluster übernähme das cert-manager oder
 die PKI-Anbindung der Plattform.
 
 ### Schritt 4 – Manifeste anwenden und warten
 
-`tools/bootstrap.sh:27`
+`tools/bootstrap.sh:30`
 
 ```bash
 kubectl apply -f /manifests
 kubectl -n wif-publisher rollout status deployment/jwks-publisher --timeout=180s
 kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
+kubectl -n wif-demo rollout status deployment/reader --timeout=180s
+kubectl -n wif-demo rollout status deployment/stranger --timeout=180s
 ```
 
 - `00-namespace.yaml` – die beiden Namespaces (erneut, idempotent).
 - `10-publisher.yaml` – ServiceAccount, ClusterRoleBinding, Skript-ConfigMap und Deployment
   des Publishers (siehe unten).
-- `20-consumer.yaml` – ServiceAccount `consumer` und Deployment `consumer` mit projiziertem
-  Token (`audience: wif-demo-validator`, `expirationSeconds: 600`) und
-  `automountServiceAccountToken: false`, damit der Pod nur dieses eine Token besitzt.
+- `20-consumer.yaml` – ServiceAccount `consumer` und Deployment `consumer` mit zwei
+  projizierten Tokens (`sa-token` mit `audience: wif-demo-validator`, `kc-token` mit dem
+  Realm-Issuer als Audienz, je `expirationSeconds: 600`) und
+  `automountServiceAccountToken: false`, damit der Pod nur diese Tokens besitzt.
+- `30-authz-workloads.yaml` – ConfigMap `authz-client` (`access-token.sh`) und die Pods
+  `reader` und `stranger` der Autorisierungs-Demo, siehe
+  [autorisierungsserver.md](autorisierungsserver.md#workload-seite).
 
 `rollout status` **blockiert**, bis die Deployments einen laufenden Pod haben (oder nach
 180 s aufgeben).
@@ -312,7 +322,7 @@ Publisher-Zertifikat besitzt, kann jedes JWKS hochladen (siehe ADR 0003, Komprom
 
 ### Healthcheck
 
-`compose.yaml:160`
+`compose.yaml`, Dienst `issuer-web`:
 
 ```yaml
 test: ["CMD", "test", "-s", "/oidc/openid/v1/jwks"]

@@ -28,16 +28,22 @@ Systems, weil es dessen Signaturschlüssel kennt.
 
 | Container | Was es ist | Rolle im PoC |
 |---|---|---|
-| `pki-init` | Ein Wegwerf-Container mit `openssl` | Läuft **einmal**: spielt die interne PKI, erzeugt eine Lab-CA und die Zertifikate für `issuer-web` und den Publisher. |
+| `pki-init` | Ein Wegwerf-Container mit `openssl` | Läuft **einmal**: spielt die interne PKI, erzeugt eine Lab-CA und die Zertifikate für `issuer-web`, Keycloak und den Publisher. |
 | `sa-keys` | Dasselbe Wegwerf-Image | Erzeugt den Schlüssel, mit dem der Cluster Tokens signiert; rotiert ihn auf Zuruf. |
 | `server` | k3s — ein vollständiges, aber leichtgewichtiges Kubernetes, das komplett in **einem** Container läuft | Der Cluster. Stellt die signierten Tokens aus. |
 | `bootstrap` | Ein Wegwerf-Container mit `kubectl` | Läuft **einmal** beim Start: richtet den Cluster ein (Namespaces, Publisher-Zertifikat, Manifeste). Danach beendet er sich. |
 | `issuer-web` | Ein nginx-Webserver | Liefert das OIDC-Discovery-Dokument und die öffentlichen Schlüssel (JWKS) unter `https://issuer-web` aus. Diese URL steht im `iss`-Feld jedes Tokens. Nimmt Uploads nur vom Publisher an. |
 | `validator` | Ein kleiner Spring-Boot-Dienst (Java) | Der externe Dienst, der die Tokens prüft. **Spricht nur mit `issuer-web`, nie mit dem Cluster.** |
+| `keycloak` | Keycloak (Autorisierungsserver) | Tauscht ServiceAccount-Tokens gegen Access-Tokens mit Scopes; Teil der Autorisierungs-Demo (`demo authz`). |
+| `keycloak-gateway` | Ein nginx-Webserver | Einziger Weg der Pods zu Keycloak; lässt nur die Endpunkte des Realms `domain-rst` durch. |
+| `service-r` | Ein Spring-Boot-Resource-Server (Java) | Dienst R: prüft Access-Tokens von Keycloak und schützt seine Endpunkte nach Scope. |
 | `demo` | Nochmal das Wegwerf-Image mit `kubectl` | Wird nur auf Zuruf gestartet und fährt die Ende-zu-Ende-Prüfung. |
 
-Dazu im Cluster zwei **Pods**: `consumer` — das ist unsere Workload — und `jwks-publisher`,
-der die öffentlichen Schlüssel des Clusters zu `issuer-web` bringt.
+Dazu im Cluster die **Pods** `consumer` — das ist unsere Workload — und `jwks-publisher`,
+der die öffentlichen Schlüssel des Clusters zu `issuer-web` bringt. Für die
+Autorisierungs-Demo kommen `reader` und `stranger` dazu. Diese Tour folgt dem
+Validator-Pfad; den Pfad über Keycloak zu `service-r` beschreibt
+[features/keycloak-autorisierungsserver.md](features/keycloak-autorisierungsserver.md).
 
 ```
  cluster-net (172.31.7.0/24)
@@ -192,7 +198,7 @@ Config anfassen; unsere Config braucht die Änderung nicht.
 validator: waiting for the internal CA certificate at /trust/ca.crt ...
 validator: internal CA certificate present after 0s, starting
 
- :: Spring Boot ::                (v4.1.1)
+ :: Spring Boot ::                (v4.1.2)
 
 INFO  m.r.w.JwksTrustConfig : OIDC discovery for https://issuer-web resolved JWKS at https://issuer-web/openid/v1/jwks
 INFO  m.r.w.WifPocApplication : Started WifPocApplication in 1.721 seconds
@@ -388,14 +394,15 @@ PASS: phase 'all': all checks passed
 Auf dem Host (braucht nur `docker compose`) fährt `tools/run-all-checks.sh` den Stack hoch und
 prüft nacheinander:
 
-1. die Demo von oben,
-2. die **Netztrennung**: Der Validator erreicht weder den API-Server (`172.31.9.2:6443`,
-   `172.31.7.2:6443`) noch den Upload-Listener über sein Netz (`172.31.8.20:8443`),
+1. die Demo von oben und die Autorisierungs-Demo (`demo authz`),
+2. die **Netztrennung**: Validator, `service-r` und Keycloak erreichen weder den API-Server
+   (`172.31.9.2:6443`, `172.31.7.2:6443`) noch den Upload-Listener (`172.31.8.20:8443`,
+   bei Keycloak zusätzlich `172.31.7.20:8443`),
 3. dass ein Validator mit **fremder CA** (`validator-foreign-ca`) nicht startet,
 4. eine **Schlüsselrotation**: Token vor der Rotation prägen (`demo pre-rotation`),
    `sa-keys rotate`, API-Server neu starten, warten, bis der Publisher die neue `kid`
-   veröffentlicht hat, dann prüfen, dass neue und alte Tokens angenommen werden
-   (`demo post-rotation`).
+   veröffentlicht hat, dann prüfen, dass neue und alte Tokens angenommen werden und
+   Keycloak eine Client-Assertion mit der neuen `kid` annimmt (`demo post-rotation`).
 
 ```
 PASS: all lab checks passed

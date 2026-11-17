@@ -11,14 +11,31 @@ Ein Publisher im Cluster lädt Discovery-Dokument und JWKS per **mTLS** zum Issu
 hoch, der Validator vertraut nur dem Root-Zertifikat einer **internen PKI** (im Lab eine
 Lab-CA). Begründung: [ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
 
+Darauf aufbauend trennt das Lab **Authentisierung von Autorisierung**: Ein Keycloak als
+Autorisierungsserver des Fachbereichs nimmt das ServiceAccount-Token als Client-Nachweis an
+und stellt Access-Tokens mit Scopes aus; der Ressourcendienst `service-r` schützt seine
+Endpunkte nach Scope. Begründung:
+[ADR 0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md), Ablauf:
+[Feature-Spezifikation](docs/features/keycloak-autorisierungsserver.md).
+
 Alles läuft in Containern. Auf dem Host wird **nur Docker + Compose v2** gebraucht.
 
 ```bash
 cp .env.example .env
-docker compose up -d --build   # PKI, k3s, Publisher, Issuer-Endpoint, Validator
-docker compose run --rm demo          # Ende-zu-Ende-Verifikation
-tools/run-all-checks.sh               # alles: Demo, Netztrennung, fremde CA, Schlüsselrotation
+docker compose up -d --build          # PKI, k3s, Publisher, Issuer-Endpoint, Validator, Keycloak + Gateway, service-r
+docker compose run --rm demo          # Ende-zu-Ende-Verifikation (Validator)
+docker compose run --rm demo authz    # Autorisierungsserver + service-r
+tools/run-all-checks.sh               # alles: Demos, Netztrennung, fremde CA, Schlüsselrotation
 docker compose down -v                # alles wieder entfernen
+```
+
+Vom Host erreichbar: Validator `http://localhost:18080`, `service-r` `http://127.0.0.1:18081`.
+Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy, weil ein
+veröffentlichter Docker-Port auch aus dem Workload-Netz erreichbar ist:
+
+```bash
+docker compose --profile admin up -d keycloak-admin   # https://localhost:18443/admin/ (Lab-CA, KC_BOOTSTRAP_ADMIN_*)
+docker compose stop keycloak-admin
 ```
 
 ```
@@ -40,6 +57,36 @@ docker compose down -v                # alles wieder entfernen
  Cluster-Seite und Validator geteilt.
 ```
 
+Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von `issuer-web`.
+Pods erreichen ihn ausschließlich über `keycloak-gateway` (nginx in `workload-net`), das nur
+die Endpunkte des Realms `domain-rst` weiterleitet. `service-r` hängt in `relying-net`
+(Realm-Schlüssel von Keycloak) und `workload-net` (Aufrufe der Pods). Topologie:
+[docs/technical/autorisierungsserver.md](docs/technical/autorisierungsserver.md).
+
+## Konfiguration
+
+`.env.example` nach `.env` kopieren; `docker compose` liest sie automatisch. Keiner der Werte
+ist ein echtes Geheimnis.
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `K3S_TOKEN` | `lab-not-a-secret-change-me` | Beitrittsgeheimnis des k3s-Single-Node-Clusters. |
+| `K3S_IMAGE` | `rancher/k3s:v1.34.11-k3s1` | Gepinntes k3s-Image. |
+| `WIF_ISSUER` | `https://issuer-web` | Issuer, den der Validator erwartet; Basis der OIDC-Discovery. |
+| `WIF_AUDIENCE` | `wif-demo-validator` | Audienz, die der Validator verlangt. |
+| `VALIDATOR_HOST_PORT` | `18080` | Host-Port des Validators. |
+| `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `issuer-web`. |
+| `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image. |
+| `KC_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Lab-Admin der Keycloak-Admin-Konsole. |
+| `KC_BOOTSTRAP_ADMIN_PASSWORD` | `lab-not-a-secret-change-me` | Passwort dazu (nur Lab). |
+| `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin`; geht in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
+| `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer: Audienz des `kc-token`, erwarteter `iss` in `service-r` und in `demo`. |
+| `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die `service-r` im Access-Token verlangt. |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) von `service-r`. |
+
+Weitere Laufzeitvariablen (`WIF_ISSUER_CA`, `SERVICE_R_TRUST_CA`, `JAVA_OPTS`, `DEMO_EXPIRY`,
+`VALIDATOR_URL`): [docs/technical/build-und-betrieb.md](docs/technical/build-und-betrieb.md#umgebungsvariablen-env--envexample).
+
 ## Dokumentation
 
 Die ausführliche Erklärung — von den Grundbegriffen bis zur Implementierung, geschrieben für
@@ -53,7 +100,8 @@ Log-Ausgaben).
 Die Grundsatzentscheidungen stehen in den ADRs
 ([0001](docs/adr/0001-offline-jwks-statt-tokenreview.md),
 [0002](docs/adr/0002-eigenstaendiger-issuer-endpoint.md),
-[0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md)), die Abwägung offline
+[0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md),
+[0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md)), die Abwägung offline
 vs. online in [docs/domain.md](docs/domain.md#5-offline-validierung-jwks-vs-online-validierung-tokenreview).
 Bewusst offene Punkte des Labs:
 
@@ -74,14 +122,26 @@ Bewusst offene Punkte des Labs:
 - **Kein Zertifikatswechsel, keine Sperrlisten.** Die Lab-Zertifikate laufen 825 Tage und
   werden nicht erneuert.
 - **`privileged`-k3s, Dummy-`K3S_TOKEN`, ein Node** — reine Lab-Vereinfachungen.
+- **Keycloak als Einzelknoten mit Datei-Datenbank im Container** (`KC_DB=dev-file`). Der
+  Realm wird per JSON-Import nur einmal angelegt; real schreibt ihn ausschließlich
+  keycloak-config-cli oder Terraform aus der CI, mit Drift-Erkennung und extern
+  gespeicherten Admin-Events.
+- **HTTP zwischen Workloads und `service-r` / Validator.** Real TLS oder mTLS (z. B. Service
+  Mesh), optional sender-gebundene Tokens (DPoP, mTLS).
+- **Cluster-RBAC ist Teil der Autorisierung.** Wer Tokens für einen ServiceAccount anfordern
+  oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes.
 
 ## Projektstruktur
 
 ```
 compose.yaml                     alle Services, die drei Netze cluster-net / relying-net / workload-net
-manifests/                       Namespaces, jwks-publisher (SA, RBAC, Deployment), Consumer-Deployment
+manifests/                       Namespaces, jwks-publisher (SA, RBAC, Deployment), Consumer-Deployment,
+                                 reader/stranger + Token-Skript access-token.sh
 validator/                       Spring Boot 4 / Java 25, Nimbus JOSE — der Offline-Prüfdienst
+keycloak/                        Realm-Import des Fachbereichs (realm-domain-rst.json)
+service-r/                       Spring Boot 4 / Java 25, Spring Security Resource Server — Dienst R
 tools/                           pki-init.sh, sa-keys.sh, bootstrap.sh, nginx-issuer.conf,
+                                 nginx-keycloak-gateway.conf, nginx-keycloak-admin.conf,
                                  demo.sh, run-all-checks.sh
 docs/                            die vollständige Dokumentation
 ```

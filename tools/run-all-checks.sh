@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Host-side driver for every lab check. Needs only docker compose on the host:
 #   1. base demo (discovery, pod -> validator, negative token and upload cases)
-#   2. network separation as seen from the validator
+#   1b. authorization server demo (pod -> keycloak -> service R, negative cases)
+#   2. network separation as seen from validator, keycloak and service R
 #   3. validator with a foreign CA refuses to start
 #   4. signing key rotation in the cluster, published by the jwks-publisher
 set -euo pipefail
@@ -17,16 +18,36 @@ docker compose up -d --build
 section "1. base demo"
 docker compose run --rm demo all
 
-section "2. network separation (seen from the validator)"
+section "1b. authorization server demo"
+docker compose run --rm demo authz
+
+section "2. network separation (seen from the relying parties)"
+# $1 = service, $2 = host:port, $3 = description
 unreachable() {
-    if docker compose exec -T validator curl -sk -o /dev/null --max-time 4 "https://$1/"; then
-        fail "validator reaches $1 ($2)"
+    if docker compose exec -T "$1" curl -sk -o /dev/null --max-time 4 "https://$2/"; then
+        fail "$1 reaches $2 ($3)"
     fi
-    pass "validator cannot reach $1 ($2)"
+    pass "$1 cannot reach $2 ($3)"
 }
-unreachable 172.31.9.2:6443  "API server via workload-net"
-unreachable 172.31.7.2:6443  "API server via cluster-net"
-unreachable 172.31.8.20:8443 "issuer upload listener via relying-net"
+# The keycloak image has no curl: plain TCP connect with bash, bounded from the host.
+unreachable_from_keycloak() {
+    if timeout 8 docker compose exec -T keycloak bash -c "exec 3<>/dev/tcp/${1%:*}/${1#*:}" 2> /dev/null; then
+        fail "keycloak reaches $1 ($2)"
+    fi
+    pass "keycloak cannot reach $1 ($2)"
+}
+for service in validator service-r; do
+    unreachable "$service" 172.31.9.2:6443  "API server via workload-net"
+    unreachable "$service" 172.31.7.2:6443  "API server via cluster-net"
+    unreachable "$service" 172.31.8.20:8443 "issuer upload listener via relying-net"
+done
+timeout 8 docker compose exec -T keycloak bash -c "exec 3<>/dev/tcp/172.31.8.20/443" \
+    && pass "keycloak reaches the issuer read listener (probe works)" \
+    || fail "keycloak cannot reach the issuer read listener — TCP probe is broken"
+unreachable_from_keycloak 172.31.9.2:6443  "API server via workload-net"
+unreachable_from_keycloak 172.31.7.2:6443  "API server via cluster-net"
+unreachable_from_keycloak 172.31.7.20:8443 "issuer upload listener via cluster-net"
+unreachable_from_keycloak 172.31.8.20:8443 "issuer upload listener via relying-net"
 
 section "3. validator with a foreign CA refuses to start"
 FOREIGN_LOG=$(mktemp)
