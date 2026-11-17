@@ -8,7 +8,7 @@
 -->
 <div class="host" style="height:480px">
 <div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: erwarteter Issuer</p><p class="d">fest konfiguriert: https://issuer-web</p></div>
-<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: TLS-Zertifikat von issuer-web</p><p class="d">nur dieses eine Zertifikat gilt – keine öffentlichen CAs, kein curl -k</p></div>
+<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">issuer-web muss ein Zertifikat dieser CA vorweisen – keine öffentlichen CAs, kein curl -k</p></div>
 <div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss exakt dem Anker entsprechen</p></div>
 <div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">issuer-Feld muss passen, nennt jwks_uri</p></div>
 <div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
@@ -23,9 +23,9 @@
 <x-connector class="ln" x1="1236" y1="405" x2="1284" y2="405"></x-connector>
 </div>
 <ul class="pts">
-<li>Nur zwei Dinge sind fest im Validator hinterlegt: der erwartete Issuer und das TLS-Zertifikat von issuer-web</li>
+<li>Nur zwei Dinge sind fest im Validator hinterlegt: der erwartete Issuer und die interne CA</li>
 <li>Alles Weitere – Discovery, Schlüssel, Signatur – wird daraus abgeleitet, ohne Rückfrage beim Cluster</li>
 <li>Passt der Issuer im Discovery-Dokument nicht, startet der Validator gar nicht (gewollt)</li>
 </ul>
-<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt der Validator über die eine vertraute TLS-Verbindung das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
+<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt der Validator über eine TLS-Verbindung, deren Zertifikat von der internen CA stammen muss, das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
 </section>

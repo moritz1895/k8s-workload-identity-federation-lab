@@ -19,7 +19,7 @@
 <x-connector class="ln" x1="720" y1="460" x2="1064" y2="460"></x-connector>
 <x-connector class="ln" x1="1364" y1="400" x2="1364" y2="180"></x-connector>
 <p class="lbl" style="left:396px; top:240px; width:310px">kurzlebiges Token (10 min), nur für den Validator</p>
-<p class="lbl" style="left:744px; top:48px; width:300px">einmalig: Bootstrap kopiert Schlüssel</p>
+<p class="lbl" style="left:744px; top:48px; width:300px">jwks-publisher: Push per mTLS bei Änderung</p>
 <p class="lbl" style="left:744px; top:388px; width:300px">GET /whoami mit Bearer-Token</p>
 <p class="lbl" style="left:1380px; top:236px; width:284px">HTTPS: Discovery + JWKS, 5 min Cache</p>
 <p class="warn" style="left:776px; top:226px; width:272px">Validator spricht nie mit dem API-Server</p>
@@ -29,5 +29,5 @@
 <li>issuer-web veröffentlicht nur öffentliche Metadaten, entkoppelt vom API-Server</li>
 <li>Der Validator besitzt kein Cluster-Credential und braucht keinen Netzweg in den Cluster</li>
 </ul>
-<aside>Vier Akteure: API-Server stellt aus, Pod nutzt das Token, issuer-web veröffentlicht die öffentlichen Schlüssel, Validator prüft. Die gestrichelte Linie passiert nur einmal beim Start (Bootstrap). Wichtigste Botschaft: Zwischen Validator und API-Server gibt es keine Verbindung.</aside>
+<aside>Vier Akteure: API-Server stellt aus, Pod nutzt das Token, issuer-web veröffentlicht die öffentlichen Schlüssel, Validator prüft. Die gestrichelte Linie ist der Push des jwks-publisher aus dem Cluster: per mTLS-Client-Zertifikat, sobald sich die Schlüssel ändern. Wichtigste Botschaft: Zwischen Validator und API-Server gibt es keine Verbindung.</aside>
 </section>

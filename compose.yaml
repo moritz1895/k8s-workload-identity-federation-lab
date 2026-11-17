@@ -1,21 +1,73 @@
 name: wif-lab
 
+# Three separate trust / network zones:
+#   cluster-net  — the cluster and the one way out of it: the issuer's upload listener
+#   relying-net  — the issuer's public read listener and the relying party (validator)
+#   workload-net — the path workloads in the cluster use to call the validator
+# The validator never shares a network with the API server's listener, and no
+# volume is shared between the cluster side and the validator.
 networks:
-  wifnet:
+  cluster-net:
     driver: bridge
     ipam:
       config:
         - subnet: 172.31.7.0/24
+  relying-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.8.0/24
+  workload-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.9.0/24
 
 volumes:
   k3s-data:
   kubeconfig:
+  sa-keys:
   oidc-web:
+  pki-ca:
+  ca-trust:
+  issuer-tls:
+  publisher-tls:
+  pki-demo:
+  demo-state:
 
 services:
-  # Single-node k3s, running straight in a container (no k3d binary on the host).
-  # The ServiceAccount issuer is a URL served by a stand-alone endpoint, not the
-  # API server itself — see the `issuer-web` service.
+  # One-shot lab PKI, the stand-in for the internal PKI. In a real setup the
+  # root certificate is already distributed to every system that needs it.
+  pki-init:
+    build:
+      context: ./tools
+    image: wif-lab/tools
+    entrypoint: ["bash", "/work/pki-init.sh"]
+    restart: "no"
+    network_mode: none
+    volumes:
+      - pki-ca:/pki/ca
+      - ca-trust:/pki/trust
+      - issuer-tls:/pki/issuer
+      - publisher-tls:/pki/publisher
+      - pki-demo:/pki/demo
+      - ./tools:/work:ro
+
+  # ServiceAccount signing keys. `docker compose run --rm sa-keys rotate` rotates.
+  sa-keys:
+    build:
+      context: ./tools
+    image: wif-lab/tools
+    entrypoint: ["bash", "/work/sa-keys.sh"]
+    command: ["init"]
+    restart: "no"
+    network_mode: none
+    volumes:
+      - sa-keys:/sa-keys
+      - ./tools:/work:ro
+
+  # Single-node k3s. Tokens carry iss=https://issuer-web; the API server listens
+  # only on its cluster-net address.
   server:
     image: ${K3S_IMAGE:-rancher/k3s:v1.34.11-k3s1}
     command:
@@ -24,8 +76,13 @@ services:
       - --disable=servicelb
       - --disable=metrics-server
       - --tls-san=k3s-server
+      - --node-ip=172.31.7.2
+      - --advertise-address=172.31.7.2
+      - --bind-address=172.31.7.2
       - --kube-apiserver-arg=service-account-issuer=https://issuer-web
       - --kube-apiserver-arg=service-account-jwks-uri=https://issuer-web/openid/v1/jwks
+      - --kube-apiserver-arg=service-account-signing-key-file=/sa-keys/signing.key
+      - --kube-apiserver-arg=service-account-key-file=/sa-keys/verify.pub
     privileged: true
     tmpfs:
       - /run
@@ -37,10 +94,17 @@ services:
     volumes:
       - k3s-data:/var/lib/rancher/k3s
       - kubeconfig:/output
+      - sa-keys:/sa-keys:ro
     networks:
-      wifnet:
+      cluster-net:
+        ipv4_address: 172.31.7.2
         aliases:
           - k3s-server
+      workload-net:
+        ipv4_address: 172.31.9.2
+    depends_on:
+      sa-keys:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "kubectl", "get", "--raw", "/readyz"]
       interval: 5s
@@ -48,8 +112,9 @@ services:
       retries: 40
       start_period: 15s
 
-  # One-shot: applies the lab manifests and publishes the cluster's OIDC
-  # discovery document + JWKS into the oidc-web volume, then exits.
+  # One-shot cluster setup with the admin kubeconfig: applies the manifests and
+  # hands the publisher its client certificate and the CA as Secret / ConfigMap.
+  # It never touches the issuer endpoint.
   bootstrap:
     build:
       context: ./tools
@@ -58,38 +123,50 @@ services:
     restart: "no"
     volumes:
       - kubeconfig:/kube:ro
-      - oidc-web:/oidc
+      - ca-trust:/trust:ro
+      - publisher-tls:/publisher-tls:ro
       - ./manifests:/manifests:ro
       - ./tools:/work:ro
     networks:
-      - wifnet
+      - cluster-net
     depends_on:
       server:
         condition: service_healthy
+      pki-init:
+        condition: service_completed_successfully
 
-  # Stand-alone OIDC issuer endpoint. This is the URL in the token's `iss` claim;
-  # the validator does discovery against it and never touches the API server.
+  # Stand-alone OIDC issuer endpoint, outside the cluster.
+  #   :443  on every address — public, read-only discovery document + JWKS
+  #         (the validator reads it via relying-net, the publisher via cluster-net)
+  #   :8443 on cluster-net — mTLS upload, only for the jwks-publisher certificate
+  # Healthy once the publisher has uploaded the first JWKS.
   issuer-web:
-    image: nginx:alpine
+    image: ${NGINX_IMAGE:-nginx:1.29-alpine}
+    entrypoint: ["sh", "-c", "mkdir -p /oidc/.tmp && chown -R nginx:nginx /oidc && exec nginx -g 'daemon off;'"]
     volumes:
-      - oidc-web:/oidc:ro
+      - oidc-web:/oidc
+      - issuer-tls:/tls:ro
+      - ca-trust:/trust:ro
       - ./tools/nginx-issuer.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      wifnet:
+      cluster-net:
+        ipv4_address: 172.31.7.20
+      relying-net:
+        ipv4_address: 172.31.8.20
         aliases:
           - issuer-web
     depends_on:
-      bootstrap:
+      pki-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      test: ["CMD", "test", "-s", "/oidc/openid/v1/jwks"]
       interval: 5s
       timeout: 3s
-      retries: 10
-      start_period: 3s
+      retries: 60
+      start_period: 10s
 
-  # The "foreign" service: NOT in the cluster. Validates the pod's JWT offline —
-  # OIDC discovery against issuer-web, then signature + iss + aud + exp (Nimbus).
+  # The relying party: NOT in the cluster. Trusts the internal CA, does OIDC
+  # discovery against issuer-web and validates pod tokens offline (Nimbus).
   validator:
     build:
       context: ./validator
@@ -97,13 +174,14 @@ services:
     environment:
       - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
-      - WIF_ISSUER_CA=/oidc/tls.crt
+      - WIF_ISSUER_CA=/trust/ca.crt
     volumes:
-      - oidc-web:/oidc:ro
+      - ca-trust:/trust:ro
     networks:
-      wifnet:
-        ipv4_address: 172.31.7.10
-    # Optional: expose the validator on the host for manual pokes (curl).
+      relying-net:
+        ipv4_address: 172.31.8.10
+      workload-net:
+        ipv4_address: 172.31.9.10
     ports:
       - "${VALIDATOR_HOST_PORT:-18080}:8080"
     depends_on:
@@ -116,7 +194,23 @@ services:
       retries: 30
       start_period: 40s
 
-  # On-demand verification harness: docker compose run --rm demo
+  # Negative check: the validator configured with a foreign CA must refuse to
+  # start. docker compose run --rm validator-foreign-ca  (expected: non-zero exit)
+  validator-foreign-ca:
+    image: wif-lab/validator
+    environment:
+      - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
+      - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
+      - WIF_ISSUER_CA=/pki-demo/foreign-ca.crt
+    volumes:
+      - pki-demo:/pki-demo:ro
+    networks:
+      - relying-net
+    profiles:
+      - negative
+    restart: "no"
+
+  # Verification harness: docker compose run --rm demo [all|pre-rotation|post-rotation]
   demo:
     build:
       context: ./tools
@@ -126,13 +220,17 @@ services:
       - VALIDATOR_URL=http://validator:8080
     volumes:
       - kubeconfig:/kube:ro
-      - oidc-web:/oidc:ro
+      - ca-trust:/trust:ro
+      - pki-demo:/pki-demo:ro
+      - demo-state:/state
       - ./tools:/work:ro
     networks:
-      - wifnet
+      - cluster-net
+      - relying-net
     depends_on:
       validator:
         condition: service_healthy
     profiles:
       - demo
     entrypoint: ["bash", "/work/demo.sh"]
+    command: ["all"]

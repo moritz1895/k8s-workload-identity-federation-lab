@@ -4,19 +4,19 @@
 <div class="card">
 <p class="num">1</p>
 <h3>server (k3s)</h3>
-<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li></ul>
+<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li><li>davor: Lab-CA und Signaturschlüssel erzeugt</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">2</p>
 <h3>bootstrap</h3>
-<ul class="cl"><li>legt Namespace, ServiceAccount und Pod an</li><li>erzeugt TLS-Zertifikat für issuer-web</li><li>kopiert Discovery + JWKS aus dem Cluster</li></ul>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an</li><li>übergibt dem jwks-publisher sein Client-Zertifikat</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">3</p>
 <h3>issuer-web</h3>
-<ul class="cl"><li>nginx liefert genau zwei Dateien per HTTPS</li><li>alles andere: 404</li></ul>
+<ul class="cl"><li>jwks-publisher lädt Discovery + JWKS per mTLS hoch</li><li>nginx liefert sie öffentlich per HTTPS aus</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
@@ -36,5 +36,5 @@
 <li>Reihenfolge über Compose-Abhängigkeiten: Der nächste Dienst startet erst, wenn der vorige bereit bzw. erfolgreich beendet ist</li>
 <li>Weil der Cluster schon mit externem Issuer startet, trägt jedes Token iss = https://issuer-web</li>
 </ul>
-<aside>Ein docker compose up baut das komplette Lab. Der bootstrap-Container läuft einmal durch und beendet sich; danach liefert issuer-web nur noch statische Dateien aus.</aside>
+<aside>Ein docker compose up baut das komplette Lab. Der bootstrap-Container läuft einmal durch und beendet sich. Danach hält der jwks-publisher im Cluster issuer-web aktuell, auch bei einer Schlüsselrotation.</aside>
 </section>

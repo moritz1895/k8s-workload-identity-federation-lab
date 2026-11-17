@@ -23,10 +23,10 @@ spec:
     spec:
       serviceAccountName: consumer
       automountServiceAccountToken: false
-      # The validator lives outside the cluster on the shared Docker network at a
+      # The validator lives outside the cluster, reachable on workload-net at a
       # fixed IP. CoreDNS knows nothing about it, so we pin the name here.
       hostAliases:
-        - ip: "172.31.7.10"
+        - ip: "172.31.9.10"
           hostnames:
             - validator.wif.local
       containers:
