@@ -34,3 +34,9 @@ Für Details zur Umsetzung:
 | [adr/0001-offline-jwks-statt-tokenreview.md](adr/0001-offline-jwks-statt-tokenreview.md) | Warum offline über JWKS statt online über die TokenReview-API. |
 | [adr/0002-eigenstaendiger-issuer-endpoint.md](adr/0002-eigenstaendiger-issuer-endpoint.md) | Warum ein eigener `issuer-web`-Dienst statt anonymem Zugriff auf den API-Server. |
 | [adr/0003-getrennte-vertrauensbereiche-interne-pki.md](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) | Publisher im Cluster, Upload per mTLS, interne PKI als Vertrauensanker, getrennte Netze, Schlüsselrotation. |
+
+## Präsentation
+
+| Ordner | Inhalt |
+|---|---|
+| [praesentation/](praesentation/README.md) | Quelldateien des Foliensatzes zur Kurzvorstellung des PoC (HTML/CSS/JSON). |

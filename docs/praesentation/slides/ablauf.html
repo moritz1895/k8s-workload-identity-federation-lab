@@ -1,0 +1,33 @@
+<section id="ablauf">
+<h2>Ablauf einer Anfrage</h2>
+<!-- host 1664x560
+ heads top 0 h 80: API 0..320 (c160) ; POD 448..768 (c608) ; VAL 896..1216 (c1056) ; ISS 1344..1664 (c1504)
+ lifelines y 80 -> 560
+ m0 y170 1056->1504 ; m1 y270 160->608 ; m2 y360 608->1056 ; check box 896,384,320,100 ; m4 y540 1056->608
+-->
+<div class="host" style="height:560px">
+<div class="box accent" style="left:0px; top:0px; width:320px; height:80px"><p class="t">API-Server</p></div>
+<div class="box" style="left:448px; top:0px; width:320px; height:80px"><p class="t">Pod „consumer“</p></div>
+<div class="box ok" style="left:896px; top:0px; width:320px; height:80px"><p class="t">Validator</p></div>
+<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">issuer-web</p></div>
+<x-connector class="ln life" x1="160" y1="80" x2="160" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="1504" y1="80" x2="1504" y2="556" head="none"></x-connector>
+<div class="box ok" style="left:896px; top:384px; width:320px; height:100px"><p class="t">3 · prüft offline</p><p class="d">Signatur, iss, aud, exp</p></div>
+<x-connector class="ln" x1="1056" y1="170" x2="1504" y2="170"></x-connector>
+<x-connector class="ln" x1="160" y1="270" x2="608" y2="270"></x-connector>
+<x-connector class="ln" x1="608" y1="360" x2="1056" y2="360"></x-connector>
+<x-connector class="ln dash" x1="1056" y1="540" x2="608" y2="540"></x-connector>
+<p class="lbl" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS laden</p>
+<p class="lbl" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
+<p class="lbl" style="left:624px; top:290px; width:416px">2 · GET /whoami mit Bearer-Token</p>
+<p class="lbl" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>
+</div>
+<ul class="pts">
+<li>Schritt 0 passiert einmal beim Start; danach prüft der Validator jede Anfrage rein lokal</li>
+<li>Der Validator fragt nie beim Cluster nach und speichert keinen Zustand</li>
+<li>Das kubelet erneuert das Token automatisch vor Ablauf – die Anwendung muss nichts tun</li>
+</ul>
+<aside>Schritt 1: Das kubelet ruft die TokenRequest-API mit audience wif-demo-validator und 600 Sekunden Laufzeit auf. Schritt 4: 200 mit den Claims im Body, oder 401 mit kurzem Ablehnungsgrund. Die JWKS werden 5 Minuten gecacht und im Hintergrund aktualisiert.</aside>
+</section>

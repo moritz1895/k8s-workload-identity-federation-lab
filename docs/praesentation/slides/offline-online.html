@@ -1,0 +1,49 @@
+<section id="offline-online">
+<h2>Offline prüfen (dieser PoC) vs. online prüfen</h2>
+<div class="cols">
+<div class="col">
+<p class="colh">Offline über JWKS – dieser PoC</p>
+<!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
+<div class="host" style="width:800px; height:170px">
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Validator</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">issuer-web</p><p class="d">öffentliche Daten</p></div>
+<x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
+<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
+</div>
+<p class="sh">Stärken</p>
+<ul class="pts">
+<li>keine Laufzeit-Abhängigkeit vom Cluster</li>
+<li>kein Credential beim Prüfer, Cluster von außen unerreichbar</li>
+<li>pro Anfrage nur lokale Signaturprüfung</li>
+</ul>
+<p class="sh">Grenzen</p>
+<ul class="pts">
+<li>kein Widerruf vor exp – daher nur 10 min Laufzeit</li>
+<li>neue Schlüssel erst nach Cache-Ablauf bekannt</li>
+</ul>
+</div>
+<div class="col">
+<p class="colh">Online über TokenReview-API</p>
+<!-- host 800x170: same geometry -->
+<div class="host" style="width:800px; height:170px">
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Validator</p></div>
+<div class="box accent" style="left:540px; top:40px; width:260px; height:120px"><p class="t">API-Server</p><p class="d">im Cluster</p></div>
+<x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
+<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">pro Anfrage, mit Credential</p>
+</div>
+<p class="sh">Stärken</p>
+<ul class="pts">
+<li>sofortiger Widerruf, Live-Zustand des Clusters</li>
+</ul>
+<p class="sh">Grenzen</p>
+<ul class="pts">
+<li>API-Server nicht erreichbar → jede Prüfung schlägt fehl</li>
+<li>Netzweg vom Dienst zum API-Server nötig</li>
+<li>Prüfer braucht eigenes Cluster-Credential (RBAC)</li>
+<li>ein Netzwerk-Roundtrip pro Anfrage</li>
+</ul>
+</div>
+</div>
+<p class="note">Denkbarer Ausbau: hybrid – offline als Regelfall, TokenReview nur für besonders sensible Operationen</p>
+<aside>Der PoC zeigt bewusst die Offline-Variante, weil sie dem typischen Federation-Muster entspricht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen.</aside>
+</section>
