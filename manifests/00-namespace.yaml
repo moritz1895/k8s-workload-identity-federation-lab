@@ -3,7 +3,12 @@ kind: Namespace
 metadata:
   name: wif-demo
 ---
+# Holds the issuer endpoint. Write access only for cluster admins / the GitOps process;
+# no RoleBinding grants anything in here.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: wif-publisher
+  name: wif-issuer
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

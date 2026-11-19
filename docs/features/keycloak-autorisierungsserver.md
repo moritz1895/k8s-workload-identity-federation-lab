@@ -58,7 +58,7 @@ Fehlerfälle automatisch.
 | **Workload A** | Ruft Dienste des Fachbereichs auf. Weist sich mit seinem ServiceAccount-Token aus, holt ein Access-Token und hält es im Cache. | Pod `consumer`, ServiceAccount `wif-demo:consumer` |
 | **Workload B (nur lesend)** | Wie A, aber im Realm nur für Lesezugriff berechtigt. | Pod `reader`, ServiceAccount `wif-demo:reader` |
 | **Unbekannte Workload** | Hat ein gültiges ServiceAccount-Token, ist im Realm aber nicht registriert. | Pod `stranger`, ServiceAccount `wif-demo:stranger` |
-| **Cluster (Identitätsaussteller)** | Stellt ServiceAccount-Tokens aus; Schlüssel öffentlich über `issuer-web`. | `server` (k3s), `iss=https://issuer-web` |
+| **Cluster (Identitätsaussteller)** | Stellt ServiceAccount-Tokens aus; Schlüssel öffentlich über den Issuer-Pod hinter dem Ingress. | `server` (k3s), `iss=https://issuer.wif.local` |
 | **Autorisierungsserver des Fachbereichs** | Prüft das ServiceAccount-Token, ordnet es einem Client zu und stellt ein Access-Token mit den zugeordneten Scopes aus. | `keycloak`, Realm `domain-rst` |
 | **Fachbereichs-Administration** | Legt fest, welche Workload welche Scopes bekommt (Client → Scope). | Realm-Import-Datei im Repo |
 | **Ressourcendienst R** | Prüft das Access-Token und schützt seine Endpunkte nach Scope. | neuer Dienst `service-r` |
@@ -67,7 +67,7 @@ Fehlerfälle automatisch.
 
 | Begriff | Bedeutung |
 |---|---|
-| **ServiceAccount-Token** | JWT des Clusters, `sub=system:serviceaccount:<ns>:<sa>`, `iss=https://issuer-web`. Beweist Identität. |
+| **ServiceAccount-Token** | JWT des Clusters, `sub=system:serviceaccount:<ns>:<sa>`, `iss=https://issuer.wif.local`. Beweist Identität. |
 | **Access-Token** | JWT von Keycloak, `iss=<Realm-Issuer>`, trägt `aud` und `scope`. Beweist Berechtigung für bestimmte Dienste. |
 | **Föderierte Client-Authentisierung** | Keycloak akzeptiert ein fremd ausgestelltes JWT (hier das ServiceAccount-Token) als Client-Nachweis statt eines Client-Secrets. |
 | **Kubernetes-Identity-Provider** | Eintrag im Realm, der einem Cluster-Issuer vertraut (dessen Schlüssel er über Discovery und JWKS lädt). |
@@ -79,7 +79,7 @@ Fehlerfälle automatisch.
 ## 5. Ablauf
 
 ```
- Workload A (Pod)            Keycloak (Realm domain-rst)            issuer-web            Dienst R
+ Workload A (Pod)            Keycloak (Realm domain-rst)            issuer.wif.local      Dienst R
       │                                │                                 │                    │
  (1)  │ kubelet legt SA-Token ab:      │                                 │                    │
       │ aud=<Realm-Issuer>, 600 s      │                                 │                    │
@@ -127,8 +127,8 @@ scope=r:orders:read r:orders:write
 Keycloak (föderierte Client-Authentisierung, voll unterstützt ab 26.6):
 
 1. liest `iss` des ServiceAccount-Tokens und findet den Kubernetes-Identity-Provider
-   `lab-cluster` mit Issuer `https://issuer-web`;
-2. lädt über `https://issuer-web/.well-known/openid-configuration` die `jwks_uri` und die
+   `lab-cluster` mit Issuer `https://issuer.wif.local`;
+2. lädt über `https://issuer.wif.local/.well-known/openid-configuration` die `jwks_uri` und die
    Schlüssel (TLS mit Zertifikat der Lab-CA; `KC_TRUSTSTORE_PATHS` ergänzt Keycloaks
    Default-Truststore um die Lab-CA) und hält sie im Cache;
 3. prüft Signatur, `exp`, `nbf` und dass `aud` die Realm-Issuer-URL ist;
@@ -185,7 +185,7 @@ Server – keine eigene Prüfkette:
   eingepackt in `SupplierJwtDecoder`, macht die Discovery beim ersten Token (bei Fehlschlag
   erneut mit dem nächsten) und cacht das JWKS. R startet damit unabhängig von Keycloak.
 - **TLS:** R vertraut für Keycloak nur der Lab-CA (gleiches Prinzip wie der `validator`
-  gegenüber `issuer-web`).
+  gegenüber dem Issuer-Endpoint).
 - **Audienz:** ein zusätzlicher Validator verlangt, dass `aud` genau `["service-r"]` ist
   (`service-r.audience`). Ein Token mit mehreren Audienzen wird abgelehnt, damit ein anderer
   Dienst ein für ihn mit ausgestelltes Token nicht bei R wiederverwenden kann.
@@ -243,7 +243,7 @@ Für `service-r` gelten dieselben projektlokalen Abweichungen wie für den `vali
 
 | Dienst | Netz | Adresse | Zweck |
 |---|---|---|---|
-| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer-web`; R liest JWKS von Keycloak |
+| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `ingress-lb`); R liest JWKS von Keycloak |
 | `keycloak-gateway` | `relying-net` | 172.31.8.31 | Weiterleitung zu Keycloak |
 | `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (nur `/realms/domain-rst/`) |
 | `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole vom Host, nur Profil `admin` |
@@ -267,7 +267,7 @@ erreicht den API-Server nicht. Der Issuer-Hostname ist fest
 `pki-init` stellt zusätzlich ein Serverzertifikat `CN=keycloak`, SAN `DNS:keycloak`,
 `DNS:localhost`, `IP:127.0.0.1` aus (Volume `keycloak-tls`, Schlüssel gehört uid 1000);
 Keycloak, `keycloak-gateway` und `keycloak-admin` zeigen es. Keycloak spricht nur HTTPS
-(`KC_HTTP_ENABLED=false`) und vertraut `issuer-web` über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
+(`KC_HTTP_ENABLED=false`) und vertraut dem Issuer-Ingress über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
 (zusätzlich zu seinem Default-Truststore). `bootstrap` legt die ConfigMap `internal-ca`
 zusätzlich im Namespace `wif-demo` an, damit die Pods Keycloak über TLS prüfen können.
 `pki-init` stellt außerdem ein Serverzertifikat `CN=service-r.wif.local` (SAN
@@ -285,7 +285,7 @@ Container; ein neu erstellter Container hat neue Realm-Schlüssel, gecachte Acce
 werden dann ungültig. Inhalt:
 
 - Realm `domain-rst`, `accessTokenLifespan: 300`, keine Standard-Client-Scopes.
-- Identity-Provider `lab-cluster`, `providerId: kubernetes`, `config.issuer: https://issuer-web`.
+- Identity-Provider `lab-cluster`, `providerId: kubernetes`, `config.issuer: https://issuer.wif.local`.
 - Client-Scopes `r:orders:read`, `r:orders:write`, `r:orders:admin`, `s:inventory:read`;
   jeder `r:*`-Scope mit Audience-Mapper `service-r`, `s:inventory:read` mit `service-s`;
   `include.in.token.scope: true`.
@@ -379,7 +379,7 @@ dokumentierte Ausweichlösung. Die Ressourcendienste hängen nur an **Issuer-URL
 Scope-Namen**; der Autorisierungsserver ist damit austauschbar, ohne R zu ändern.
 
 Einschränkung: RFC 7523 verlangt in einer Client-Assertion `iss = sub = client_id`. Ein
-ServiceAccount-Token hat `iss=https://issuer-web` und
+ServiceAccount-Token hat `iss=https://issuer.wif.local` und
 `sub=system:serviceaccount:<ns>:<sa>`. Spring Authorization Server bräuchte deshalb einen
 eigenen `AuthenticationProvider` für die Client-Assertion, der Issuer und Subject wie
 Keycloak auf einen registrierten Client abbildet und die Schlüssel über die JWKS des
@@ -421,7 +421,7 @@ Client-Assertion verwendet, dann antwortet Keycloak `400 invalid_client`
 Gegeben ein JWT mit `iss=https://other-cluster`, `sub=system:serviceaccount:wif-demo:consumer`,
 `aud=<Realm-Issuer>`, signiert mit einem Schlüssel außerhalb des Lab-Clusters,
 wenn es als Client-Assertion verwendet wird, dann antwortet Keycloak `401 invalid_client`.
-Dasselbe gilt für ein JWT mit `iss=https://issuer-web`, das mit einem fremden Schlüssel
+Dasselbe gilt für ein JWT mit `iss=https://issuer.wif.local`, das mit einem fremden Schlüssel
 signiert ist.
 
 **AK6 – erlaubter Aufruf**
@@ -450,8 +450,10 @@ Gegeben `consumer` ruft `access-token.sh` dreimal innerhalb von 30 s auf, dann s
 genau eine Token-Anfrage an Keycloak (eine Log-Zeile „requested new access token“).
 
 **AK12 – Netztrennung**
-Keycloak erreicht den API-Server weder über `172.31.7.2:6443` noch über `172.31.9.2:6443`
-und den Upload-Listener weder über `172.31.7.20:8443` noch über `172.31.8.20:8443`.
+Keycloak erreicht den API-Server weder über `172.31.7.2:6443` noch über `172.31.9.2:6443`,
+Traefiks Node-Port nicht direkt über `172.31.7.2:30443` und `ingress-lb` nicht über dessen
+`cluster-net`-Seite `172.31.7.20:443`. Der einzige Weg in den Cluster ist
+`172.31.8.20:443` (`ingress-lb`, Ingress-Route `issuer.wif.local`).
 
 **AK13 – bestehendes Verhalten**
 Alle bestehenden Prüfungen von `tools/run-all-checks.sh` laufen unverändert durch.
@@ -537,10 +539,12 @@ Client-Assertions per `client_assertion@-` bzw. `@<datei>`.
 - Abschnitt „1b. authorization server demo“: `docker compose run --rm demo authz`.
 - Abschnitt 2 prüft die Netztrennung auch aus Sicht von `service-r` und Keycloak (AK12);
   bei Keycloak mit `bash`-`/dev/tcp`, da das Image kein `curl` enthält, abgesichert durch
-  eine Positivprobe auf den Lese-Listener `172.31.8.20:443`.
-- Abschnitt 4 (Rotation): `post-rotation` prägt zusätzlich per `kubectl create token` ein
-  Token mit Realm-Audienz und neuer `kid` und legt es direkt als Client-Assertion vor.
-  Erwartung: `200`.
+  eine Positivprobe auf `ingress-lb` (`172.31.8.20:443`).
+- Abschnitt 4 (Schlüsselwechsel in zwei Phasen): `staged` legt nach `sa-keys stage` eine
+  Client-Assertion vor, die noch mit dem bisherigen Schlüssel signiert ist; `post-rotation`
+  prägt nach `sa-keys activate` per `kubectl create token` ein Token mit Realm-Audienz und
+  neuer `kid` und legt es direkt als Client-Assertion vor. Erwartung jeweils `200`, beim
+  ersten Versuch.
 
 ## 13. Geklärte Punkte und offene Umsetzungsaufgabe
 
@@ -552,17 +556,19 @@ Geklärt (gemessen im Lab mit Keycloak 26.8.2, Details in
   Identity-Provider: `providerId: kubernetes`, `config.issuer`. Client:
   `clientAuthenticatorType: federated-jwt`, Attribute `jwt.credential.issuer` (= Alias des
   Identity-Providers) und `jwt.credential.sub`. Keycloak lädt die Cluster-Schlüssel lazy über
-  `<issuer>/.well-known/openid-configuration` von `issuer-web`.
+  `<issuer>/.well-known/openid-configuration`, also vom Issuer-Pod hinter dem Ingress.
 - **Nicht zugeordneter Scope.** Keycloak lehnt mit `400 invalid_scope` („Invalid scopes: …“)
   ab und lässt den Scope nicht stillschweigend weg (AK2).
 - **Weitere Fehlerantworten.** Unregistrierte Workload und gefälschte Assertions (fremder
-  Issuer; `issuer-web` mit echter `kid`, aber fremdem Schlüssel): `401 invalid_client`.
+  Issuer; `https://issuer.wif.local` mit echter `kid`, aber fremdem Schlüssel): `401 invalid_client`.
   Falsche Audienz: `400 invalid_client` („Invalid token audience“).
 - **Wiederverwendung.** Dasselbe ServiceAccount-Token wird mehrfach als Client-Assertion
   akzeptiert; für Kubernetes-Tokens gibt es keine Einmal-Prüfung. Darauf beruht die
   Cache-Erneuerung, solange das kubelet dieselbe Datei hält.
-- **JWKS-Cache bei Rotation.** Bei einer unbekannten `kid` lädt Keycloak das JWKS neu; eine
-  Assertion mit dem rotierten Schlüssel wird ohne Wartezeit akzeptiert.
+- **JWKS-Cache beim Schlüsselwechsel.** Bei einer unbekannten `kid` lädt Keycloak das JWKS
+  neu, frühestens 10 s nach dem letzten Abruf (`min-time-between-requests`). Weil der neue
+  Schlüssel nach `sa-keys stage` schon ausgeliefert wird, bevor er signiert, wird die erste
+  Assertion mit ihm ohne Wartezeit akzeptiert.
 - **Access-Token.** `aud` ist der String `"service-r"`, `azp` die Client-ID, `sub` die UUID
   des Service-Account-Benutzers, `exp = iat + 300`; die Reihenfolge in `scope` ist nicht
   garantiert.

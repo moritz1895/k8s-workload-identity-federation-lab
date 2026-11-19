@@ -25,10 +25,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Wires the JWKS source. TLS to the stand-alone issuer endpoint trusts only the internal CA from
+ * Wires the JWKS source. TLS to the issuer endpoint trusts only the internal CA from
  * {@link WifProperties#issuerCa()}, not the JVM's default trust store. The validator runs OIDC
- * discovery against the issuer URL to locate the JWKS and loads the keys from there; it never
- * talks to the Kubernetes API server. Without a certificate path to that CA, startup fails.
+ * discovery against the issuer URL to locate the JWKS and loads the keys from there, but only from
+ * the issuer's own origin ({@link JwksUriPolicy}); it never talks to the Kubernetes API server.
+ * Without a certificate path to that CA, or with a {@code jwks_uri} elsewhere, startup fails.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(WifProperties.class)
@@ -70,7 +71,7 @@ class JwksTrustConfig {
             throw new IllegalStateException(
                     "discovery document issuer '" + advertisedIssuer + "' does not match configured issuer '" + issuer + "'");
         }
-        return URI.create(JSONObjectUtils.getString(metadata, "jwks_uri")).toURL();
+        return JwksUriPolicy.jwksUrl(issuer, JSONObjectUtils.getString(metadata, "jwks_uri"));
     }
 
     private static SSLSocketFactory trustOnly(Path caPem) throws Exception {

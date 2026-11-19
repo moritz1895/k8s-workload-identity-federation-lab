@@ -15,7 +15,7 @@ Entscheidung: [ADR 0004](../adr/0004-keycloak-als-autorisierungsserver-pro-fachb
 
 ```
       workload-net 172.31.9.0/24                         relying-net 172.31.8.0/24
- Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► issuer-web :443
+ Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► ingress-lb .8.20:443 ──► Issuer-Pod (issuer.wif.local)
    (keycloak = 172.31.9.30)              .9.30 / .8.31         Realm domain-rst
       │                                  nur /realms/domain-rst/        ▲
       │                                                                 │ Discovery + JWKS (beim ersten Token)
@@ -50,7 +50,7 @@ HTTPS auf 8443.
 | `KC_HOSTNAME_ADMIN` | `https://localhost:${KEYCLOAK_HOST_PORT}` | URL der Admin-Konsole über `keycloak-admin` |
 | `KC_HTTP_ENABLED` | `false` | kein HTTP-Listener |
 | `KC_HTTPS_CERTIFICATE_FILE` / `_KEY_FILE` | `/tls/tls.crt`, `/tls/tls.key` | Serverzertifikat aus Volume `keycloak-tls` (`pki-init`) |
-| `KC_TRUSTSTORE_PATHS` | `/trust/ca.crt` | ergänzt Keycloaks Default-Truststore um die Lab-CA (für TLS zu `issuer-web`); öffentliche CAs bleiben vertraut |
+| `KC_TRUSTSTORE_PATHS` | `/trust/ca.crt` | ergänzt Keycloaks Default-Truststore um die Lab-CA (für TLS zu `issuer.wif.local`); öffentliche CAs bleiben vertraut |
 | `KC_CACHE` | `local` | lokaler Cache statt Infinispan-Cluster |
 | `KC_HEALTH_ENABLED` | `true` | `/health/ready` auf dem Management-Port 9000 |
 | `KC_HTTP_MANAGEMENT_SCHEME` | `http` | Management-Port 9000 spricht HTTP (sonst erbt er HTTPS) |
@@ -80,7 +80,7 @@ entstehen neue Realm-Schlüssel, und gecachte Access-Tokens werden bei `service-
 Der Realm vertraut dem Cluster über einen Identity-Provider:
 
 ```json
-{ "alias": "lab-cluster", "providerId": "kubernetes", "config": { "issuer": "https://issuer-web" } }
+{ "alias": "lab-cluster", "providerId": "kubernetes", "config": { "issuer": "https://issuer.wif.local" } }
 ```
 
 Jeder Workload-Client bindet sich daran:
@@ -97,9 +97,23 @@ Jeder Workload-Client bindet sich daran:
 Bei einer Token-Anfrage findet Keycloak über `iss` der Client-Assertion den Identity-Provider,
 prüft Signatur, `exp`, `nbf` und `aud` (= Realm-Issuer-URL) und sucht den Client mit passendem
 `jwt.credential.sub`. Die Schlüssel lädt Keycloak lazy beim ersten Bedarf über
-`https://issuer-web/.well-known/openid-configuration` → `jwks_uri` von `issuer-web` (über
-`relying-net`, TLS mit Lab-CA) und hält sie im Cache. Eine Verbindung zum API-Server gibt es
-nicht.
+`https://issuer.wif.local/.well-known/openid-configuration` → `jwks_uri` (über `ingress-lb`
+in `relying-net` zum Ingress des Issuer-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
+Verbindung zum API-Server gibt es nicht.
+
+Den Cache steuert das SPI `public-key-storage` (Provider `infinispan`); das Lab setzt beide
+Werte nicht und nutzt die Standards:
+
+| Wert | Standard | Wirkung |
+|---|---|---|
+| `min-time-between-requests` | 10 s | Innerhalb dieser Zeit nach dem letzten Abruf lädt Keycloak nicht erneut; eine Assertion mit unbekannter `kid` wird dann abgelehnt. |
+| `max-cache-time` | 86 400 s (24 h) | So lange gelten die Schlüssel ohne neuen Abruf. |
+
+Eine unbekannte `kid` löst einen Neuabruf aus, sofern `min-time-between-requests` seit dem
+letzten Abruf verstrichen ist. Weil der Schlüsselwechsel zweiphasig läuft
+([bootstrap-und-issuer.md](bootstrap-und-issuer.md#zweiphasiger-schlüsselwechsel)), liefert der
+Issuer-Pod eine neue `kid` schon aus, bevor ein Token sie trägt. Ein kurzer Ausfall des
+Ingress fällt nur auf, wenn genau dann eine neue `kid` auftaucht.
 
 Weil der `sub` des ServiceAccount-Tokens die Workload identifiziert, gehört das
 Cluster-RBAC zur Autorisierungsgrenze: Wer im Namespace `wif-demo` Tokens für einen
@@ -135,7 +149,7 @@ Audienzen, und `service-r` lehnt es ab.
 
 ### Gemessenes Verhalten
 
-Gemessen im Lab mit `tools/demo.sh authz` und der Rotationsprüfung:
+Gemessen im Lab mit `tools/demo.sh authz` und dem Schlüsselwechsel (`staged`, `post-rotation`):
 
 | Situation | Antwort von Keycloak |
 |---|---|
@@ -143,9 +157,9 @@ Gemessen im Lab mit `tools/demo.sh authz` und der Rotationsprüfung:
 | gültiges ServiceAccount-Token ohne Client im Realm (`stranger`) | `401 invalid_client` |
 | ServiceAccount-Token mit falscher Audienz (`sa-token` des Validators) | `400 invalid_client`, „Invalid token audience“ |
 | gefälschte Assertion: fremder Issuer | `401 invalid_client` |
-| gefälschte Assertion: `iss=https://issuer-web`, echte `kid`, fremder Schlüssel | `401 invalid_client` |
+| gefälschte Assertion: `iss=https://issuer.wif.local`, echte `kid`, fremder Schlüssel | `401 invalid_client` |
 | dasselbe ServiceAccount-Token mehrfach als Assertion | akzeptiert; für Kubernetes-Tokens gibt es keine Einmal-Prüfung |
-| Assertion mit neuer `kid` nach Schlüsselrotation | akzeptiert; Keycloak lädt das JWKS bei unbekannter `kid` neu |
+| erste Assertion mit neuer `kid` nach `sa-keys activate` | ohne Wiederholung akzeptiert; Keycloak lädt das JWKS bei unbekannter `kid` neu, der Issuer-Pod liefert die `kid` seit `sa-keys stage` aus |
 
 Die Wiederverwendbarkeit ist Voraussetzung für den Cache in der Workload: Das kubelet tauscht
 `kc-token` (600 s) erst nach rund acht Minuten aus, bis dahin liest jede Erneuerung dieselbe
@@ -171,7 +185,7 @@ Keycloak hängt nur in `relying-net` (172.31.8.30, Alias `keycloak`) und veröff
 **keinen** Host-Port. Gemessen: Docker macht einen veröffentlichten Container-Port auch aus
 den anderen Bridge-Netzen erreichbar, unabhängig von der Host-Adresse, an die er gebunden
 ist – ein Pod erreichte `keycloak:8443` über 172.31.8.30, solange der Port veröffentlicht
-war. Nicht veröffentlichte Ports (`issuer-web :443`, Keycloak `:9000`) bleiben isoliert.
+war. Nicht veröffentlichte Ports (`ingress-lb :443`, Keycloak `:9000`) bleiben isoliert.
 
 ### `keycloak-gateway`
 
@@ -344,7 +358,7 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 
 | Dienst | Netz | Adresse | Zweck |
 |---|---|---|---|
-| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer-web`; `service-r`, `demo` und die Proxys erreichen ihn |
+| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `ingress-lb`); `service-r`, `demo` und die Proxys erreichen ihn |
 | `keycloak-gateway` | `relying-net` | 172.31.8.31 | Weiterleitung zu Keycloak |
 | `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (`keycloak` per `hostAliases`) |
 | `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole, Host `127.0.0.1:18443`, nur Profil `admin` |
@@ -352,9 +366,10 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 | `service-r` | `workload-net` | 172.31.9.40 | Pods rufen R über HTTPS auf (`:8443`; Host `127.0.0.1:18081`) |
 
 `tools/run-all-checks.sh` (Abschnitt 2) prüft per Bash-`/dev/tcp`, dass Keycloak weder den
-API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Upload-Listener
-(`172.31.7.20:8443`, `172.31.8.20:8443`) erreicht, wohl aber den Lese-Listener
-`172.31.8.20:443`. Prüfung 20 in `demo.sh authz` prüft die Gegenrichtung aus dem Pod
+API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Node-Port des Ingress
+(`172.31.7.2:30443`) noch die `cluster-net`-Seite von `ingress-lb` (`172.31.7.20:443`)
+erreicht, wohl aber `ingress-lb` in `relying-net` (`172.31.8.20:443`).
+Prüfung 20 in `demo.sh authz` prüft die Gegenrichtung aus dem Pod
 `stranger`: Admin-API, Admin-Konsole und Master-Realm `404`, Pfad-Traversal bleibt im Realm,
 172.31.8.30:8443 und :9000 unerreichbar, Realm-Discovery über das Gateway `200`.
 

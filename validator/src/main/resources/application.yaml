@@ -1,5 +1,5 @@
 wif:
-  issuer: ${WIF_ISSUER:https://issuer-web}
+  issuer: ${WIF_ISSUER:https://issuer.wif.local}
   audience: ${WIF_AUDIENCE:wif-demo-validator}
   issuer-ca: ${WIF_ISSUER_CA:/trust/ca.crt}
 

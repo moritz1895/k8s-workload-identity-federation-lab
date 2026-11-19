@@ -17,7 +17,7 @@
       "enabled": true,
       "hideOnLogin": true,
       "config": {
-        "issuer": "https://issuer-web"
+        "issuer": "https://issuer.wif.local"
       }
     }
   ],

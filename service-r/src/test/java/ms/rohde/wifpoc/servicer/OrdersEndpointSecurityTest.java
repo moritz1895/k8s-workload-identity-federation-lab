@@ -168,7 +168,7 @@ class OrdersEndpointSecurityTest {
 
     @Test
     void getOrders_givenWrongIssuer_thenReturns401() throws Exception {
-        String token = sign(REALM_KEY, claims("r:orders:read").issuer("https://issuer-web").build());
+        String token = sign(REALM_KEY, claims("r:orders:read").issuer("https://issuer.wif.local").build());
 
         mvc.perform(get("/orders").header("Authorization", bearer(token)))
                 .andExpect(status().isUnauthorized());

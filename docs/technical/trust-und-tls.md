@@ -1,11 +1,13 @@
 # Vertrauen und TLS im Lab
 
 **Für wen / was lernst du hier:** Du kennst JWT/JWS/JWK, aber nicht die Feinheiten von TLS:
-Serverzertifikat vs. CA, SAN, Hostname-Verification, PKIX-Pfadbildung, Truststore, mTLS.
+Serverzertifikat vs. CA, SAN, SNI, Hostname-Verification, PKIX-Pfadbildung, Truststore.
 Diese Seite erklärt diese Begriffe kurz, zeigt dann die TLS-Vertrauensbeziehungen im
 Lab (A–C und I für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
-im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidung dahinter:
-[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
+im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidungen dahinter:
+[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI) und
+[ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) (Issuer-Pod hinter einem
+Ingress).
 
 ---
 
@@ -13,7 +15,7 @@ im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entsch
 
 ### Serverzertifikat vs. CA
 
-Ein **Serverzertifikat** identifiziert *einen* Server (z. B. `issuer-web`). Es enthält dessen
+Ein **Serverzertifikat** identifiziert *einen* Server (z. B. `issuer.wif.local`). Es enthält dessen
 öffentlichen Schlüssel und die Namen, für die es gilt.
 
 Eine **Certificate Authority (CA)** ist eine Instanz, die Zertifikate **unterschreibt**.
@@ -25,19 +27,27 @@ damit alle von ihr unterschriebenen Zertifikate. Im Lab ist das die Root-CA der 
 
 Nach dem TLS-Handshake prüft der Client: *Gilt dieses Zertifikat überhaupt für den Namen, den
 ich angesprochen habe?* Diese **Hostname-Verification** vergleicht den angefragten Hostnamen
-(z. B. `issuer-web`) mit der Liste der **Subject Alternative Names (SAN)** im Zertifikat. Der
+(z. B. `issuer.wif.local`) mit der Liste der **Subject Alternative Names (SAN)** im Zertifikat. Der
 alte `Subject`/`CN`-Eintrag wird von modernen Clients (auch Java) dafür **ignoriert**.
 
-Deshalb stellt `pki-init` das Serverzertifikat mit `subjectAltName=DNS:issuer-web` aus: ohne
-diesen SAN-Eintrag würde der Validator den Handshake mit *"No subject alternative DNS name
-matching issuer-web found"* abbrechen.
+Deshalb stellt `pki-init` das Ingress-Zertifikat mit `subjectAltName=DNS:issuer.wif.local` aus:
+ohne diesen SAN-Eintrag würde der Validator den Handshake mit *"No subject alternative DNS
+name matching issuer.wif.local found"* abbrechen.
+
+### SNI
+
+**Server Name Indication** ist eine TLS-Erweiterung: Der Client nennt schon im ersten
+Handshake-Paket den Hostnamen, den er erreichen will. Ein Server mit mehreren Zertifikaten –
+hier Traefik – wählt danach das passende aus. Mit **strict SNI** bricht Traefik den Handshake
+ab, wenn es für den genannten Namen kein Zertifikat hat, statt ein Standardzertifikat zu
+zeigen.
 
 ### PKIX-Pfadbildung / "path building"
 
 **PKIX** ist der Standard (RFC 5280), nach dem Java Zertifikatsketten validiert. Der Client
 versucht, eine **Kette** ("path") vom präsentierten Serverzertifikat bis zu einem Zertifikat
 zu bilden, dem er **vertraut** (einem Anker im Truststore). Im Lab ist die Kette
-`issuer-web-Zertifikat → Lab-Root-CA`; die Root-CA liegt im Truststore des Validators.
+`issuer.wif.local-Zertifikat → Lab-Root-CA`; die Root-CA liegt im Truststore des Validators.
 
 Findet Java keine Kette zu einem vertrauten Anker, scheitert der Handshake mit der
 charakteristischen Meldung:
@@ -63,62 +73,70 @@ Java-Klasse, die TLS-Sockets erzeugt. Welchem Truststore diese Sockets vertrauen
 maßgeschneiderte `SSLSocketFactory`, benutzt sie für ihre Verbindungen genau dieses Vertrauen
 – ohne den globalen JVM-Truststore anzufassen.
 
-### mTLS
-
-Bei **mutual TLS** weist sich nicht nur der Server, sondern auch der Client mit einem
-Zertifikat aus. Der Server prüft es gegen seine CA und kann anhand des Subjects (hier des
-`CN`) entscheiden, was der Client darf.
-
 ---
 
-## Beziehung A – bootstrap/demo/Publisher → Kubernetes-API-Server
+## Beziehung A – bootstrap/demo/Issuer-Pod → Kubernetes-API-Server
 
-**Wer:** die Container `bootstrap` und `demo` (via `kubectl`) sowie der Pod `jwks-publisher`.
-**Wohin:** `https://k3s-server:6443` bzw. im Cluster `https://kubernetes.default.svc`.
+**Wer:** die Container `bootstrap` und `demo` (via `kubectl`) sowie der Container `sync` im
+Issuer-Pod.
+**Wohin:** `https://k3s-server:6443` bzw. im Cluster
+`https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT`.
 
 **Vertrauensmaterial:** die **Cluster-CA** von k3s. `kubectl` liest sie aus der kubeconfig
-(`certificate-authority-data`), der Publisher aus
-`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`. Diese CA hat mit der internen PKI
-nichts zu tun.
+(`certificate-authority-data`), `sync` aus dem projizierten Volume
+(`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`, aus der ConfigMap
+`kube-root-ca.crt`). Diese CA hat mit der internen PKI nichts zu tun.
 
 **Der Namensdreh:** `bootstrap.sh` und `demo.sh` schreiben die Server-Adresse der kubeconfig
 per `sed` auf `https://k3s-server:6443` um. Damit der Handshake mit diesem Namen gelingt,
 läuft der API-Server mit `--tls-san=k3s-server` – der Name steht als **SAN** im
 API-Server-Zertifikat.
 
-Diese Beziehung betrifft den **Validator nicht** – er spricht nie mit dem API-Server und
-erreicht ihn über kein Netz.
+Diese Beziehung betrifft die **Relying Parties nicht** – Validator und Keycloak sprechen nie
+mit dem API-Server und erreichen ihn über kein Netz.
 
 ---
 
-## Beziehung B – Publisher → `issuer-web :8443` (mTLS)
+## Beziehung B – `ingress-lb` und Traefik: wo TLS endet
 
-**Wer:** der Pod `jwks-publisher`.
-**Wohin:** `https://issuer-web:8443` (im Pod per `hostAliases` → `172.31.7.20`).
+**Wer:** jeder Client von `https://issuer.wif.local` (Validator, Keycloak, `demo`).
+**Weg:** `ingress-lb` (`172.31.8.20:443`, Alias `issuer.wif.local` in `relying-net`) reicht
+die TCP-Verbindung unverändert an Traefiks Node-Port `172.31.7.2:30443` durch. `ingress-lb`
+sieht nur verschlüsselte Daten und hält kein Zertifikat.
 
-| Richtung | Vertrauensmaterial |
+**TLS-Endpunkt:** Traefik im Cluster. Es präsentiert für `issuer.wif.local` das Secret
+`issuer-tls` (ausgestellt von der internen CA, SAN `DNS:issuer.wif.local`) und reicht die
+Anfrage per HTTP an den Container `web` (Port 8080) weiter. Diesen letzten Abschnitt im
+Cluster schützt die NetworkPolicy `issuer-from-ingress-controller`: Nur Traefik-Pods aus
+`kube-system` erreichen Port 8080.
+
+**Strict SNI** (`manifests/01-traefik-config.yaml`, TLS-Option `default`, mindestens TLS 1.2):
+Für einen Hostnamen ohne Zertifikat scheitert schon der Handshake. Ergebnis im Lab
+(`demo.sh`, Prüfung 6):
+
+| Anfrage über `ingress-lb` | Ergebnis |
 |---|---|
-| Publisher prüft `issuer-web` | `--cacert /trust/ca.crt` (ConfigMap `internal-ca`) |
-| `issuer-web` prüft den Publisher | Client-Zertifikat `/mtls/tls.crt` (Secret `jwks-publisher-mtls`, `CN=jwks-publisher`); nginx prüft es mit `ssl_client_certificate /trust/ca.crt` und vergleicht den `CN` |
+| SNI `issuer.wif.local` | Handshake mit dem Ingress-Zertifikat |
+| SNI `other.wif.local` | kein Handshake |
+| SNI `kubernetes.default.svc` | kein Handshake – kein Weg zum API-Server |
+| SNI `issuer.wif.local`, `Host: other.wif.local` | `404` bzw. `421`, keine Route |
 
-Ergebnis im Lab (`demo.sh`, Abschnitt 6):
-
-| Client-Zertifikat | Antwort |
-|---|---|
-| keins | `400` |
-| fremde CA, `CN=jwks-publisher` | `400` |
-| interne CA, `CN=not-the-publisher` | `403` |
-| interne CA, `CN=jwks-publisher` | Upload (`201`/`204`) |
-
-Details zur nginx-Config: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#block-2--upload-8443-mtls).
+Die Issuer-Route trägt die Routing-Priorität `1000000000`; andere Namespaces dürfen weder den
+Host noch Router-Annotationen setzen
+([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer)). Traefik teilt
+sich einen Zertifikatsspeicher mit allen Ingress-Objekten: Ein fremdes Zertifikat für
+`issuer.wif.local` kann die Auswahl stören – die Echtheit nicht, denn die Relying Parties
+vertrauen nur der internen CA, wohl aber die Verfügbarkeit. Wer Traefik kontrolliert, hält das
+Serverzertifikat und entscheidet über das Routing – Traefik gehört damit zum Vertrauenspfad
+([ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
 
 ---
 
-## Beziehung C – Validator → `issuer-web :443`
+## Beziehung C – Validator → `issuer.wif.local`
 
 **Wer:** der `validator`-Container (Java, Nimbus `DefaultResourceRetriever`).
-**Wohin:** `https://issuer-web` – für OIDC-Discovery (`/.well-known/openid-configuration`) und
-den JWKS-Abruf (`/openid/v1/jwks`).
+**Wohin:** `https://issuer.wif.local` – für OIDC-Discovery (`/.well-known/openid-configuration`)
+und den JWKS-Abruf (`/openid/v1/jwks`), über `ingress-lb` (Beziehung B).
 
 **Vertrauensmaterial:** ausschließlich die PEM-Datei `/trust/ca.crt` – das Root-Zertifikat der
 internen CA aus dem Volume `ca-trust` (`WIF_ISSUER_CA=/trust/ca.crt`). Es erreicht den
@@ -127,7 +145,10 @@ oder Konfigurationsmanagement verteilt.
 
 Ergebnis: Der JWKS-Abruf läuft über **echtes TLS mit Hostname-Verification**. Er gelingt genau
 dann, wenn die Gegenstelle ein von der internen CA ausgestelltes Zertifikat für den Namen
-`issuer-web` vorzeigt. Kein `curl -k`, keine Änderung am globalen JVM-Truststore. Ein
+`issuer.wif.local` vorzeigt. Kein `curl -k`, keine Änderung am globalen JVM-Truststore. Die
+`jwks_uri` aus dem Discovery-Dokument nimmt der Validator nur auf demselben HTTPS-Origin an
+(`JwksUriPolicy`); ein anderer Host mit einem Zertifikat derselben CA wird so nie zur
+Schlüsselquelle. Ein
 Validator mit fremder CA (`validator-foreign-ca`) startet nicht.
 
 ---
@@ -147,7 +168,7 @@ stdin an curl, steht also in keiner Argumentliste. Die gemeinsame Funktion `tls_
 in `demo.sh` zeigt nach Prüfung 3 Subject und Aussteller, prüft, dass auf 8080 kein Listener
 antwortet, dass Klartext-HTTP auf 8443 mit `400` abgewiesen wird und dass curl nur mit dem
 öffentlichen CA-Bundle mit Exit-Code 60 scheitert. Dieses Serverzertifikat ist unabhängig vom
-ausgehenden Vertrauen des Validators zu `issuer-web` (Beziehung C).
+ausgehenden Vertrauen des Validators zu `issuer.wif.local` (Beziehung C).
 
 ---
 
@@ -161,7 +182,7 @@ gehört uid 1000 (`chmod 400`), weil Keycloak nicht als root läuft.
 
 | Beziehung | Wer → wohin | Vertrauensmaterial |
 |---|---|---|
-| D | Keycloak → `https://issuer-web` (Discovery + JWKS des Clusters) | `KC_TRUSTSTORE_PATHS=/trust/ca.crt`: ergänzt Keycloaks Default-Truststore um die Lab-CA; öffentliche CAs bleiben dort vertraut |
+| D | Keycloak → `https://issuer.wif.local` (Discovery + JWKS des Clusters, über `ingress-lb`) | `KC_TRUSTSTORE_PATHS=/trust/ca.crt`: ergänzt Keycloaks Default-Truststore um die Lab-CA; öffentliche CAs bleiben dort vertraut |
 | E | `service-r` → `https://keycloak:8443/realms/domain-rst` (Discovery + JWKS des Realms) | PKCS12-Truststore aus `service-r/entrypoint.sh`, enthält **nur** die Lab-CA und ist JVM-Default (`-Djavax.net.ssl.trustStore`) |
 | F | Pods `consumer`/`reader`/`stranger` → `https://keycloak:8443` (= `keycloak-gateway`), `demo` → Keycloak direkt | `--cacert /etc/internal-ca/ca.crt` aus der ConfigMap `internal-ca`, die `bootstrap` auch in `wif-demo` anlegt; im `demo`-Container `/trust/ca.crt` |
 | G | `keycloak-gateway` und `keycloak-admin` → Keycloak | `proxy_ssl_verify on` gegen `/trust/ca.crt`, `proxy_ssl_name keycloak` |
@@ -175,14 +196,14 @@ Anders als der Validator (eigene `SSLSocketFactory` nur für Nimbus) setzt `serv
 Truststore prozessweit: Der Dienst baut ausgehend nur TLS-Verbindungen zu Keycloak auf. Sein
 eigenes Serverzertifikat (Beziehung H) ist davon unabhängig.
 Alle Dienste außerhalb des Clusters sprechen damit TLS mit Zertifikaten der internen PKI
-(Beziehungen F, H, I). In Produktion kommen mTLS (z. B. Service Mesh) oder sender-gebundene
-Tokens (DPoP, mTLS-gebunden) als Option dazu.
+(Beziehungen F, H, I). In Produktion kommen mTLS (auch der Client weist sich per Zertifikat aus, z. B. über ein
+Service Mesh) oder sender-gebundene Tokens (DPoP, mTLS-gebunden) als Option dazu.
 
 ---
 
 ## Wie `JwksTrustConfig` den Truststore baut
 
-Methode `trustOnly(Path caPem)` in `JwksTrustConfig.java:76`. Schritt für Schritt:
+Methode `trustOnly(Path caPem)` in `JwksTrustConfig.java:77`. Schritt für Schritt:
 
 ```java
 // 1. PEM-Datei einlesen und in X.509-Zertifikatsobjekte umwandeln
@@ -222,7 +243,7 @@ Zertifikaten der internen CA.
 
 ### Übergabe an Nimbus
 
-`JwksTrustConfig.java:47`:
+`JwksTrustConfig.java:48`:
 
 ```java
 DefaultResourceRetriever retriever = new DefaultResourceRetriever(
@@ -234,7 +255,7 @@ DefaultResourceRetriever retriever = new DefaultResourceRetriever(
 ```
 
 Dieser `retriever` wird sowohl für die Discovery (`retrieveResource(wellKnown)`,
-`JwksTrustConfig.java:66`) als auch vom `JWKSourceBuilder` für den JWKS-Abruf verwendet. Jede
+`JwksTrustConfig.java:67`) als auch vom `JWKSourceBuilder` für den JWKS-Abruf verwendet. Jede
 HTTPS-Verbindung, die Nimbus im Validator aufbaut, nutzt damit diesen Truststore.
 
 ### Warum der 5-Argument-Konstruktor?
@@ -258,18 +279,18 @@ bzw. der Container beendet sich), im Log:
 ... PKIX path building failed
 ```
 
-**Ursache:** Das Serverzertifikat, das `issuer-web` vorzeigt, stammt nicht von der CA in
+**Ursache:** Das Serverzertifikat, das der Ingress für `issuer.wif.local` vorzeigt, stammt nicht von der CA in
 `WIF_ISSUER_CA`. Genau das zeigt der Negativtest `validator-foreign-ca`
 (`WIF_ISSUER_CA=/pki-demo/foreign-ca.crt`).
 
 | Ursache | Behebung |
 |---|---|
 | `WIF_ISSUER_CA` zeigt auf eine andere Datei als `/trust/ca.crt` | Wert im Compose-File prüfen: `docker compose exec validator printenv WIF_ISSUER_CA` |
-| Einzelne PKI-Volumes gelöscht (z. B. nur `pki-ca`), `pki-init` hat eine neue CA erzeugt, `issuer-web` läuft noch mit dem alten Zertifikat | `docker compose up -d --force-recreate issuer-web validator`, im Zweifel `docker compose down -v` und neu starten |
-| Falscher Hostname im SAN (Meldung: *No subject alternative DNS name matching …*) | `WIF_ISSUER` muss `https://issuer-web` sein; das Zertifikat gilt nur für `DNS:issuer-web` |
+| Einzelne PKI-Volumes gelöscht (z. B. nur `pki-ca`), `pki-init` hat eine neue CA erzeugt, im Secret `issuer-tls` steht noch das alte Zertifikat | `docker compose up -d` (`bootstrap` schreibt das Secret neu), dann `docker compose up -d --force-recreate validator keycloak`; im Zweifel `docker compose down -v` und neu starten |
+| Falscher Hostname im SAN (Meldung: *No subject alternative DNS name matching …*) | `WIF_ISSUER` muss `https://issuer.wif.local` sein; das Zertifikat gilt nur für `DNS:issuer.wif.local` |
 
 Zeigt `WIF_ISSUER` auf einen anderen Host (etwa den API-Server), scheitert die Discovery
-schon vorher: Der Validator erreicht außer `issuer-web` nichts auf der Cluster-Seite. Dann
+schon vorher: Der Validator erreicht vom Cluster nur `ingress-lb :443`. Dann
 `cp .env.example .env` und `docker compose up -d --force-recreate validator`.
 
 ---
@@ -278,18 +299,20 @@ schon vorher: Der Validator erreicht außer `issuer-web` nichts auf der Cluster-
 
 Nicht verwechseln: Es gibt hier **zwei** voneinander unabhängige Vertrauensketten:
 
-1. **TLS-Transportvertrauen** – "rede ich mit dem echten `issuer-web`?" → über
+1. **TLS-Transportvertrauen** – "rede ich mit dem echten `issuer.wif.local`?" → über
    `/trust/ca.crt` und den Truststore mit der internen CA (Beziehung C).
 2. **Token-Signaturvertrauen** – "ist dieses JWT mit einem Cluster-Schlüssel signiert?" → über
-   die öffentlichen Schlüssel im JWKS, die der Publisher aus dem Cluster veröffentlicht. Das
+   die öffentlichen Schlüssel im JWKS, das der Issuer-Pod vom API-Server übernimmt. Das
    sind die ServiceAccount-Signaturschlüssel aus `sa-keys` (RSA, `RS256`). Siehe
    [validator.md](validator.md).
 
 Das TLS-Zertifikat schützt nur den Transportweg der Metadaten. Dass im JWKS die richtigen
-Schlüssel stehen, sichert die Schreibseite (Beziehung B): Nur der Publisher mit seinem
-Zertifikat darf es ersetzen. `issuer-web` prüft den Inhalt nicht, und das JWKS ist nicht
-zusätzlich signiert ([ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md),
-Kompromisse).
+Schlüssel stehen, sichert der Cluster selbst: Es gibt keinen Schreibweg von außen, `sync`
+liest nur beim API-Server und übernimmt nur plausible Stände, und der Namespace `wif-issuer`
+ist durch RBAC, Admission Policies und NetworkPolicies geschützt
+([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer)). Wer dort oder an
+Traefik schreiben darf, kann trotzdem ausliefern, was er will; das JWKS ist nicht zusätzlich
+signiert ([ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
 
 ---
 
@@ -297,8 +320,8 @@ Kompromisse).
 
 - [validator.md](validator.md) – die vollständige Nimbus-Validierungskette und die Endpunkte
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak und `service-r`
-- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Publisher und nginx-Config
-  im Detail
+- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Issuer-Pod, Ingress und
+  Härtung im Detail
 - [architecture.md](architecture.md) – Volumes und Netze
 - [build-und-betrieb.md](build-und-betrieb.md) – weitere häufige Fehlerbilder
 - [../kubernetes-primer.md](../kubernetes-primer.md) – Cluster-CA, kubeconfig

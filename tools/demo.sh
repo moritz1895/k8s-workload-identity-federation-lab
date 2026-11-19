@@ -3,17 +3,22 @@
 # Runs inside the `demo` container:
 #   docker compose run --rm demo                 all base checks
 #   docker compose run --rm demo authz           authorization server (keycloak) + service R checks
-#   docker compose run --rm demo pre-rotation    mint + store a token before a key rotation
-#   docker compose run --rm demo post-rotation   check new and pre-rotation tokens after it
-# tools/run-all-checks.sh drives the full sequence including the key rotation.
+#   docker compose run --rm demo hardening       protection of the issuer namespace
+#   docker compose run --rm demo resilience      issuer pod without API server / with an implausible state
+#   docker compose run --rm demo pre-rotation    mint + store a token before a key change
+#   docker compose run --rm demo staged          after phase 1 (sa-keys stage + API server restart)
+#   docker compose run --rm demo post-rotation   after phase 2 (sa-keys activate + API server restart)
+# tools/run-all-checks.sh drives the full sequence including the key change.
 set -euo pipefail
 
 PHASE="${1:-all}"
 VALIDATOR_URL="${VALIDATOR_URL:-https://validator:8443}"
 AUD="${WIF_AUDIENCE:-wif-demo-validator}"
 NS="wif-demo"
-ISSUER=https://issuer-web
-UPLOAD_ADDR=172.31.7.20
+ISSUER_NS="wif-issuer"
+ISSUER_HOST=issuer.wif.local
+ISSUER=https://$ISSUER_HOST
+INGRESS_LB_ADDR=172.31.8.20
 CA=/trust/ca.crt
 STATE=/state
 REALM_ISSUER="${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}"
@@ -84,20 +89,33 @@ tls_only_checks() {
         || fail "$label: expected curl exit 60 without the internal CA, got $untrusted"
 }
 
-# PUT to the upload listener; extra curl args select the client identity.
-upload_status() {
-    curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-        --resolve "issuer-web:8443:$UPLOAD_ADDR" --cacert "$CA" \
-        -T /tmp/fake-jwks.json "$@" https://issuer-web:8443/openid/v1/jwks || true
+# Request to the ingress through ingress-lb; extra curl args shape the request.
+# Echoes the HTTP status, or 000 when no HTTP exchange happened (e.g. TLS refused).
+ingress_status() {
+    curl -s -o /dev/null -w '%{http_code}' --max-time 5 --cacert "$CA" "$@" || true
+}
+
+# $1 = label -> fails unless the issuer serves a non-empty JWKS
+expect_jwks_served() {
+    [ "$(curl -fsS --cacert "$CA" "$ISSUER/openid/v1/jwks" | jq '.keys | length')" -gt 0 ] \
+        && pass "$1" || fail "$1: JWKS missing or empty"
+}
+
+issuer_pods() { kubectl -n "$ISSUER_NS" get pods -l app=issuer --sort-by=.metadata.creationTimestamp -o name; }
+
+ready_issuer_pods() {
+    kubectl -n "$ISSUER_NS" get pods -l app=issuer \
+        -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[?(@.name=="web")].ready}{"\n"}{end}' \
+        | awk '$2 == "true" { print $1 }'
 }
 
 base_checks() {
-    section "0. OIDC discovery served by the stand-alone issuer endpoint (internal CA)"
+    section "0. OIDC discovery served by the in-cluster issuer pod through the ingress (internal CA)"
     echo "GET $ISSUER/.well-known/openid-configuration"
     curl -fsS --cacert "$CA" "$ISSUER/.well-known/openid-configuration" \
         | jq '{issuer, jwks_uri, id_token_signing_alg_values_supported}'
 
-    section "1. JWKS published by the in-cluster jwks-publisher"
+    section "1. JWKS served by the issuer pod (mirrored from the API server)"
     curl -fsS --cacert "$CA" "$ISSUER/openid/v1/jwks" | jq '.keys[] | {kid, kty, alg, use}'
 
     section "2. mint an audience-bound token and decode its claims"
@@ -125,24 +143,27 @@ base_checks() {
     section "5. negative: tampered signature  ->  rejected"
     expect_status 401 "$(whoami_status "$(tamper_signature "$GOOD")")" "tampered token rejected"
 
-    section "6. negative: JWKS upload without a valid publisher certificate  ->  rejected"
+    section "6. the issuer endpoint is read-only and serves only its own host"
     echo '{"keys":[]}' > /tmp/fake-jwks.json
-    echo "PUT https://issuer-web:8443/openid/v1/jwks  without client certificate"
-    expect_status 400 "$(upload_status)" "upload without client certificate rejected"
-    echo "PUT ... with a client certificate from a foreign CA"
-    expect_status 400 "$(upload_status --cert /pki-demo/foreign-publisher.crt --key /pki-demo/foreign-publisher.key)" \
-        "upload with foreign-CA certificate rejected"
-    echo "PUT ... with an internal-CA certificate for CN=not-the-publisher"
-    expect_status 403 "$(upload_status --cert /pki-demo/wrong-cn.crt --key /pki-demo/wrong-cn.key)" \
-        "upload with wrong CN rejected"
-    echo "PUT ... with an internal-CA certificate hiding CN=jwks-publisher in the O field"
-    expect_status 403 "$(upload_status --cert /pki-demo/smuggled-cn.crt --key /pki-demo/smuggled-cn.key)" \
-        "upload with smuggled CN rejected"
-    echo "PUT $ISSUER/openid/v1/jwks  (public read listener)"
-    expect_status 403 "$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA" -T /tmp/fake-jwks.json "$ISSUER/openid/v1/jwks")" \
-        "write on the public listener rejected"
-    [ "$(curl -fsS --cacert "$CA" "$ISSUER/openid/v1/jwks" | jq '.keys | length')" -gt 0 ] \
-        && pass "published JWKS untouched" || fail "published JWKS was overwritten"
+    for method in PUT POST DELETE; do
+        echo "$method $ISSUER/openid/v1/jwks"
+        expect_status 403 "$(ingress_status -X "$method" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/fake-jwks.json "$ISSUER/openid/v1/jwks")" "$method on the JWKS rejected"
+    done
+    echo "GET $ISSUER/  (a path the ingress does not route)"
+    expect_status 404 "$(ingress_status "$ISSUER/")" "unrouted path not served"
+    echo "GET https://other.wif.local/openid/v1/jwks  through ingress-lb (foreign host, SNI other.wif.local)"
+    expect_status 000 "$(ingress_status --resolve "other.wif.local:443:$INGRESS_LB_ADDR" -k \
+        https://other.wif.local/openid/v1/jwks)" "TLS handshake for a foreign host refused (strict SNI)"
+    echo "GET https://kubernetes.default.svc/version  through ingress-lb (API server name)"
+    expect_status 000 "$(ingress_status --resolve "kubernetes.default.svc:443:$INGRESS_LB_ADDR" -k \
+        https://kubernetes.default.svc/version)" "no way to the API server through the ingress"
+    echo "GET $ISSUER/openid/v1/jwks  with SNI $ISSUER_HOST but Host: other.wif.local"
+    MISROUTED=$(ingress_status -H 'Host: other.wif.local' "$ISSUER/openid/v1/jwks")
+    echo "HTTP $MISROUTED"
+    [ "$MISROUTED" = "404" ] || [ "$MISROUTED" = "421" ] \
+        && pass "foreign Host header not routed ($MISROUTED)" || fail "foreign Host header got $MISROUTED"
+    expect_jwks_served "published JWKS untouched"
 
     if [ "${DEMO_EXPIRY:-0}" = "1" ]; then
         section "7. negative: genuine expiry  (waits ~10 min — TokenRequest minimum TTL)"
@@ -397,51 +418,363 @@ authz_checks() {
     fi
 }
 
+# kubectl dry-run against the API server, so admission policies are evaluated but
+# nothing is stored. $1 = what, manifest on stdin -> fails unless denied
+expect_denied() {
+    local output
+    if output=$(kubectl apply --dry-run=server -f - 2>&1); then
+        echo "$output"
+        fail "$1: admitted"
+    fi
+    echo "$output" | sed 's/^/  /'
+    grep -q "ValidatingAdmissionPolicy" <<< "$output" || fail "$1: rejected, but not by an admission policy"
+    pass "$1: denied"
+}
+
+expect_admitted() {
+    local output
+    output=$(kubectl apply --dry-run=server -f - 2>&1) || { echo "$output"; fail "$1: denied"; }
+    pass "$1: admitted"
+}
+
+# $1 = namespace, $2 = host (empty: rule without a host), $3 = optional annotations
+# (YAML flow map), $4 = optional path type, $5 = optional path
+ingress_manifest() {
+    local host_line=""
+    [ -n "$2" ] && host_line="host: \"$2\""
+    cat <<MANIFEST
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: probe
+  namespace: $1
+  annotations: ${3:-{\}}
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: "${5:-/openid/v1/jwks}"
+            pathType: ${4:-Exact}
+            backend:
+              service:
+                name: probe
+                port:
+                  number: 80
+      $host_line
+MANIFEST
+}
+
+default_backend_manifest() {
+    cat <<MANIFEST
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: probe
+  namespace: $NS
+spec:
+  ingressClassName: traefik
+  defaultBackend:
+    service:
+      name: probe
+      port:
+        number: 80
+MANIFEST
+}
+
+# $1 = image
+issuer_deployment_manifest() {
+    cat <<MANIFEST
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe
+  namespace: $ISSUER_NS
+spec:
+  selector:
+    matchLabels: {app: probe}
+  template:
+    metadata:
+      labels: {app: probe}
+    spec:
+      containers:
+        - name: probe
+          image: $1
+MANIFEST
+}
+
+# $1 = ServiceAccount (namespace:name), $2.. = kubectl auth can-i arguments -> echoes yes/no
+can_i() {
+    local account=$1
+    shift
+    kubectl auth can-i --as="system:serviceaccount:$account" "$@" 2> /dev/null || true
+}
+
+hardening_checks() {
+    section "H1. admission: the issuer host is reserved for $ISSUER_NS"
+    local long_regex
+    long_regex="/(openid/v1/jwks|$(printf 'a%.0s' $(seq 1 120)))"
+    ingress_manifest "$NS" "$ISSUER_HOST" | expect_denied "Ingress for $ISSUER_HOST in $NS"
+    ingress_manifest "$NS" "*.wif.local" | expect_denied "wildcard Ingress *.wif.local in $NS"
+    ingress_manifest "$NS" "*.local" | expect_denied "wildcard Ingress *.local in $NS"
+    ingress_manifest "$NS" "" | expect_denied "Ingress rule without a host in $NS (matches every host)"
+    ingress_manifest "$NS" "" '{traefik.ingress.kubernetes.io/router.pathmatcher: PathRegexp}' \
+        ImplementationSpecific "$long_regex" \
+        | expect_denied "host-less Ingress with a long path regex in $NS (would outrank by rule length)"
+    ingress_manifest "$NS" "other.wif.local" '{traefik.ingress.kubernetes.io/router.priority: "100000"}' \
+        | expect_denied "Ingress with a raised routing priority in $NS"
+    ingress_manifest "$NS" "other.wif.local" '{traefik.ingress.kubernetes.io/router.pathmatcher: PathRegexp}' \
+        | expect_denied "Ingress with a Traefik path matcher annotation in $NS"
+    default_backend_manifest | expect_denied "Ingress with a default backend in $NS"
+    ingress_manifest "$NS" "other.wif.local" | expect_admitted "Ingress for another host in $NS"
+    [ "$(kubectl -n "$ISSUER_NS" get ingress issuer \
+        -o jsonpath='{.metadata.annotations.traefik\.ingress\.kubernetes\.io/router\.priority}')" = "1000000000" ] \
+        && pass "the issuer route carries the top routing priority" || fail "the issuer route has no top priority"
+    TRAEFIK_ARGS=$(kubectl -n kube-system get deployment traefik -o jsonpath='{.spec.template.spec.containers[0].args}')
+    if grep -qE 'providers.kubernetescrd|providers.kubernetesgateway' <<< "$TRAEFIK_ARGS"; then
+        fail "Traefik still reads its own route CRDs or the Gateway API"
+    fi
+    pass "Traefik reads neither its own route CRDs nor the Gateway API"
+    grep -q 'providers.kubernetesingress' <<< "$TRAEFIK_ARGS" \
+        && pass "Traefik reads routes from Ingress objects" || fail "Traefik's Ingress provider is off"
+
+    section "H2. admission: images in $ISSUER_NS only by digest"
+    issuer_deployment_manifest "nginxinc/nginx-unprivileged:1.29-alpine" \
+        | expect_denied "Deployment with a tag-only image in $ISSUER_NS"
+    DIGEST_IMAGE=$(kubectl -n "$ISSUER_NS" get deployment issuer \
+        -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}')
+    issuer_deployment_manifest "$DIGEST_IMAGE" | expect_admitted "Deployment with $DIGEST_IMAGE in $ISSUER_NS"
+
+    section "H3. RBAC: nobody but cluster admins writes to $ISSUER_NS"
+    local account verb resource answer
+    for account in "$NS:consumer" "$ISSUER_NS:issuer"; do
+        for verb_resource in "create configmaps" "patch deployments" "create pods" "create ingresses" "get secrets"; do
+            read -r verb resource <<< "$verb_resource"
+            answer=$(can_i "$account" "$verb" "$resource" -n "$ISSUER_NS")
+            printf '  %-20s %-18s -n %s: %s\n' "$account" "$verb_resource" "$ISSUER_NS" "$answer"
+            [ "$answer" = "no" ] || fail "$account may $verb_resource in $ISSUER_NS"
+        done
+    done
+    pass "neither a workload nor the issuer's own ServiceAccount may write or read secrets in $ISSUER_NS"
+    [ "$(can_i "$ISSUER_NS:issuer" get /openid/v1/jwks)" = "yes" ] \
+        && pass "the issuer's ServiceAccount may read the JWKS (issuer-discovery role)" \
+        || fail "the issuer's ServiceAccount cannot read the JWKS"
+
+    section "H4. NetworkPolicy: in only from the ingress controller, out only to the API server"
+    local consumer issuer_pod
+    consumer=$(pod_of consumer)
+    echo "consumer -> http://issuer.$ISSUER_NS.svc/openid/v1/jwks"
+    if kubectl -n "$NS" exec "$consumer" -- curl -s -o /dev/null --max-time 4 \
+        "http://issuer.$ISSUER_NS.svc/openid/v1/jwks" 2> /dev/null; then
+        fail "a workload reaches the issuer pod directly"
+    fi
+    pass "workloads cannot reach the issuer pod"
+    issuer_pod=$(issuer_pods | tail -n 1)
+    issuer_pod=${issuer_pod#pod/}
+    echo "$issuer_pod (sync) -> validator at 172.31.9.10:8443"
+    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c sync -- curl -sk -o /dev/null --max-time 4 \
+        https://172.31.9.10:8443/healthz 2> /dev/null; then
+        fail "the issuer pod reaches the validator"
+    fi
+    pass "the issuer pod reaches nothing but the API server"
+    echo "$issuer_pod (sync) -> API server"
+    kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c sync -- sh -c \
+        'curl -fsS -o /dev/null --max-time 5 --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+            -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+            "https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT/openid/v1/jwks"' \
+        && pass "the issuer pod reaches the API server" || fail "the issuer pod cannot reach the API server"
+
+    section "H5. pod hardening"
+    kubectl -n "$ISSUER_NS" get pod "$issuer_pod" -o json | jq -e '
+        .spec.securityContext.runAsNonRoot == true
+        and ([.spec.containers[].securityContext
+              | .readOnlyRootFilesystem == true
+                and .allowPrivilegeEscalation == false
+                and .capabilities.drop == ["ALL"]
+                and ((.capabilities.add // []) | length) == 0] | all)' > /dev/null \
+        && pass "non-root, read-only root filesystem, no capabilities" || fail "issuer pod is not hardened"
+    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c web -- touch /probe 2> /dev/null; then
+        fail "web container can write its root filesystem"
+    fi
+    pass "web container cannot write its root filesystem"
+    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c web -- \
+        ls /var/run/secrets/kubernetes.io/serviceaccount > /dev/null 2>&1; then
+        fail "web container holds a ServiceAccount token"
+    fi
+    pass "the web container, which faces the ingress, holds no ServiceAccount token"
+}
+
+# $1 = pod, $2 = pattern, $3 = seconds, $4 = optional RFC 3339 time: only log lines
+# after it count -> fails unless the sync log shows the pattern
+await_sync_log() {
+    local i since=()
+    [ -n "${4:-}" ] && since=(--since-time="$4")
+    for i in $(seq 1 "$3"); do
+        if kubectl -n "$ISSUER_NS" logs "$1" -c sync "${since[@]}" 2> /dev/null | grep -q "$2"; then
+            kubectl -n "$ISSUER_NS" logs "$1" -c sync "${since[@]}" | grep "$2" | tail -n 1 | sed "s/^/  $1: /"
+            return 0
+        fi
+        sleep 1
+    done
+    fail "no '$2' in the sync log of $1 within $3 s"
+}
+
+API_EGRESS='[{"to":[{"ipBlock":{"cidr":"172.31.7.2/32"}}],"ports":[{"port":6443}]}]'
+
+set_api_egress() {
+    kubectl -n "$ISSUER_NS" patch networkpolicy issuer-to-api-server --type=json \
+        -p "[{\"op\":\"replace\",\"path\":\"/spec/egress\",\"value\":$1}]" > /dev/null
+}
+
+restore_issuer() {
+    set_api_egress "$API_EGRESS"
+    if kubectl -n "$ISSUER_NS" get deployment issuer -o jsonpath='{.spec.template.spec.containers[0].env}' \
+        | grep -q not-this-cluster; then
+        kubectl -n "$ISSUER_NS" rollout undo deployment/issuer > /dev/null
+    fi
+    kubectl -n "$ISSUER_NS" rollout status deployment/issuer --timeout=120s > /dev/null
+}
+
+resilience_checks() {
+    trap restore_issuer EXIT
+    local kids_before pod new_pod i cut_at
+    kids_before=$(published_kids)
+
+    section "R1. API server unreachable: the issuer pods keep serving the last good state"
+    echo "cutting the issuer pods' path to the API server (NetworkPolicy egress := none)"
+    cut_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    set_api_egress '[]'
+    for pod in $(issuer_pods); do
+        await_sync_log "${pod#pod/}" "reading from the API server failed" 60 "$cut_at"
+    done
+    [ "$(published_kids)" = "$kids_before" ] && pass "the JWKS is served unchanged" \
+        || fail "the served JWKS changed while the API server was unreachable"
+    [ "$(ready_issuer_pods | wc -l)" = "2" ] && pass "both issuer pods stay ready" \
+        || fail "issuer pods lost readiness"
+    echo "restoring the path to the API server"
+    set_api_egress "$API_EGRESS"
+
+    section "R2. implausible state: a new pod never becomes ready, the others keep serving"
+    echo "rolling out a pod that expects another issuer, so the API server's state is implausible to it"
+    kubectl -n "$ISSUER_NS" set env deployment/issuer -c sync EXPECTED_ISSUER=https://not-this-cluster
+    for i in $(seq 1 60); do
+        [ "$(issuer_pods | wc -l)" -ge 3 ] && break
+        sleep 1
+    done
+    new_pod=$(issuer_pods | tail -n 1)
+    new_pod=${new_pod#pod/}
+    echo "new pod: $new_pod"
+    await_sync_log "$new_pod" "REJECTED state" 60
+    sleep 10
+    if ready_issuer_pods | grep -qx "$new_pod"; then
+        fail "a pod without a plausible state became ready"
+    fi
+    pass "the new pod is not ready (no plausible state yet)"
+    [ "$(ready_issuer_pods | wc -l)" = "2" ] && pass "the two previous pods keep serving" \
+        || fail "previous issuer pods lost readiness"
+    [ "$(published_kids)" = "$kids_before" ] && pass "the JWKS is served unchanged" \
+        || fail "the served JWKS changed during the rollout"
+    echo "rolling back"
+    kubectl -n "$ISSUER_NS" rollout undo deployment/issuer
+    kubectl -n "$ISSUER_NS" rollout status deployment/issuer --timeout=120s
+    trap - EXIT
+    restore_issuer
+    expect_jwks_served "the issuer serves the JWKS after the rollback"
+}
+
+# $1 = seconds -> waits until the issuer answers through the ingress. In the lab an
+# API server restart restarts the whole node, and with it the issuer pods.
+await_issuer() {
+    local i
+    for i in $(seq 1 "$1"); do
+        curl -fsS -o /dev/null --max-time 3 --cacert "$CA" "$ISSUER/openid/v1/jwks" 2> /dev/null && return 0
+        sleep 1
+    done
+    fail "issuer not served within $1 s"
+}
+
+# $1 = kid -> fails unless every issuer pod logged the kid's appearance
+expect_kid_logged() {
+    local pod
+    for pod in $(issuer_pods); do
+        await_sync_log "${pod#pod/}" "WARNING kid appeared: $1" 60
+    done
+    pass "every issuer pod logged the new kid $1"
+}
+
 pre_rotation() {
-    section "rotation 1/2: token and published keys before the rotation"
+    section "key change 0/2: token and published keys before the change"
     kubectl -n "$NS" create token consumer --audience "$AUD" --duration 1h > "$STATE/pre-rotation-token"
     published_kids > "$STATE/pre-rotation-kids"
+    rm -f "$STATE/staged-kid"
     echo "published kids:"; sed 's/^/  /' "$STATE/pre-rotation-kids"
     echo "token kid: $(kid_of "$(cat "$STATE/pre-rotation-token")")"
     expect_status 200 "$(whoami_status "$(cat "$STATE/pre-rotation-token")")" "pre-rotation token accepted"
 }
 
-post_rotation() {
-    section "rotation 2/2: waiting for the publisher to push the rotated JWKS"
+staged_phase() {
+    section "key change 1/2: the staged key is published ahead, it does not sign yet"
     [ -s "$STATE/pre-rotation-token" ] || fail "run the pre-rotation phase first"
-    local new_kids=""
-    for i in $(seq 1 24); do
-        new_kids=$(published_kids | comm -13 "$STATE/pre-rotation-kids" - || true)
-        [ -n "$new_kids" ] && break
-        printf '  t+%3ds  no new kid published yet\n' "$((i * 5))"
+    local staged_kid="" i token assertion
+    for i in $(seq 1 36); do
+        staged_kid=$(published_kids 2> /dev/null | comm -13 "$STATE/pre-rotation-kids" - || true)
+        [ -n "$staged_kid" ] && break
+        printf '  t+%3ds  staged kid not served yet\n' "$((i * 5))"
         sleep 5
     done
-    [ -n "$new_kids" ] || fail "no new kid was published within 120s"
+    [ -n "$staged_kid" ] || fail "the staged kid was not served within 180s"
+    echo "$staged_kid" > "$STATE/staged-kid"
     echo "published kids now:"; published_kids | sed 's/^/  /'
-    pass "new kid published: $new_kids"
+    pass "staged kid served: $staged_kid"
+    expect_kid_logged "$staged_kid"
 
-    NEW=$(kubectl -n "$NS" create token consumer --audience "$AUD" --duration 10m)
-    NEW_KID=$(kid_of "$NEW")
-    echo "new token kid: $NEW_KID"
-    grep -qx "$NEW_KID" <<< "$new_kids" || fail "new token is not signed with the rotated key"
-    expect_status 200 "$(whoami_status "$NEW")" "token signed with the rotated key accepted"
+    token=$(kubectl -n "$NS" create token consumer --audience "$AUD" --duration 10m)
+    echo "new token kid: $(kid_of "$token")"
+    grep -qx "$(kid_of "$token")" "$STATE/pre-rotation-kids" \
+        && pass "the API server still signs with the current key" \
+        || fail "the API server signs with the staged key already"
+    expect_status 200 "$(whoami_status "$token")" "token accepted by the validator"
+    assertion=$(kubectl -n "$NS" create token consumer --audience "$REALM_ISSUER" --duration 10m)
+    expect_status 200 "$(direct_token_request "$assertion" r:orders:read)" "client assertion accepted by the realm"
+}
 
+post_rotation() {
+    section "key change 2/2: the staged key signs — the first pass with it is accepted"
+    [ -s "$STATE/staged-kid" ] || fail "run the staged phase first"
+    local staged_kid rotated new
+    staged_kid=$(cat "$STATE/staged-kid")
+    await_issuer 180
+
+    rotated=$(kubectl -n "$NS" create token consumer --audience "$REALM_ISSUER" --duration 10m)
+    echo "client assertion kid: $(kid_of "$rotated")"
+    [ "$(kid_of "$rotated")" = "$staged_kid" ] || fail "the API server does not sign with the staged key"
+    expect_status 200 "$(direct_token_request "$rotated" r:orders:read)" \
+        "first assertion with the new key accepted by the realm, without retry"
+
+    new=$(kubectl -n "$NS" create token consumer --audience "$AUD" --duration 10m)
+    echo "new token kid: $(kid_of "$new")"
+    expect_status 200 "$(whoami_status "$new")" "first token with the new key accepted by the validator, without retry"
     expect_status 200 "$(whoami_status "$(cat "$STATE/pre-rotation-token")")" \
         "pre-rotation token still accepted (previous key kept in the JWKS)"
 
-    section "rotation: the realm accepts a client assertion signed with the rotated key"
-    ROTATED=$(kubectl -n "$NS" create token consumer --audience "$REALM_ISSUER" --duration 10m)
-    echo "client assertion kid: $(kid_of "$ROTATED")"
-    expect_status 200 "$(direct_token_request "$ROTATED" r:orders:read)" \
-        "access token issued for an assertion signed with the rotated key"
+    echo "published kids now:"; published_kids | sed 's/^/  /'
+    if published_kids | grep -qx "$staged_kid" && published_kids | grep -qxf "$STATE/pre-rotation-kids" \
+        && [ "$(published_kids | wc -l)" = "2" ]; then
+        pass "the JWKS holds exactly the new and the previous key (no other key, e.g. k3s's own)"
+    else
+        fail "unexpected key set after the change"
+    fi
 }
 
 case "$PHASE" in
     all)           base_checks ;;
     authz)         authz_checks ;;
+    hardening)     hardening_checks ;;
+    resilience)    resilience_checks ;;
     pre-rotation)  pre_rotation ;;
+    staged)        staged_phase ;;
     post-rotation) post_rotation ;;
-    *)             fail "unknown phase '$PHASE' (all|authz|pre-rotation|post-rotation)" ;;
+    *)             fail "unknown phase '$PHASE' (all|authz|hardening|resilience|pre-rotation|staged|post-rotation)" ;;
 esac
 
 section "result"

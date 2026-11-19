@@ -1,7 +1,7 @@
 # ADR 0003: Getrennte Vertrauensbereiche – Publisher im Cluster, Upload per mTLS, interne PKI
 
 **Datum:** 2026-11-17
-**Status:** Angenommen (ergänzt [ADR 0002](0002-eigenstaendiger-issuer-endpoint.md))
+**Status:** Angenommen (ergänzt [ADR 0002](0002-eigenstaendiger-issuer-endpoint.md)); Veröffentlichungsweg (Push per mTLS, `issuer-web`) abgelöst durch [ADR 0005](0005-issuer-pod-im-cluster-pull-ueber-ingress.md)
 
 ## Für wen ist das / was lernst du hier
 
