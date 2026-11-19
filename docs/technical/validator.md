@@ -10,7 +10,7 @@ HTTP-Endpunkte mit Beispielen und die Testfälle.
 
 ## Überblick
 
-Der Validator ist ein bewusst kleiner Spring-Boot-4-Dienst (Java 25, ~6 Klassen, flaches
+Der Validator ist ein bewusst kleiner Spring-Boot-4-Dienst (Java 25, ~7 Klassen, flaches
 Paket `ms.rohde.wifpoc`). Er nimmt ein `Authorization: Bearer <JWT>` entgegen und prüft das
 Token **vollständig offline**:
 
@@ -21,10 +21,12 @@ Token **vollständig offline**:
 
 Er ruft dafür **nie** den Kubernetes-API-Server (kein `TokenReview`) und erreicht ihn auch
 über kein Netz. Die einzige Netzwerkverbindung nach außen ist die OIDC-Discovery + der
-JWKS-Abruf gegen `issuer-web` (`relying-net`), beim Start und danach zum Cache-Refresh.
-Nach einer Schlüsselrotation nimmt er Tokens mit der neuen `kid` an, sobald der Publisher das
-neue JWKS veröffentlicht hat; Tokens mit der vorherigen `kid` bleiben gültig, solange deren
-Schlüssel im JWKS steht (geprüft mit `demo post-rotation`).
+JWKS-Abruf gegen `https://issuer.wif.local` – den Ingress des Issuer-Pods im Cluster, den
+der Validator in `relying-net` über `ingress-lb` erreicht –, beim Start und danach zum
+Cache-Refresh. Beim Schlüsselwechsel steht die neue `kid` im JWKS, bevor der API-Server mit
+ihr signiert; das erste Token mit der neuen `kid` wird ohne Wiederholung angenommen. Tokens
+mit der vorherigen `kid` bleiben gültig, solange deren Schlüssel im JWKS steht (geprüft mit
+`demo staged` und `demo post-rotation`).
 
 **Bibliotheken:** `nimbus-jose-jwt` 10.9.1 (JOSE/JWT-Verarbeitung), Spring Boot Web,
 Log4j2 statt Logback, JSpecify für Null-Annotationen. Details in
@@ -42,13 +44,13 @@ Konfigurationswerte (aus `application.yaml`, Umgebungsvariablen, …) typsicher 
 bindet. `prefix = "wif"` heißt: `wif.issuer` landet in `issuer`, `wif.audience` in `audience`,
 `wif.issuer-ca` (Kebab-Case) in `issuerCa`. Aktiviert wird die Bindung durch
 `@EnableConfigurationProperties(WifProperties.class)` auf `JwksTrustConfig`
-(`JwksTrustConfig.java:34`).
+(`JwksTrustConfig.java:35`).
 
 Werte-Kette in `application.yaml:1`:
 
 ```yaml
 wif:
-  issuer:    ${WIF_ISSUER:https://issuer-web}
+  issuer:    ${WIF_ISSUER:https://issuer.wif.local}
   audience:  ${WIF_AUDIENCE:wif-demo-validator}
   issuer-ca: ${WIF_ISSUER_CA:/trust/ca.crt}
 ```
@@ -57,9 +59,9 @@ wif:
 
 | Env-Variable | Property | Java-Feld | Default | Bedeutung |
 |---|---|---|---|---|
-| `WIF_ISSUER` | `wif.issuer` | `issuer` (String) | `https://issuer-web` | Exakter Sollwert des `iss`-Claims. Zugleich die Basis-URL für die OIDC-Discovery (`issuer + "/.well-known/openid-configuration"`). |
+| `WIF_ISSUER` | `wif.issuer` | `issuer` (String) | `https://issuer.wif.local` | Exakter Sollwert des `iss`-Claims. Zugleich die Basis-URL für die OIDC-Discovery (`issuer + "/.well-known/openid-configuration"`). |
 | `WIF_AUDIENCE` | `wif.audience` | `audience` (String) | `wif-demo-validator` | Wert, der in `aud` enthalten sein muss. |
-| `WIF_ISSUER_CA` | `wif.issuer-ca` | `issuerCa` (`java.nio.file.Path`) | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, dem der Validator für die HTTPS-Verbindung zu `issuer-web` – und *nur* dafür – vertraut. |
+| `WIF_ISSUER_CA` | `wif.issuer-ca` | `issuerCa` (`java.nio.file.Path`) | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, dem der Validator für die HTTPS-Verbindung zu `issuer.wif.local` – und *nur* dafür – vertraut. |
 | `SERVER_PORT` / `server.port` | – | – | `8443` | HTTPS-Port des Dienstes (`application.yaml:7`); einen HTTP-Listener gibt es nicht. |
 | `VALIDATOR_TLS_DIR` | `spring.ssl.bundle.pem.validator.keystore.*` | – | `/tls` | Verzeichnis mit `tls.crt` / `tls.key` des HTTPS-Listeners (`application.yaml:18`). |
 
@@ -77,16 +79,16 @@ Modus 400). Der Container läuft als `USER 10001`, `EXPOSE 8443`; in Compose
 `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`. Pods rufen
 `https://validator.wif.local:8443` mit `--cacert /etc/internal-ca/ca.crt` auf, `demo`
 `https://validator:8443` mit `--cacert /trust/ca.crt`. Dieses Serverzertifikat ist unabhängig
-vom ausgehenden Vertrauen zu `issuer-web` (`WIF_ISSUER_CA`).
+vom ausgehenden Vertrauen zu `issuer.wif.local` (`WIF_ISSUER_CA`).
 
 Feste Werte im Code (keine Konfiguration):
 
 | Konstante | Wert | Ort |
 |---|---|---|
-| Verbindungs-/Lese-Timeout für Discovery + JWKS | 2000 ms | `JwksTrustConfig.java:39` |
-| Größenlimit der abgerufenen Dokumente | 64 KiB | `JwksTrustConfig.java:41` |
-| JWKS-Cache-Lebensdauer | 300 000 ms (5 min) | `JwksTrustConfig.java:42` |
-| JWKS-Cache-Refresh-Timeout | 30 000 ms | `JwksTrustConfig.java:43` |
+| Verbindungs-/Lese-Timeout für Discovery + JWKS | 2000 ms | `JwksTrustConfig.java:40` |
+| Größenlimit der abgerufenen Dokumente | 64 KiB | `JwksTrustConfig.java:42` |
+| JWKS-Cache-Lebensdauer | 300 000 ms (5 min) | `JwksTrustConfig.java:43` |
+| JWKS-Cache-Refresh-Timeout | 30 000 ms | `JwksTrustConfig.java:44` |
 | Akzeptierte Signatur-Algorithmen | `RS256`, `ES256` | `TokenValidator.java:23` |
 | Pflicht-Claims | `sub`, `iat`, `exp` | `TokenValidator.java:24` |
 | Clock-Skew-Toleranz | 60 s (Nimbus-Default) | implizit in `DefaultJWTClaimsVerifier` |
@@ -109,7 +111,7 @@ entrypoint.sh                       (validator/entrypoint.sh)
 Spring Boot startet
         │
         ▼
-JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:46)
+JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:47)
   1. trustOnly(props.issuerCa())
        -> liest ca.crt, baut KeyStore nur mit der internen CA,
           daraus TrustManagerFactory -> SSLContext -> SSLSocketFactory
@@ -118,14 +120,15 @@ JwksTrustConfig.jwkSource(props)    (@Bean, JwksTrustConfig.java:46)
   3. discoverJwksUri(retriever, issuer):
        GET  {issuer}/.well-known/openid-configuration
        prüfe  metadata["issuer"] == props.issuer()   (sonst IllegalStateException)
-       return metadata["jwks_uri"]  ->  URL
+       JwksUriPolicy.jwksUrl(issuer, metadata["jwks_uri"])
+         -> URL nur auf dem HTTPS-Origin des Issuers (sonst IllegalStateException)
   4. JWKSourceBuilder.create(jwksUrl, retriever)
         .cache(5 min, 30 s refresh-timeout)
         .rateLimited(false)
         .build()                    ->  gecachter JWKSource
         │
         ▼
-JwksTrustConfig.tokenValidator(jwkSource, props)   (@Bean, JwksTrustConfig.java:60)
+JwksTrustConfig.tokenValidator(jwkSource, props)   (@Bean, JwksTrustConfig.java:61)
   -> new TokenValidator(jwkSource, issuer, audience)
         │
         ▼
@@ -136,7 +139,7 @@ HTTPS-Server lauscht auf :8443   ->  Healthcheck wird "healthy"
 ```
 
 Scheitert die Discovery beim Start (z. B. falscher `WIF_ISSUER`, kein Netz, Zertifikat passt
-nicht), wirft `jwkSource(...)` eine Exception, der Spring-Kontext startet nicht, der Container
+nicht, `jwks_uri` auf einem anderen Origin), wirft `jwkSource(...)` eine Exception, der Spring-Kontext startet nicht, der Container
 gilt nie als `healthy`. Das ist gewollt: ein Validator, der die Schlüssel nicht laden kann,
 soll auch keine Tokens annehmen.
 
@@ -149,6 +152,7 @@ soll auch keine Tokens annehmen.
 | `WifPocApplication` | `@SpringBootApplication`-Einstiegspunkt, nur `main` (`WifPocApplication.java:9`). |
 | `WifProperties` | `record` mit `issuer`, `audience`, `issuerCa`; `@ConfigurationProperties(prefix="wif")`. |
 | `JwksTrustConfig` | `@Configuration`. Baut die `SSLSocketFactory`, die nur der internen CA vertraut, macht OIDC-Discovery, stellt `JWKSource` und `TokenValidator` als Beans bereit. |
+| `JwksUriPolicy` | Statische Prüfung `jwksUrl(issuer, jwksUri)`: lässt die `jwks_uri` nur auf dem HTTPS-Origin des Issuers zu. |
 | `TokenValidator` | Kapselt einen Nimbus `DefaultJWTProcessor`. Methode `validate(String)` → `ValidationResult`. Framework-frei, dadurch offline testbar. |
 | `ValidationResult` | `record (boolean valid, @Nullable Map claims, @Nullable String reason)` mit Fabrikmethoden `ok(...)` / `rejected(...)`. |
 | `TokenController` | `@RestController`. `GET /whoami`, `GET /healthz`. Zieht das Bearer-Token aus dem Header, ruft `validator.validate(...)`, mappt auf 200/401. |
@@ -192,7 +196,7 @@ hier: `DefaultJWTProcessor`, konfiguriert in `TokenValidator`s Konstruktor
 
 - `DefaultResourceRetriever` ist Nimbus' HTTP-Client für das Laden von JSON-Dokumenten. Er
   wird mit der `SSLSocketFactory` (nur interne CA) als **5. Konstruktor-Argument** erzeugt
-  (`JwksTrustConfig.java:47`):
+  (`JwksTrustConfig.java:48`):
 
   ```java
   new DefaultResourceRetriever(connectTimeout, readTimeout, sizeLimit,
@@ -203,20 +207,26 @@ hier: `DefaultJWTProcessor`, konfiguriert in `TokenValidator`s Konstruktor
   In Nimbus 10.9.1 gibt es **keine** Setter-Methode `setSSLSocketFactory(...)`; die Factory
   kann nur über diesen 5-Argument-Konstruktor gesetzt werden. Deshalb wird genau diese
   Signatur verwendet.
-- `discoverJwksUri(...)` (`JwksTrustConfig.java:64`):
+- `discoverJwksUri(...)` (`JwksTrustConfig.java:65`):
   1. `GET {issuer}/.well-known/openid-configuration`, JSON parsen.
   2. Feld `issuer` aus dem Dokument lesen und **exakt** gegen `props.issuer()` vergleichen.
      Weicht es ab → `IllegalStateException`, Start bricht ab. (Schutz gegen
      "issuer confusion": das Dokument darf keinen anderen Aussteller ausweisen als den
      konfigurierten.)
-  3. Feld `jwks_uri` als URL zurückgeben.
+  3. Feld `jwks_uri` an `JwksUriPolicy.jwksUrl(issuer, jwksUri)` geben. Akzeptiert wird es nur
+     auf dem HTTPS-Origin des Issuers: Schema `https`, derselbe Host (ohne Beachtung der
+     Groß-/Kleinschreibung), derselbe effektive Port (fehlender Port = 443), keine User-Info
+     (z. B. `https://issuer.wif.local@evil.example/…`). Sonst `IllegalStateException`, der Start
+     bricht ab. So lädt der Validator Schlüssel nie von einem anderen Host, der nur ein
+     Zertifikat derselben CA besitzt.
 - `JWKSourceBuilder` baut daraus einen `JWKSource`, der die Schlüssel **cacht**:
   - `.cache(300_000, 30_000)` – Schlüssel 5 Minuten lang aus dem Speicher bedienen; ein
     Refresh darf max. 30 s dauern.
   - `.rateLimited(false)` – keine zusätzliche Ratenbegrenzung auf Cache-Misses.
 
   Ein `kid`, das nicht im Cache ist, löst einen einmaligen Refresh-Abruf gegen die
-  `jwks_uri` aus (nützlich bei Schlüsselrotation).
+  `jwks_uri` aus. Eine `kid`, die erst nach dem letzten Abruf ins JWKS kam, wird so sofort
+  gefunden.
 
 ### 2. Schlüssel-Selektion nach `kid` und Algorithmus – `JWSVerificationKeySelector`
 
@@ -311,7 +321,7 @@ $ curl -s --cacert <lab-ca> -H "Authorization: Bearer $GOOD_TOKEN" https://local
 {
   "authenticated": true,
   "sub": "system:serviceaccount:wif-demo:consumer",
-  "iss": "https://issuer-web",
+  "iss": "https://issuer.wif.local",
   "aud": "wif-demo-validator",
   "exp": 1788971157,
   "kubernetes.io": {
@@ -354,12 +364,12 @@ Nicht konfiguriert. Der Dienst hat kein Throttling – bewusst, es ist ein Lab.
 
 ---
 
-## Testfälle (`TokenValidatorTest`)
+## Testfälle (`TokenValidatorTest`, `JwksUriPolicyTest`)
 
 `validator/src/test/java/ms/rohde/wifpoc/TokenValidatorTest.java`. Vollständig **offline**:
 Der Test erzeugt selbst ein RSA-Schlüsselpaar, baut daraus per `ImmutableJWKSet` einen
 statischen `JWKSource` und signiert Test-Tokens selbst. Kein Netz, kein Docker, kein
-`issuer-web`.
+Issuer-Endpoint.
 
 | Testmethode | Wie provoziert | Erwartung |
 |---|---|---|
@@ -370,6 +380,11 @@ statischen `JWKSource` und signiert Test-Tokens selbst. Kein Netz, kein Docker, 
 | `validate_givenUnknownSigningKey_thenRejected` (`:82`) | Signiert mit `unknownKey` (`kid=rogue-kid`), der nicht im JWKS steht. | `valid() == false`. |
 | `validate_givenTamperedSignature_thenRejected` (`:91`) | Erstes Zeichen der Signatur ersetzt (das letzte base64url-Zeichen einer RS256/2048-Signatur trägt nur 2 Datenbits; eine Änderung dort kann die Signatur gültig lassen). | `valid() == false`. |
 | `validate_givenMalformedToken_thenRejected` (`:103`) | Eingabe `"this.is.not-a-jwt"`. | `valid() == false` (`ParseException` gefangen). |
+
+`JwksUriPolicyTest` prüft die Regel für die `jwks_uri` ebenfalls offline: angenommen werden
+dieselbe Origin, ein explizit angegebener Port 443 und ein Host, der sich nur in der Groß-/
+Kleinschreibung unterscheidet; abgelehnt werden ein anderer Host, ein anderer Port, `http`
+und User-Info.
 
 Diese Tests laufen im Docker-Build mit (`mvn clean package`), siehe
 [build-und-betrieb.md](build-und-betrieb.md). Die Ende-zu-Ende-Prüfung mit echten

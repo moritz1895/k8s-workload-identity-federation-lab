@@ -107,4 +107,4 @@ der [README](../../README.md) aufgeführt.
 
 - [0001-offline-jwks-statt-tokenreview.md](0001-offline-jwks-statt-tokenreview.md) - warum überhaupt offline geprüft wird.
 - [../kubernetes-primer.md](../kubernetes-primer.md#rbac--nur-so-viel-wie-hier-nötig) - RBAC und warum der PoC keins braucht.
-- [../use-cases.md](../use-cases.md#use-case-2-cluster-bootstrap-docker-compose-up--d---build) - was der Bootstrap konkret tut.
+- [../use-cases.md](../use-cases.md#use-case-2-lab-starten-docker-compose-up--d---build) - was der Bootstrap konkret tut.

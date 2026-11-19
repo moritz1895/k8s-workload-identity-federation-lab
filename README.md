@@ -7,9 +7,13 @@ prüft das Token **offline** — Signatur gegen die veröffentlichte JWKS des Au
 `iss`, `aud`, `exp` — und ruft dafür nie den Kubernetes-API-Server.
 
 Cluster, Issuer-Endpoint und Validator liegen in getrennten Vertrauens- und Netzbereichen:
-Ein Publisher im Cluster lädt Discovery-Dokument und JWKS per **mTLS** zum Issuer-Endpoint
-hoch, der Validator vertraut nur dem Root-Zertifikat einer **internen PKI** (im Lab eine
-Lab-CA). Begründung: [ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
+Ein **Issuer-Pod im Cluster** spiegelt Discovery-Dokument und JWKS des API-Servers und
+liefert sie über einen **Ingress** nur lesend aus. Validator und Keycloak holen sie dort ab
+und erreichen nur diese Route, nicht den API-Server. Sie vertrauen nur dem Root-Zertifikat
+einer **internen PKI** (im Lab eine Lab-CA). Es gibt weder ein Client-Zertifikat noch einen
+Schreibweg für die Schlüssel. Begründung:
+[ADR 0005](docs/adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) (Veröffentlichung) und
+[ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (PKI, Netze).
 
 Darauf aufbauend trennt das Lab **Authentisierung von Autorisierung**: Ein Keycloak als
 Autorisierungsserver des Fachbereichs nimmt das ServiceAccount-Token als Client-Nachweis an
@@ -22,11 +26,21 @@ Alles läuft in Containern. Auf dem Host wird **nur Docker + Compose v2** gebrau
 
 ```bash
 cp .env.example .env
-docker compose up -d --build          # PKI, k3s, Publisher, Issuer-Endpoint, Validator, Keycloak + Gateway, service-r
+docker compose up -d --build          # PKI, k3s + Traefik, Issuer-Pod, ingress-lb, Validator, Keycloak + Gateway, service-r
 docker compose run --rm demo          # Ende-zu-Ende-Verifikation (Validator)
 docker compose run --rm demo authz    # Autorisierungsserver + service-r
-tools/run-all-checks.sh               # alles: Demos, Netztrennung, fremde CA, Schlüsselrotation
+tools/run-all-checks.sh               # alles: Demos, Härtung, Ausfall des API-Servers, Netztrennung, fremde CA, Schlüsselwechsel
 docker compose down -v                # alles wieder entfernen
+```
+
+Schlüsselwechsel in zwei Phasen (`run-all-checks.sh` führt beide aus):
+
+```bash
+docker compose run --rm sa-keys stage      # Phase 1: neuer Schlüssel nur zum Prüfen
+docker compose restart server              # API-Server liest die Schlüsseldateien neu
+# warten, bis https://issuer.wif.local/openid/v1/jwks die neue kid enthält
+docker compose run --rm sa-keys activate   # Phase 2: neuer Schlüssel signiert
+docker compose restart server
 ```
 
 Vom Host erreichbar (nur HTTPS): Validator `https://localhost:18080`, `service-r` `https://localhost:18081`
@@ -41,24 +55,32 @@ docker compose stop keycloak-admin
 
 ```
  cluster-net (172.31.7.0/24)
- ┌──────────────────────────────┐
- │ server (k3s)                 │      PUT, mTLS (CN=jwks-publisher)
- │  stellt Tokens aus           │
- │  Pod jwks-publisher ─────────┼──────────────────────────────►  issuer-web :8443
- │  Pod consumer                │                                 (nginx, Zertifikat
- └────┬─────────────────────────┘                                  der internen CA)
-      │                                                           issuer-web :443
-      │ Bearer-Token, GET /whoami (HTTPS)                               ▲
-      │ workload-net (172.31.9.0/24)                                    │ GET Discovery + JWKS
-      │                                                                 │ relying-net (172.31.8.0/24)
-      └──────────────────────────────────────────────────►  validator (Spring Boot)
-                                                             vertraut nur der internen CA
+ ┌──────────────────────────────────────────┐
+ │ server (k3s), API-Server nur hier        │
+ │  stellt Tokens aus                       │
+ │  ┌ Namespace wif-issuer ───────────────┐ │
+ │  │ Pod issuer: sync ── GET ─► API-Server│ │
+ │  │             web (nur GET)  ◄─┐       │ │
+ │  └──────────────────────────────┼──────┘ │
+ │  Traefik (Ingress issuer.wif.local) ─┘   │
+ │   Node-Port 30443, nur in cluster-net    │
+ │  Pod consumer                            │
+ └────┬───────────────────────────▲─────────┘
+      │                           │ TCP 443 durchgereicht (TLS endet im Cluster)
+      │                      ingress-lb (Stellvertreter des Load Balancers)
+      │                           ▲
+      │                           │ GET Discovery + JWKS, relying-net (172.31.8.0/24)
+      │ Bearer-Token, GET /whoami │
+      │ workload-net              │
+      │ (172.31.9.0/24)           │
+      └──────────────────►  validator (Spring Boot), vertraut nur der internen CA
 
- Der Validator erreicht den API-Server über kein Netz; kein Volume ist zwischen
- Cluster-Seite und Validator geteilt.
+ Der Validator erreicht vom Cluster nur die Ingress-Route über ingress-lb, nie den
+ API-Server; kein Volume ist zwischen Cluster-Seite und Validator geteilt.
 ```
 
-Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von `issuer-web`.
+Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von
+`https://issuer.wif.local`.
 Pods erreichen ihn ausschließlich über `keycloak-gateway` (nginx in `workload-net`), das nur
 die Endpunkte des Realms `domain-rst` weiterleitet. `service-r` hängt in `relying-net`
 (Realm-Schlüssel von Keycloak) und `workload-net` (Aufrufe der Pods). Topologie:
@@ -73,10 +95,10 @@ ist ein echtes Geheimnis.
 |---|---|---|
 | `K3S_TOKEN` | `lab-not-a-secret-change-me` | Beitrittsgeheimnis des k3s-Single-Node-Clusters. |
 | `K3S_IMAGE` | `rancher/k3s:v1.34.11-k3s1` | Gepinntes k3s-Image. |
-| `WIF_ISSUER` | `https://issuer-web` | Issuer, den der Validator erwartet; Basis der OIDC-Discovery. |
+| `WIF_ISSUER` | `https://issuer.wif.local` | Issuer, den der Validator erwartet; Basis der OIDC-Discovery. |
 | `WIF_AUDIENCE` | `wif-demo-validator` | Audienz, die der Validator verlangt. |
 | `VALIDATOR_HOST_PORT` | `18080` | Host-Port (`127.0.0.1`) des HTTPS-Ports 8443 des Validators (`https://localhost:18080`). |
-| `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `issuer-web`. |
+| `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `ingress-lb`, `keycloak-gateway` und `keycloak-admin`. |
 | `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image. |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Lab-Admin der Keycloak-Admin-Konsole. |
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | `lab-not-a-secret-change-me` | Passwort dazu (nur Lab). |
@@ -102,24 +124,29 @@ Die Grundsatzentscheidungen stehen in den ADRs
 ([0001](docs/adr/0001-offline-jwks-statt-tokenreview.md),
 [0002](docs/adr/0002-eigenstaendiger-issuer-endpoint.md),
 [0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md),
-[0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md)), die Abwägung offline
+[0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md),
+[0005](docs/adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md)), die Abwägung offline
 vs. online in [docs/domain.md](docs/domain.md#5-offline-validierung-jwks-vs-online-validierung-tokenreview).
 Bewusst offene Punkte des Labs:
 
 - **Lab-CA statt interner PKI.** `pki-init` erzeugt CA und Zertifikate selbst; real kommt
-  das Root-Zertifikat aus der vorhandenen PKI, das Publisher-Zertifikat über cert-manager oder
-  die PKI-Anbindung der Plattform statt über `bootstrap`.
-- **Keine inhaltliche Prüfung beim Upload.** `issuer-web` prüft weder `issuer` noch die
-  Schlüssel. Wer das Publisher-Zertifikat besitzt, kann jedes JWKS hochladen.
-- **JWKS nicht zusätzlich signiert.** Gegen einen kompromittierten `issuer-web`-Host schützt
-  nur eine Signatur mit einem zweiten Vertrauensanker beim Validator.
-- **Überwachung nur über Logs.** Publisher und nginx protokollieren jede Änderung; ein Alarm
-  bei einem neuen `kid` außerhalb einer geplanten Rotation fehlt.
-- **Rotationsfenster.** Der alte Schlüssel muss mindestens maximale Token-Laufzeit plus
-  JWKS-Cache-TTL des Validators (5 min) im JWKS bleiben. Im Lab bleibt er bis zur nächsten
-  Rotation — sicher nur, solange zwischen zwei Rotationen mehr als diese Zeit liegt.
+  das Root-Zertifikat aus der vorhandenen PKI, das Serverzertifikat des Ingress über
+  cert-manager oder die PKI-Anbindung der Plattform statt über `bootstrap`.
+- **`ingress-lb` statt echtem Load Balancer.** Ein nginx im TCP-Modus reicht nur Port 443
+  an Traefiks Node-Port weiter.
+- **Der Namespace `wif-issuer` gehört zur Steuerung des Clusters.** Wer dort schreiben oder
+  Traefik steuern kann, kann Tokens fälschen. RBAC, Admission-Regeln, NetworkPolicies und
+  gehärtete Pods erschweren das, schützen aber nicht vor einem Cluster-Admin.
+- **JWKS nicht zusätzlich signiert.** Gegen einen kompromittierten Ingress-Controller
+  schützt nur eine Signatur mit einem zweiten Vertrauensanker bei den Relying Parties.
+- **Überwachung nur über Logs.** Der Issuer-Pod protokolliert jede neue und entfallene
+  `kid`; ob sie zu einer geplanten Rotation gehört, entscheidet das Monitoring außerhalb.
+- **Rotationsfenster.** Zwischen zwei `sa-keys activate` muss mindestens die maximale
+  Token-Laufzeit plus die Cache-Zeit der Relying Parties liegen (Validator 5 min,
+  Keycloak lädt bei unbekannter `kid` neu, frühestens 10 s nach dem letzten Abruf).
 - **Rotation braucht einen Neustart des API-Servers**, weil kube-apiserver die
-  Schlüsseldateien nur beim Start liest.
+  Schlüsseldateien nur beim Start liest. Im Lab startet dabei der ganze Knoten neu, also
+  auch die Issuer-Pods.
 - **Kein Zertifikatswechsel, keine Sperrlisten.** Die Lab-Zertifikate laufen 825 Tage und
   werden nicht erneuert.
 - **`privileged`-k3s, Dummy-`K3S_TOKEN`, ein Node** — reine Lab-Vereinfachungen.
@@ -136,12 +163,13 @@ Bewusst offene Punkte des Labs:
 
 ```
 compose.yaml                     alle Services, die drei Netze cluster-net / relying-net / workload-net
-manifests/                       Namespaces, jwks-publisher (SA, RBAC, Deployment), Consumer-Deployment,
+manifests/                       Namespaces, Traefik-Konfiguration, Admission-Regeln, Issuer-Pod (SA, RBAC,
+                                 Deployment, Ingress, NetworkPolicies), Consumer-Deployment,
                                  reader/stranger + Token-Skript access-token.sh
 validator/                       Spring Boot 4 / Java 25, Nimbus JOSE — der Offline-Prüfdienst
 keycloak/                        Realm-Import des Fachbereichs (realm-domain-rst.json)
 service-r/                       Spring Boot 4 / Java 25, Spring Security Resource Server — Dienst R
-tools/                           pki-init.sh, sa-keys.sh, bootstrap.sh, nginx-issuer.conf,
+tools/                           pki-init.sh, sa-keys.sh, bootstrap.sh, nginx-ingress-lb.conf,
                                  nginx-keycloak-gateway.conf, nginx-keycloak-admin.conf,
                                  demo.sh, run-all-checks.sh
 docs/                            die vollständige Dokumentation

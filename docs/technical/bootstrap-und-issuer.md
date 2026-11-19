@@ -1,35 +1,43 @@
-# PKI, Bootstrap, Publisher und Issuer-Endpoint
+# PKI, Bootstrap und Issuer-Pod
 
 **Für wen / was lernst du hier:** Du kennst JWT/JWKS, aber nicht Kubernetes-Werkzeuge wie
 `kubectl` oder OpenSSL-Aufrufe. Diese Seite geht die Bausteine durch, die Discovery-Dokument
-und JWKS vom API-Server zum Issuer-Endpoint bringen: die Lab-PKI (`tools/pki-init.sh`), die
+und JWKS vom API-Server zu den Relying Parties bringen: die Lab-PKI (`tools/pki-init.sh`), die
 Signaturschlüssel (`tools/sa-keys.sh`), die Cluster-Einrichtung (`tools/bootstrap.sh`), den
-`jwks-publisher` (`manifests/10-publisher.yaml`) und die nginx-Konfiguration
-`tools/nginx-issuer.conf`. Die Entscheidung dahinter:
-[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
+Issuer-Pod (`manifests/10-issuer.yaml`), den Ingress (`manifests/01-traefik-config.yaml`), die
+Härtung des Namespace (`manifests/05-issuer-admission.yaml`) und `ingress-lb`
+(`tools/nginx-ingress-lb.conf`). Die Entscheidung dahinter:
+[ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md).
 
 ---
 
 ## Der Weg der Metadaten
 
 Der Kubernetes-API-Server *kann* selbst ein OIDC-Discovery-Dokument und ein JWKS ausliefern
-(unter `/.well-known/openid-configuration` und `/openid/v1/jwks`). In einem echten
-Federation-Setup sollen diese Metadaten aber von einem **stabilen, öffentlichen Endpunkt**
-kommen, der nicht der API-Server ist ([ADR 0002](../adr/0002-eigenstaendiger-issuer-endpoint.md)).
-
-Im Lab:
+(unter `/.well-known/openid-configuration` und `/openid/v1/jwks`). Die Relying Parties sollen
+den API-Server aber nicht erreichen, und die Issuer-URL soll nicht an seiner Adresse hängen
+([ADR 0002](../adr/0002-eigenstaendiger-issuer-endpoint.md)). Deshalb liefert ein Pod im
+Cluster eine Kopie aus:
 
 ```
-API-Server ──GET (SA-Token, Leserolle)──► jwks-publisher (Pod) ──PUT (mTLS)──► issuer-web :8443
-                                                                                    │
-                                                         Volume oidc-web ◄──────────┘
-                                                                │
-                                         issuer-web :443 ──GET──► validator
+ validator, keycloak (relying-net)
+        │ GET https://issuer.wif.local/...
+        ▼
+ ingress-lb 172.31.8.20:443 ── TCP, TLS unverändert ──► 172.31.7.2:30443 (cluster-net)
+                                                              │
+ ── Cluster ──────────────────────────────────────────────────┼───────────────
+                                                              ▼
+                                  Traefik: TLS für issuer.wif.local, nur 2 Pfade
+                                                              │ HTTP :8080
+                                                              ▼
+ API-Server :6443 ◄── GET (SA-Token) ── sync ──► emptyDir ──► web (nur GET)
+                       └──────── Pod issuer (2 Replikas, Namespace wif-issuer) ────────┘
 ```
 
-Wer das JWKS am Issuer-Endpoint austauschen kann, kann beliebige Tokens ausstellen, die der
-Validator akzeptiert. Deshalb darf nur ein Client mit dem Publisher-Zertifikat der internen
-CA schreiben, und nur aus dem Cluster-Netz.
+Wer bestimmen kann, was unter der JWKS-URL ausgeliefert wird, kann Tokens für jeden
+ServiceAccount fälschen. Es gibt deshalb keinen Schreibweg von außen: Der Issuer-Pod holt
+sich die Daten selbst beim API-Server, und der Namespace `wif-issuer` ist geschützt wie die
+Steuerung des Clusters ([Härtung](#härtung-von-wif-issuer)).
 
 ---
 
@@ -42,25 +50,26 @@ Organisation, deren Root-Zertifikat real bereits auf allen Systemen verteilt ist
 |---|---|---|
 | Root-CA | `pki-ca` (nur `pki-init`) | `ca.crt`, `ca.key` – RSA 3072, 10 Jahre, `CN=WIF Lab Internal Root CA` |
 | Vertrauensanker | `ca-trust` | Kopie von `ca.crt` |
-| Serverzertifikat `issuer-web` | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer-web`, SAN `DNS:issuer-web`, `extendedKeyUsage=serverAuth` |
+| Serverzertifikat Issuer-Ingress | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`, `extendedKeyUsage=serverAuth`; `bootstrap` legt es als Secret `issuer-tls` in `wif-issuer` ab |
 | Serverzertifikat Keycloak | `keycloak-tls` | `tls.crt` / `tls.key`, `CN=keycloak`, SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 1000:0`, `chmod 400`, weil Keycloak als uid 1000 läuft |
 | Serverzertifikat Validator | `validator-tls` | `tls.crt` / `tls.key`, `CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 10001:0`, `chmod 400`, weil der Validator als uid 10001 läuft |
 | Serverzertifikat `service-r` | `service-r-tls` | `tls.crt` / `tls.key`, `CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 10001:0`, `chmod 400`, weil `service-r` als uid 10001 läuft |
-| Client-Zertifikat Publisher | `publisher-tls` | `tls.crt` / `tls.key`, `CN=jwks-publisher`, `extendedKeyUsage=clientAuth` |
-| Negativtests | `pki-demo` | `wrong-cn.*` (interne CA, `CN=not-the-publisher`), `smuggled-cn.*` (interne CA, `CN=jwks-publisher` nur im Feld `O`), `foreign-ca.crt`, `foreign-publisher.*` (fremde CA, `CN=jwks-publisher`) |
+| Negativtest | `pki-demo` | `foreign-ca.crt` – Root-Zertifikat einer fremden CA für `validator-foreign-ca` |
 
 Die End-Zertifikate sind RSA 2048 und 825 Tage gültig. Das Skript ist idempotent: Existiert
-die CA, bleibt sie; nur fehlende Zertifikate werden ausgestellt. Erzeugt es eine neue CA,
-verwirft es alle vorhandenen End-Zertifikate und stellt sie von der neuen CA aus.
+die CA, bleibt sie; nur fehlende Zertifikate werden ausgestellt. Das Issuer-Zertifikat stellt
+es zusätzlich neu aus, wenn das vorhandene nicht für `issuer.wif.local` gilt
+(`openssl x509 -checkhost`). Erzeugt es eine neue CA, verwirft es alle vorhandenen
+End-Zertifikate und stellt sie von der neuen CA aus.
 
-**Warum `subjectAltName=DNS:issuer-web`?** Moderne TLS-Clients (Java, curl) prüfen den
+**Warum `subjectAltName=DNS:issuer.wif.local`?** Moderne TLS-Clients (Java, curl) prüfen den
 angefragten Hostnamen ausschließlich gegen die **SAN**-Liste des Zertifikats. Validator und
-Publisher rufen `https://issuer-web/...` auf, also **muss** `issuer-web` als SAN im
+Keycloak rufen `https://issuer.wif.local/...` auf, also **muss** dieser Name als SAN im
 Zertifikat stehen. Details: [trust-und-tls.md](trust-und-tls.md).
 
 ---
 
-## `tools/sa-keys.sh` – Signaturschlüssel und Rotation
+## `tools/sa-keys.sh` – Signaturschlüssel
 
 Der API-Server signiert ServiceAccount-Tokens mit eigenen Schlüsseldateien aus dem Volume
 `sa-keys` (statt mit dem k3s-eigenen Schlüssel):
@@ -69,32 +78,55 @@ Der API-Server signiert ServiceAccount-Tokens mit eigenen Schlüsseldateien aus 
 |---|---|
 | `signing.key` | privater RSA-2048-Schlüssel, `service-account-signing-key-file` |
 | `current.pub` | öffentlicher Teil von `signing.key` |
-| `previous.pub` | öffentlicher Teil des vorherigen Schlüssels (nach einer Rotation) |
-| `verify.pub` | `current.pub` + `previous.pub`, `service-account-key-file` – diese Schlüssel erscheinen im JWKS |
+| `staged.key` / `staged.pub` | der nächste Schlüssel, solange er nur Prüfschlüssel ist (zwischen `stage` und `activate`) |
+| `previous.pub` | öffentlicher Teil des vorherigen Signierschlüssels (nach `activate`) |
+| `verify.pub` | `current.pub` + `staged.pub` + `previous.pub`, soweit vorhanden; `service-account-key-file` – diese Schlüssel erscheinen im JWKS |
 
-- **`init`** (Standard beim `up`): legt `signing.key` an, wenn keiner existiert, und baut
-  `verify.pub`.
-- **`rotate`** (`docker compose run --rm sa-keys rotate`): `current.pub` wird zu
-  `previous.pub`, ein neuer Schlüssel wird `signing.key`. Schlüssel älter als der vorherige
-  fallen heraus.
+| Befehl | Wirkung |
+|---|---|
+| `init` (Standard beim `up`) | legt `signing.key` an, wenn keiner existiert, und baut `verify.pub` |
+| `stage` | Phase 1: erzeugt `staged.key`/`staged.pub` (oder behält einen vorhandenen) und nimmt den öffentlichen Teil in `verify.pub` auf; signiert wird weiter mit `signing.key` |
+| `activate` | Phase 2: `current.pub` → `previous.pub`, `staged.key` → `signing.key`, `staged.pub` → `current.pub`; ein älteres `previous.pub` fällt weg |
+| `retire` | Notfall, z. B. bei kompromittiertem Schlüssel: entfernt `previous.pub` sofort aus `verify.pub`. Tokens mit dieser `kid` werden abgelehnt, sobald die Relying Parties ihre Schlüssel neu laden (Validator spätestens nach 5 min, Keycloak bis zu 24 h, siehe [autorisierungsserver.md](autorisierungsserver.md#föderierte-client-authentisierung)) |
 
-kube-apiserver liest die Dateien nur beim Start. Nach `rotate` also
-`docker compose restart server`. Danach signiert der Cluster mit dem neuen Schlüssel, das
-JWKS enthält beide, und der Publisher veröffentlicht es beim nächsten Durchlauf. Tokens von
-vor der Rotation bleiben gültig, bis zur nächsten Rotation. Ablauf und Test:
-[../use-cases.md](../use-cases.md#use-case-4-signaturschlüssel-rotieren).
+kube-apiserver liest die Dateien nur beim Start. Nach `stage`, `activate` und `retire` also
+jeweils `docker compose restart server`.
+
+### Zweiphasiger Schlüsselwechsel
+
+```bash
+docker compose run --rm sa-keys stage        # neuer Schlüssel nur als Prüfschlüssel
+docker compose restart server
+# warten, bis der Issuer-Pod die neue kid ausliefert (demo staged prüft das)
+docker compose run --rm sa-keys activate     # neuer Schlüssel signiert, alter bleibt Prüfschlüssel
+docker compose restart server
+```
+
+1. **`stage`:** Der neue öffentliche Schlüssel steht im JWKS des API-Servers; `sync` übernimmt
+   ihn innerhalb eines Durchlaufs (15 s) und loggt `WARNING kid appeared: <kid>`. Tokens
+   tragen weiter die bisherige `kid`.
+2. **`activate`:** erst, wenn der Issuer-Pod die neue `kid` ausliefert. Ab dann signiert der
+   API-Server mit ihr. Weil Validator und Keycloak bei unbekannter `kid` neu laden und der
+   Issuer-Pod sie bereits ausliefert, wird schon das erste Token mit der neuen `kid`
+   angenommen.
+
+So ist nie ein Token mit einer `kid` unterwegs, die der Issuer-Pod noch nicht ausliefert –
+auch nicht, wenn die zwei Replikas kurz verschiedene Stände haben. Tokens mit der vorherigen
+`kid` bleiben gültig, bis das nächste `activate` deren Schlüssel entfernt. Zwischen zwei
+`activate` muss mindestens die maximale Token-Laufzeit (600 s für die Client Assertion) plus
+die Cache-Zeit der Relying Parties liegen. Ablauf und Test:
+[build-und-betrieb.md](build-und-betrieb.md#schlüsselwechsel).
 
 ---
 
 ## `tools/bootstrap.sh` Schritt für Schritt
 
 Läuft als Einmal-Container `bootstrap` mit der Admin-Kubeconfig, nachdem `server` gesund und
-`pki-init` fertig ist, und bei jedem `docker compose up` erneut. `bootstrap` spricht
-`issuer-web` nicht an.
+`pki-init` fertig ist, und bei jedem `docker compose up` erneut.
 
 ### Kopf: strikte Fehlerbehandlung
 
-`tools/bootstrap.sh:10`
+`tools/bootstrap.sh:9`
 
 ```bash
 set -euo pipefail
@@ -106,7 +138,7 @@ set -euo pipefail
 
 ### Schritt 1 – kubeconfig auf den Docker-Netz-Namen umschreiben
 
-`tools/bootstrap.sh:12`
+`tools/bootstrap.sh:11`
 
 ```bash
 KCFG=/tmp/kubeconfig
@@ -127,51 +159,57 @@ an `--tls-san=k3s-server` ([trust-und-tls.md](trust-und-tls.md)).
 
 ### Schritt 2 – Namespaces anlegen
 
-`tools/bootstrap.sh:17`
+`tools/bootstrap.sh:16`
 
 ```bash
 kubectl apply -f /manifests/00-namespace.yaml
 ```
 
-Legt `wif-demo` und `wif-publisher` an. Das muss vor Schritt 3 passieren, weil Secret und
-ConfigMap in `wif-publisher` liegen.
+Legt `wif-demo` und `wif-issuer` an (`wif-issuer` mit Pod Security Standard `restricted`).
+Das muss vor Schritt 3 passieren, weil Secret und ConfigMap dort liegen.
 
-### Schritt 3 – Client-Zertifikat und CA für den Publisher
+### Schritt 3 – Ingress-Zertifikat und interne CA
 
-`tools/bootstrap.sh:20`
+`tools/bootstrap.sh:19`
 
 ```bash
-kubectl -n wif-publisher create secret tls jwks-publisher-mtls \
-    --cert=/publisher-tls/tls.crt --key=/publisher-tls/tls.key \
+kubectl -n wif-issuer create secret tls issuer-tls \
+    --cert=/issuer-tls/tls.crt --key=/issuer-tls/tls.key \
+    --dry-run=client -o yaml | kubectl apply --server-side -f -
+kubectl -n wif-demo create configmap internal-ca \
+    --from-file=ca.crt=/trust/ca.crt \
     --dry-run=client -o yaml | kubectl apply -f -
-for namespace in wif-publisher wif-demo; do
-    kubectl -n "$namespace" create configmap internal-ca \
-        --from-file=ca.crt=/trust/ca.crt \
-        --dry-run=client -o yaml | kubectl apply -f -
-done
 ```
 
-`create … --dry-run=client -o yaml | kubectl apply -f -` erzeugt das Objekt nur als YAML und
-wendet es dann an – damit ist der Schritt idempotent. Im Publisher-Pod landen Secret unter
-`/mtls` und ConfigMap unter `/trust`. In `wif-demo` brauchen die Demo-Pods die ConfigMap
-(`/etc/internal-ca`), um Keycloak per TLS zu prüfen. In einem echten Cluster übernähme das cert-manager oder
-die PKI-Anbindung der Plattform.
+`create … --dry-run=client -o yaml | kubectl apply --server-side -f -` erzeugt das Objekt nur als
+YAML und wendet es dann an – damit ist der Schritt idempotent. `--server-side` hält den
+TLS-Schlüssel aus der Annotation `last-applied-configuration` heraus, die ein
+clientseitiges `apply` ins Objekt schreiben würde. Das Secret `issuer-tls` referenziert der
+Ingress `issuer`; Traefik präsentiert es für `issuer.wif.local`. Die ConfigMap `internal-ca`
+brauchen die Demo-Pods (`/etc/internal-ca`), um Validator, Keycloak und `service-r` per TLS zu
+prüfen. In einem echten Cluster übernähme das cert-manager oder die PKI-Anbindung der
+Plattform.
 
 ### Schritt 4 – Manifeste anwenden und warten
 
-`tools/bootstrap.sh:30`
+`tools/bootstrap.sh:27`
 
 ```bash
 kubectl apply -f /manifests
-kubectl -n wif-publisher rollout status deployment/jwks-publisher --timeout=180s
+kubectl -n wif-issuer rollout status deployment/issuer --timeout=180s
+until kubectl -n kube-system get deployment traefik > /dev/null 2>&1; do sleep 3; done
+kubectl -n kube-system rollout status deployment/traefik --timeout=300s
 kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
-kubectl -n wif-demo rollout status deployment/reader --timeout=180s
-kubectl -n wif-demo rollout status deployment/stranger --timeout=180s
+# ... ebenso reader und stranger
 ```
 
 - `00-namespace.yaml` – die beiden Namespaces (erneut, idempotent).
-- `10-publisher.yaml` – ServiceAccount, ClusterRoleBinding, Skript-ConfigMap und Deployment
-  des Publishers (siehe unten).
+- `01-traefik-config.yaml` – `HelmChartConfig` für das in k3s mitgelieferte Traefik
+  ([Ingress](#ingress-traefik-und-ingress-lb)).
+- `05-issuer-admission.yaml` – die `ValidatingAdmissionPolicy`s
+  `issuer-host-reserved` und `issuer-image-digest` mit ihren Bindings.
+- `10-issuer.yaml` – ServiceAccount, ClusterRoleBinding, ConfigMaps, Deployment, Service,
+  Ingress und NetworkPolicies des Issuer-Pods (siehe unten).
 - `20-consumer.yaml` – ServiceAccount `consumer` und Deployment `consumer` mit zwei
   projizierten Tokens (`sa-token` mit `audience: wif-demo-validator`, `kc-token` mit dem
   Realm-Issuer als Audienz, je `expirationSeconds: 600`) und
@@ -180,76 +218,66 @@ kubectl -n wif-demo rollout status deployment/stranger --timeout=180s
   `reader` und `stranger` der Autorisierungs-Demo, siehe
   [autorisierungsserver.md](autorisierungsserver.md#workload-seite).
 
-`rollout status` **blockiert**, bis die Deployments einen laufenden Pod haben (oder nach
-180 s aufgeben).
+`rollout status` **blockiert**, bis die Deployments bereit sind. Das Deployment `traefik`
+legt k3s selbst per Helm an; `bootstrap` wartet, bis es existiert und bereit ist.
 
 ---
 
-## `jwks-publisher` – Veröffentlichung aus dem Cluster
-
-Definiert in `manifests/10-publisher.yaml`.
+## Der Issuer-Pod (`manifests/10-issuer.yaml`)
 
 | Objekt | Zweck |
 |---|---|
-| ServiceAccount `jwks-publisher` (`wif-publisher`) | Identität des Publishers gegenüber dem API-Server. |
-| ClusterRoleBinding `jwks-publisher-issuer-discovery` | Bindet die eingebaute ClusterRole `system:service-account-issuer-discovery` – nur `GET` auf die zwei Discovery-Pfade. |
-| ConfigMap `jwks-publisher-script` | Das Shell-Skript `publish.sh`. |
-| Deployment `jwks-publisher` | `curlimages/curl`, eine Replik, hängt Skript (`/scripts`), Secret (`/mtls`) und CA (`/trust`) ein; `hostAliases`: `issuer-web` → `172.31.7.20`. |
+| ServiceAccount `issuer` (`wif-issuer`) | Identität von `sync` gegenüber dem API-Server; `automountServiceAccountToken: false`. |
+| ClusterRoleBinding `wif-issuer-discovery` | Bindet die eingebaute ClusterRole `system:service-account-issuer-discovery` – nur `GET` auf die zwei Discovery-Pfade. |
+| ConfigMap `issuer-sync` | Das Skript `sync.sh`. |
+| ConfigMap `issuer-nginx` | nginx-Konfiguration `default.conf` für den Container `web`. |
+| Deployment `issuer` | zwei Replikas, `RollingUpdate` mit `maxUnavailable: 0`, `maxSurge: 1`; Container `sync` und `web` teilen sich das `emptyDir` `oidc` (`/srv/oidc`). |
+| Service `issuer` | Port 80 → `web:8080`. |
+| Ingress `issuer` | Host `issuer.wif.local`, TLS mit Secret `issuer-tls`, nur die zwei Pfade (`pathType: Exact`), Routing-Priorität `1000000000`. |
+| NetworkPolicies | `default-deny`, `issuer-from-ingress-controller`, `issuer-to-api-server`. |
 
-Ablauf von `publish.sh`:
+Beide Images sind per Digest gepinnt (`curlimages/curl:8.23.0@sha256:…`,
+`nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:…`); ohne Digest lässt die Admission
+Policy `issuer-image-digest` sie nicht zu.
 
-Eine **Schleife** alle `PUBLISH_INTERVAL_SECONDS` (15):
+### Container `sync`
 
-1. Discovery-Dokument und JWKS von `https://kubernetes.default.svc` holen, mit dem
-   ServiceAccount-Token und der Cluster-CA aus `/var/run/secrets/kubernetes.io/serviceaccount`.
-   Das Token geht über eine Header-Datei an `curl` (`-H @file`), nicht über die
-   Kommandozeile.
-2. Lesen, was `issuer-web` gerade öffentlich ausliefert (`PUBLIC_URL`, Default
-   `https://issuer-web`, also `:443`).
-3. SHA-256 über beide Stände bilden. Gleich → nichts tun.
-4. Sonst per `curl -T` (`PUT`) an `PUBLISH_TARGET` (Default `https://issuer-web:8443`)
-   hochladen: erst `/openid/v1/jwks`, dann `/.well-known/openid-configuration`.
-   Client-Zertifikat `/mtls/tls.crt`, Serverprüfung gegen `/trust/ca.crt`.
-   Log: `publisher: published JWKS sha256=<hash> kids=[ <neu> ] previous=[ <ausgeliefert> ]`.
-5. Liefert `issuer-web` etwas aus, das der Publisher nicht selbst hochgeladen hat (fremder
-   Upload, geleertes Volume), loggt er zusätzlich
-   `publisher: WARNING issuer serves content this publisher did not upload ...` und stellt
-   den Stand des Clusters wieder her.
-6. Fehler beim Lesen oder Hochladen werden geloggt; der nächste Durchlauf versucht es neu.
+Eine Schleife alle `SYNC_INTERVAL_SECONDS` (15):
 
-Weil das JWKS des API-Servers sich bei einer Rotation ändert, erkennt der Publisher sie ohne
-eigenen Mechanismus. Gegenüber `issuer-web` weist er sich **nie** mit einem
-ServiceAccount-Token aus: Ein solches Token würde gegen genau die Schlüssel geprüft, die er
-gerade veröffentlicht.
+1. Discovery-Dokument und JWKS vom API-Server holen
+   (`https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT`), mit dem ServiceAccount-Token
+   und der Cluster-CA aus dem projizierten Volume `discovery-token`. Das Token geht über eine
+   Header-Datei an `curl` (`-H @file`), nicht über die Kommandozeile; `--max-time 10`,
+   `--max-filesize 65536`.
+2. Unverändert gegenüber dem ausgelieferten Stand → nichts tun.
+3. Sonst **Plausibilitätsprüfung**: Das Discovery-Dokument nennt exakt `EXPECTED_ISSUER`
+   (`https://issuer.wif.local`) und `EXPECTED_JWKS_URI`, das JWKS enthält mindestens eine
+   `kid`. Scheitert sie: `issuer-sync: REJECTED state: …`, der alte Stand bleibt.
+4. **`kid`-Änderungen loggen:** jede neue `kid` als `WARNING kid appeared: <kid>`, jede
+   weggefallene als `WARNING kid vanished: <kid>`.
+5. **Atomar übernehmen:** beide Dateien erst als `.tmp` daneben kopieren, dann per `mv`
+   ersetzen. Log: `issuer-sync: serving JWKS sha256=<hash> kids=[ … ]`.
+6. Ist der API-Server nicht lesbar:
+   `reading from the API server failed, keeping the last good state, retrying in 15s`.
+
+`/srv/oidc` startet leer. Bis zum ersten plausiblen Stand gibt es kein JWKS – und damit keine
+Bereitschaft (siehe `web`).
 
 Log ansehen:
 
 ```bash
-docker compose exec server kubectl -n wif-publisher logs deploy/jwks-publisher
+docker compose exec server kubectl -n wif-issuer logs deploy/issuer -c sync
 ```
 
----
+### Container `web`
 
-## `tools/nginx-issuer.conf`
-
-Wird in `issuer-web` als `/etc/nginx/conf.d/default.conf` eingehängt. Beide `server`-Blöcke
-nutzen `root /oidc` – die Dokumente liegen im Volume `oidc-web` unter ihrem URL-Pfad
-(`/oidc/.well-known/openid-configuration`, `/oidc/openid/v1/jwks`), sodass Lese- und
-Schreibseite dieselbe Ablage teilen.
-
-### Block 1 – Lesen (`:443`)
-
-`tools/nginx-issuer.conf:14`
+nginx ohne Root (`nginx-unprivileged`) mit der ConfigMap `issuer-nginx`:
 
 ```nginx
 server {
-    listen 443 ssl;
-    server_name issuer-web;
-
-    ssl_certificate     /tls/tls.crt;
-    ssl_certificate_key /tls/tls.key;
-
-    root /oidc;
+    listen 8080;
+    server_tokens off;
+    root /srv/oidc;
 
     location = /.well-known/openid-configuration {
         limit_except GET { deny all; }
@@ -267,83 +295,143 @@ server {
 }
 ```
 
-- **`listen 443 ssl`** auf allen Adressen – erreichbar aus `relying-net` (Validator) und aus
-  `cluster-net` (der Publisher liest hier den veröffentlichten Stand).
-- **Serverzertifikat** aus `issuer-tls`, ausgestellt von der internen CA.
-- **`location = /pfad`** – nur die zwei bekannten OIDC-Pfade; alles andere `404`.
-- **`limit_except GET { deny all; }`** – nur `GET` (und damit `HEAD`); ein `PUT` hier ergibt
-  `403`.
+- **`location = /pfad`** – nur die zwei OIDC-Pfade; alles andere `404`.
+- **`limit_except GET { deny all; }`** – nur `GET` (und damit `HEAD`); `PUT`, `POST`,
+  `DELETE` ergeben `403`.
 - **`default_type application/json`** – die Dateien haben keine Endung; ohne diese Zeile fiele
   nginx auf `application/octet-stream` zurück. OIDC-Clients (und Nimbus) erwarten JSON.
+- `/srv/oidc` ist read-only eingehängt. `web` hat **kein** ServiceAccount-Token und ist nicht
+  dafür konfiguriert, den API-Server anzusprechen; keine Anfrage von außen wird dorthin
+  durchgereicht.
+- **Readiness:** `GET /openid/v1/jwks` alle 5 s. Bereit erst, wenn `sync` einen Stand
+  übernommen hat. Ein neuer Pod ohne plausiblen Stand bekommt keinen Verkehr, und wegen
+  `maxUnavailable: 0` bleiben die alten Pods so lange im Dienst. **Liveness:** TCP auf 8080.
 
-### Block 2 – Upload (`:8443`, mTLS)
+### Pod-Härtung
 
-`tools/nginx-issuer.conf:38`
+- Pod: `runAsNonRoot`, uid/gid 101, `seccompProfile: RuntimeDefault`,
+  `enableServiceLinks: false`.
+- Beide Container: `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`,
+  `capabilities.drop: ["ALL"]`. Schreibbar sind nur die `emptyDir`s `oidc` (1 Mi),
+  `sync-tmp` (1 Mi) und `web-tmp` (8 Mi).
+- Das ServiceAccount-Token (projiziert, `expirationSeconds: 3600`) hängt nur in `sync`.
+
+---
+
+## Ingress: Traefik und `ingress-lb`
+
+### Traefik (`manifests/01-traefik-config.yaml`)
+
+k3s bringt Traefik als Ingress-Controller mit; die `HelmChartConfig` passt ihn an:
+
+| Wert | Wirkung |
+|---|---|
+| `service.spec.type: NodePort`, `ports.websecure.nodePort: 30443` | fester Node-Port für HTTPS |
+| `ports.web.expose.default: false` | kein HTTP-Entrypoint nach außen |
+| `providers.kubernetesCRD.enabled: false`, `providers.kubernetesGateway.enabled: false` | Routen nur aus `Ingress`-Objekten; `IngressRoute` u. a. und Gateway-API-Objekte sind wirkungslos, die Admission Policies decken damit jede Route ab |
+| `tls.options.default.sniStrict: true`, `minVersion: VersionTLS12` | TLS-Handshake für einen Host ohne eigenes Zertifikat scheitert |
+
+kube-proxy öffnet Node-Ports nur auf der `cluster-net`-Adresse
+(`--kube-proxy-arg=nodeport-addresses=172.31.7.0/24` in `compose.yaml`); auf `172.31.9.2`
+(`workload-net`) ist 30443 nicht erreichbar.
+
+### `ingress-lb` (`tools/nginx-ingress-lb.conf`)
+
+Stellvertreter für den Load Balancer vor den Ingress-Knoten und der einzige Weg der Relying
+Parties in den Cluster. nginx im `stream`-Modus (TCP):
 
 ```nginx
 server {
-    listen 172.31.7.20:8443 ssl;
-    server_name issuer-web;
-
-    ssl_certificate         /tls/tls.crt;
-    ssl_certificate_key     /tls/tls.key;
-    ssl_client_certificate  /trust/ca.crt;
-    ssl_verify_client       on;
-    ssl_verify_depth        1;
-
-    access_log /var/log/nginx/access.log upload;
-
-    root /oidc;
-    client_body_temp_path /oidc/.tmp;
-    client_max_body_size  64k;
-
-    location = /openid/v1/jwks {
-        if ($publisher_ok = 0) { return 403; }
-        limit_except PUT { deny all; }
-        dav_methods PUT;
-        create_full_put_path on;
-        dav_access user:rw group:r all:r;
-    }
-    # ... derselbe Block für /.well-known/openid-configuration, sonst 404
+    listen 172.31.8.20:443;
+    proxy_pass 172.31.7.2:30443;
+    proxy_connect_timeout 5s;
 }
 ```
 
-| Direktive | Wirkung |
+- Lauscht nur auf seiner Adresse in `relying-net`; dort trägt er den Alias
+  `issuer.wif.local`. Seine `cluster-net`-Adresse `172.31.7.20` dient nur dem Weg zum
+  Node-Port.
+- Reicht TCP durch; TLS endet erst bei Traefik im Cluster.
+- Log pro Verbindung: Zeit, Quelle, Ziel, Status, Bytes.
+- **Healthcheck:** `curl --cacert /trust/ca.crt --resolve issuer.wif.local:443:172.31.8.20
+  https://issuer.wif.local/openid/v1/jwks` – gesund, sobald der Issuer-Pod das JWKS über den
+  Ingress ausliefert. Erst dann starten `validator` und `keycloak`.
+
+### Was `demo all` (Prüfung 6) am Endpunkt prüft
+
+| Anfrage über `ingress-lb` | Ergebnis |
 |---|---|
-| `listen 172.31.7.20:8443` | nur auf der Adresse in `cluster-net` – aus `relying-net` nicht erreichbar |
-| `ssl_client_certificate` + `ssl_verify_client on` | Client-Zertifikat ist Pflicht und muss von der internen CA stammen. Fehlt es oder stammt es von einer anderen CA, antwortet nginx mit `400`. |
-| `ssl_verify_depth 1` | Kette höchstens Client → Root, keine Zwischen-CAs |
-| `map $ssl_client_s_dn $publisher_ok` (auf `http`-Ebene) | Schreibrecht nur bei exakt dem DN `CN=jwks-publisher,O=WIF Lab`, sonst `403`. Ein exakter Vergleich statt einer Teilstring-Suche verhindert, dass `CN=jwks-publisher` in einem anderen DN-Feld (z. B. `O=x\,CN=jwks-publisher`) durchrutscht. |
-| `limit_except PUT` | nur `PUT` auf die zwei Pfade |
-| `dav_methods PUT`, `create_full_put_path on` | nginx speichert den Body als Datei unter dem Pfad und legt fehlende Verzeichnisse an |
-| `client_max_body_size 64k` | Obergrenze für hochgeladene Dokumente |
-| `access_log … upload` | Logformat mit `client_dn="$ssl_client_s_dn"` und `verify=$ssl_client_verify` |
+| `PUT`, `POST`, `DELETE` auf `/openid/v1/jwks` | `403` |
+| `GET /` (nicht geroutet) | `404` |
+| SNI `other.wif.local` | kein TLS-Handshake (strict SNI) |
+| SNI `kubernetes.default.svc` | kein TLS-Handshake, kein Weg zum API-Server |
+| SNI `issuer.wif.local`, `Host: other.wif.local` | `404` bzw. `421` |
 
-`issuer-web` prüft den **Inhalt** der hochgeladenen Dokumente nicht. Wer das
-Publisher-Zertifikat besitzt, kann jedes JWKS hochladen (siehe ADR 0003, Kompromisse).
+Danach wird das unveränderte JWKS weiter ausgeliefert.
 
-### Healthcheck
+---
 
-`compose.yaml`, Dienst `issuer-web`:
+## Härtung von `wif-issuer`
 
-```yaml
-test: ["CMD", "test", "-s", "/oidc/openid/v1/jwks"]
-```
+Wer in `wif-issuer` schreiben darf, kann Tokens fälschen. Der Namespace ist deshalb so
+geschützt (geprüft mit `demo hardening`, H1–H5):
 
-`issuer-web` gilt als gesund, sobald das JWKS als nicht-leere Datei existiert – also nach dem
-ersten Upload des Publishers. Erst dann startet der Validator.
+| Schutz | Umsetzung |
+|---|---|
+| RBAC | Kein RoleBinding gewährt Rechte in `wif-issuer`; schreiben dürfen nur Cluster-Admins bzw. der GitOps-Prozess. Weder `wif-demo:consumer` noch `wif-issuer:issuer` dürfen ConfigMaps, Pods oder Ingresses anlegen, Deployments ändern oder Secrets lesen. |
+| `issuer-host-reserved` | Außerhalb von `wif-issuer` muss jede Regel eines Ingress einen Host nennen. Weder `rules[].host` noch `tls[].hosts` dürfen `issuer.wif.local` oder eine Wildcard sein, die ihn abdeckt (`*.wif.local`, `*.local`, `*`). `spec.defaultBackend` und jede Annotation `traefik.ingress.kubernetes.io/router.*` (Priorität, `pathmatcher`, …) sind verboten. |
+| Priorität der Issuer-Route | Der Ingress `issuer` trägt `traefik.ingress.kubernetes.io/router.priority: "1000000000"`, mehr als jede Priorität, die Traefik aus der Regellänge ableitet. |
+| `issuer-image-digest` | In `wif-issuer` lässt die Policy Pods, Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs und CronJobs nur zu, wenn jedes Image (auch Init- und Ephemeral-Container) auf `@sha256:<64 hex>` endet. Welches Image es ist, prüft sie nicht. |
+| NetworkPolicy | `default-deny` für Ingress und Egress; eingehend nur von Traefik-Pods aus `kube-system` auf 8080; ausgehend nur zu `172.31.7.2:6443`. Die Policies gelten pro Pod: Netzseitig dürfte auch `web` den API-Server erreichen; ihm fehlen nur Token und Konfiguration dafür. |
+| Pod Security | Namespace-Label `pod-security.kubernetes.io/enforce: restricted`; Container wie unter [Pod-Härtung](#pod-härtung). |
 
-Die Log-Zeile `can not modify /etc/nginx/conf.d/default.conf (read-only file system?)` beim
-Start ist harmlos: Das Startskript des nginx-Images will die schreibgeschützt eingehängte
-Config anpassen; diese Config braucht das nicht.
+Beide Policies haben `failurePolicy: Fail` und Binding mit `validationActions: ["Deny"]`.
+
+**Warum Host-Pflicht und Annotationsverbot?** Eine Regel ohne Host passt auf jeden Host, auch
+auf `issuer.wif.local`. Traefik ordnet Routen ohne gesetzte Priorität nach der Länge ihrer
+Regel; ein host-loser Ingress mit `PathRegexp` und langem Ausdruck könnte die Issuer-Route
+sonst überholen. `demo hardening` (H1) prüft diese Fälle per
+`kubectl apply --dry-run=server`: Issuer-Host, `*.wif.local`, `*.local`, Regel ohne Host,
+host-los mit langem `PathRegexp`, Priorität, `pathmatcher`, Default-Backend – alle abgelehnt;
+ein Ingress für `other.wif.local` wird zugelassen. Außerdem prüft H1 die Priorität der
+Issuer-Route und dass Traefik weder seine CRDs noch die Gateway API liest.
+
+**Grenzen:**
+
+- Die Härtung greift erst nach `bootstrap`. k3s installiert Traefik beim Start mit den
+  Standardwerten; Traefik-Konfiguration und Admission Policies kommen mit `bootstrap`.
+- Traefik teilt sich einen Zertifikatsspeicher mit allen Ingress-Objekten. Ein Zertifikat
+  für `issuer.wif.local` aus einem anderen Namespace kann die Auswahl stören. Die Echtheit
+  bleibt gewahrt, weil die Relying Parties nur der internen CA vertrauen, die Verfügbarkeit
+  nicht.
+- Die Plausibilitätsprüfung in `sync` sucht per `grep` (kein `jq` im Image). Sie fängt
+  Fehler ab, keine Angriffe; die Quelle ist der API-Server über TLS mit dessen CA.
+
+Siehe [ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse.
+
+---
+
+## Verhalten bei Fehlern
+
+| Situation | Verhalten | Geprüft mit |
+|---|---|---|
+| API-Server nicht erreichbar | `sync` loggt den Fehler und behält den letzten gültigen Stand; beide Pods bleiben bereit, das JWKS bleibt unverändert. | `demo resilience`, R1 (Egress-Policy geleert) |
+| Implausibler Stand (z. B. falscher `issuer`) | `REJECTED state`; ein neuer Pod wird nie bereit, die bisherigen liefern weiter aus. | `demo resilience`, R2 (`EXPECTED_ISSUER` verfälscht) |
+| Leeres JWKS vom API-Server | wird nicht übernommen; nie ein leeres JWKS ausgeliefert. | Plausibilitätsprüfung |
+| Neustart des API-Servers | Im Lab startet `docker compose restart server` den ganzen Knoten neu, also auch die Issuer-Pods; sie werden erst nach dem ersten Abgleich wieder bereit. In einem echten Cluster laufen sie weiter. | `demo post-rotation` (`await_issuer`) |
+| Ingress kurz nicht erreichbar | Validator und Keycloak arbeiten mit ihrem Schlüssel-Cache weiter; auffällig nur, wenn genau dann eine neue `kid` auftaucht. | – |
+
+Neue und weggefallene `kid`s erscheinen nur im Log von `sync`. Ob sie zu einem geplanten
+Schlüsselwechsel gehören, muss ein Monitoring außerhalb entscheiden.
 
 ---
 
 ## Weiterlesen
 
 - [architecture.md](architecture.md) – der ganze Stack, Netze und Startreihenfolge
-- [trust-und-tls.md](trust-und-tls.md) – SAN, Hostname-Verification, mTLS, interne CA
+- [trust-und-tls.md](trust-und-tls.md) – SAN, Hostname-Verification, strict SNI, interne CA
 - [validator.md](validator.md) – wie der Validator die Metadaten benutzt
-- [build-und-betrieb.md](build-und-betrieb.md) – das `tools/`-Image, Rotation, häufige Probleme
+- [autorisierungsserver.md](autorisierungsserver.md) – Keycloaks Schlüssel-Cache
+- [build-und-betrieb.md](build-und-betrieb.md) – das `tools/`-Image, Schlüsselwechsel, häufige Probleme
 - [../kubernetes-primer.md](../kubernetes-primer.md) – ServiceAccount, RBAC, Secret, projiziertes Token
 - [../use-cases.md](../use-cases.md) – die Abläufe end to end

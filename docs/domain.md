@@ -94,26 +94,33 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
 ```
   ┌──────────────────────── Kubernetes-Cluster (Container "server", k3s) ────────────────────────┐
   │                                                                                              │
-  │   API-Server  ──stellt Tokens aus, signiert mit den ServiceAccount-Signaturschlüsseln──┐     │
-  │                                                                                        │     │
-  │   ServiceAccount "consumer"  ── die Identität, auf die das Token ausgestellt wird       │     │
-  │                                                                                        ▼     │
-  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTPS raus  │     │
-  │        │                                                                                     │
-  │   Pod "jwks-publisher"  ── liest Discovery-Doc + JWKS vom API-Server, lädt sie hoch ──┐      │
-  └────────┼──────────────────────────────────────────────────────────────────────────────┼──────┘
-           │                                                    PUT, mTLS (CN=jwks-publisher)
-           │  HTTPS GET /whoami        Authorization: Bearer <JWT>                         ▼
-           ▼                                                             ┌──────────────────────────┐
-   ┌─────────────────────────────┐         OIDC-Discovery + JWKS         │  Issuer-Endpoint         │
-   │  Validator (Relying Party)  │ ──────────  nur HTTPS  ─────────────► │  "issuer-web" (nginx)    │
-   │  Spring Boot, NICHT im       │                                      │  https://issuer-web      │
-   │  Cluster                     │  ◄─── liefert Discovery-Doc + JWKS ── │  /.well-known/...        │
-   │  prüft Signatur+iss+aud+exp  │                                      │  /openid/v1/jwks         │
-   └─────────────────────────────┘                                      └──────────────────────────┘
+  │   API-Server  ── stellt Tokens aus, signiert mit dem ServiceAccount-Signaturschlüssel        │
+  │        ▲                                                                                     │
+  │        │ GET Discovery-Doc + JWKS (nur Leserolle)                                            │
+  │   Pod "issuer" (Namespace wif-issuer):  sync ──► Kopie ──► web (nur GET)                     │
+  │                                                             ▲                                │
+  │   ServiceAccount "consumer"  ── die Identität, auf die das Token ausgestellt wird            │
+  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTPS raus       │
+  │        │                                                    │                                │
+  │        │       Traefik (Ingress, Host issuer.wif.local) ────┘                                │
+  │        │       ▲                                                                             │
+  └────────┼───────┼─────────────────────────────────────────────────────────────────────────────┘
+           │       │  TCP 443, durchgereicht von ingress-lb (Stellvertreter des Load Balancers)
+           │       │
+           │       │  OIDC-Discovery + JWKS, nur HTTPS:
+           │       │    https://issuer.wif.local/.well-known/openid-configuration
+           │       │    https://issuer.wif.local/openid/v1/jwks
+           │  HTTPS GET /whoami        Authorization: Bearer <JWT>
+           ▼       │
+   ┌─────────────────────────────┐
+   │  Validator (Relying Party)  │
+   │  Spring Boot, NICHT im       │
+   │  Cluster                     │
+   │  prüft Signatur+iss+aud+exp  │
+   └─────────────────────────────┘
 
    Der Validator spricht NIEMALS mit dem API-Server und kann ihn über kein Netz erreichen.
-   Nur mit issuer-web.
+   Vom Cluster erreicht er nur die Ingress-Route des Issuer-Pods.
 ```
 
 ### Der Cluster / der API-Server
@@ -153,7 +160,7 @@ Der Pod selbst enthält nur ein `curl`-Image, das nichts tut außer zu warten. D
 "Anfrage an den externen Dienst" löst das Demo-Skript
 ([`tools/demo.sh`](../tools/demo.sh)) aus.
 
-### Der Issuer-Endpoint ("issuer-web")
+### Der Issuer-Endpoint (Issuer-Pod hinter dem Ingress)
 
 **Issuer** heißt "Aussteller". Der `iss`-Claim im Token nennt die URL des Ausstellers. Damit
 die Prüfung offline funktionieren kann, muss unter dieser URL ein kleines Stück öffentliche
@@ -167,42 +174,74 @@ Metadaten liegen:
 - das **JWKS** unter der im Discovery-Dokument genannten `jwks_uri`
   (hier `/openid/v1/jwks`) - die öffentlichen Signaturschlüssel des Clusters.
 
-In diesem Lab ist der Issuer-Endpoint ein eigener kleiner **nginx-Webserver** (Container
-`issuer-web`), der genau diese zwei Dateien über HTTPS ausliefert - **getrennt vom
-API-Server**. Warum das ein eigener Dienst ist, steht in
-[ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md). Konfiguration:
-[`tools/nginx-issuer.conf`](../tools/nginx-issuer.conf).
+In diesem Lab liefert ein **Pod im Cluster** (Deployment `issuer` im Namespace
+`wif-issuer`, zwei Replikas) genau diese zwei Dokumente unter der Issuer-URL
+`https://issuer.wif.local` aus - **getrennt vom API-Server**. Er besteht aus zwei
+Containern:
 
-`issuer-web` hat zwei Seiten: Lesen (`:443`, nur `GET`) für jeden, und Schreiben (`:8443`,
-nur `PUT`, nur aus dem Cluster-Netz) ausschließlich für den Publisher mit seinem
-Client-Zertifikat. Wer das JWKS austauschen kann, kann beliebige Tokens ausstellen, die der
-Validator akzeptiert - deshalb ist der Schreibweg so eng gefasst
-([ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md)).
+- **`sync`** liest alle 15 Sekunden Discovery-Dokument und JWKS mit dem eigenen
+  ServiceAccount vom API-Server. Der hat nur die eingebaute Leserolle
+  `system:service-account-issuer-discovery`. `sync` übernimmt einen Stand nur, wenn er
+  **plausibel** ist: `issuer` und `jwks_uri` stimmen, das JWKS enthält mindestens einen
+  Schlüssel. Ist der API-Server nicht erreichbar oder der Stand nicht plausibel, bleibt der
+  **letzte gültige Stand** stehen. Jede `kid`, die hinzukommt oder wegfällt, protokolliert
+  er als Warnung.
+- **`web`** (nginx) liefert die Kopie nur per `GET` aus. Er hat kein ServiceAccount-Token
+  und spricht nie mit dem API-Server. Bereit ist er erst, wenn `sync` einmal erfolgreich
+  abgeglichen hat; ein frisch gestarteter Pod nimmt also erst mit gültigem Stand Verkehr an.
 
-### Der Publisher ("jwks-publisher")
+Nach außen veröffentlicht der Ingress-Controller **Traefik** nur diese beiden Pfade unter
+dem Host `issuer.wif.local`, mit einem Serverzertifikat der internen PKI. Es gibt **keinen
+Schreibweg**: Kein Endpunkt nimmt ein JWKS entgegen, und keine Komponente braucht ein
+Zertifikat, um Schlüssel zu veröffentlichen.
 
-Ein kleines **Deployment im Cluster** (Namespace `wif-publisher`), das die Metadaten zum
-Issuer-Endpoint bringt. Es liest Discovery-Dokument und JWKS mit dem eigenen
-ServiceAccount vom API-Server - der hat nur die eingebaute Leserolle
-`system:service-account-issuer-discovery`. Alle 15 Sekunden vergleicht der Publisher diesen
-Stand mit dem, was `issuer-web` gerade ausliefert, und lädt bei einer Abweichung beide
-Dokumente per **mTLS** hoch (gegenseitiges TLS: auch der Client weist sich mit einem
-Zertifikat aus). Er protokolliert dabei, welche `kid` hinzugekommen oder weggefallen sind.
-So kommt auch eine **Schlüsselrotation** ohne Handgriff am Issuer-Endpoint an.
+Wer bestimmen kann, was unter der JWKS-URL ausgeliefert wird, kann beliebige Tokens
+ausstellen, die der Validator akzeptiert. Deshalb ist der Namespace `wif-issuer` geschützt
+wie die Steuerung des Clusters: kein RoleBinding, Admission-Regeln, NetworkPolicies
+(eingehend nur von Traefik, ausgehend nur zum API-Server) und gehärtete Pods (ohne Root,
+schreibgeschütztes Root-Dateisystem, keine Capabilities). Die Admission-Regeln reservieren
+den Host `issuer.wif.local` für `wif-issuer`: Außerhalb davon muss jede Ingress-Regel
+einen eigenen Host nennen, der weder `issuer.wif.local` ist noch ihn per Wildcard abdeckt;
+ein Default-Backend und Traefik-Router-Annotationen (Priorität, Pfad-Matcher) sind
+verboten. Denn eine Regel ohne Host passt auf jeden Host, und Traefik ordnet Routen nach
+der Länge ihrer Regel - eine lange Pfad-Regex könnte sonst die Issuer-Route überholen. Die
+Issuer-Route selbst trägt die höchste Routing-Priorität. In `wif-issuer` laufen nur Images
+mit festem Digest. Warum
+der Issuer-Endpoint ein eigener Dienst ist, steht in
+[ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md), warum ein Pod im Cluster per Pull
+über einen Ingress in [ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md).
+Definiert in [`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml) und
+[`manifests/05-issuer-admission.yaml`](../manifests/05-issuer-admission.yaml).
 
-Gegenüber `issuer-web` weist sich der Publisher mit einem Zertifikat der internen PKI aus,
-nie mit einem ServiceAccount-Token: Ein solches Token würde gegen genau die Schlüssel geprüft,
-die er gerade veröffentlicht. Definiert in
-[`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml).
+### Der Schlüsselwechsel in zwei Phasen
+
+Der Cluster signiert mit genau einem privaten Schlüssel, veröffentlicht aber alle
+Prüfschlüssel im JWKS. Ein Wechsel läuft in zwei Phasen, jeweils mit Neustart des
+API-Servers ([`tools/sa-keys.sh`](../tools/sa-keys.sh)):
+
+1. **`sa-keys stage`**: Der neue öffentliche Schlüssel kommt zunächst nur als
+   **Prüfschlüssel** ins JWKS; signiert wird weiter mit dem bisherigen Schlüssel.
+2. **`sa-keys activate`**: Erst wenn der Issuer-Pod den neuen Schlüssel ausliefert, wird er
+   zum **Signierschlüssel**. Der bisherige bleibt als Prüfschlüssel, ältere fallen weg.
+
+So ist nie ein Token mit einer `kid` unterwegs, die die Relying Parties nicht abrufen
+können; schon das erste Token mit dem neuen Schlüssel wird akzeptiert. Zwischen zwei
+`activate` liegt mindestens die maximale Token-Laufzeit plus die Zeit, die die Relying
+Parties Schlüssel zwischenspeichern.
+
+Für den Notfall, etwa wenn der vorherige Schlüssel kompromittiert ist, entfernt
+**`sa-keys retire`** ihn sofort aus dem JWKS (ebenfalls mit Neustart des API-Servers). Mit
+ihm signierte Tokens werden nicht mehr angenommen, sobald die Relying Parties ihre
+Schlüssel neu geladen haben.
 
 ### Die interne PKI
 
 Eine **PKI** (Public Key Infrastructure) ist die Stelle, die Zertifikate ausstellt. Die
 Annahme dieses Labs: Die Organisation hat eine interne PKI, deren Root-Zertifikat auf allen
 Systemen bereits verteilt ist. Im Lab spielt der Einmal-Container `pki-init` diese Rolle
-([`tools/pki-init.sh`](../tools/pki-init.sh)): Er erzeugt eine Lab-CA und davon das
-Serverzertifikat von `issuer-web` und das Client-Zertifikat des Publishers
-(`CN=jwks-publisher`).
+([`tools/pki-init.sh`](../tools/pki-init.sh)): Er erzeugt eine Lab-CA und davon die
+Serverzertifikate des Issuer-Ingress (`issuer.wif.local`), des Validators, von Keycloak und
+von `service-r`.
 
 ### Der Validator / die Relying Party
 
@@ -247,18 +286,19 @@ vornherein vertraut.
 ### Die Kette (von unten nach oben gelesen)
 
 ```
-   iss-Claim im Token           "https://issuer-web"
+   iss-Claim im Token           "https://issuer.wif.local"
           │  der Validator akzeptiert nur exakt diesen Wert (fest konfiguriert)
           ▼
-   Issuer-URL                   https://issuer-web
+   Issuer-URL                   https://issuer.wif.local
           │  unter dieser URL holt der Validator das Discovery-Dokument
           │  (TLS: er vertraut NUR der internen CA, /trust/ca.crt)
           ▼
    Discovery-Dokument           /.well-known/openid-configuration
-          │  Feld "issuer" MUSS wieder "https://issuer-web" sein  (sonst Abbruch)
-          │  Feld "jwks_uri" zeigt auf ...
+          │  Feld "issuer" MUSS wieder "https://issuer.wif.local" sein  (sonst Abbruch)
+          │  Feld "jwks_uri" zeigt auf ... - nur auf demselben HTTPS-Ursprung
+          │  (Schema, Host, Port) wie die Issuer-URL  (sonst Abbruch)
           ▼
-   JWKS                         https://issuer-web/openid/v1/jwks
+   JWKS                         https://issuer.wif.local/openid/v1/jwks
           │  enthält die öffentlichen Signaturschlüssel, jeder mit einer "kid" (Key-ID)
           ▼
    Signaturschlüssel            der öffentliche Schlüssel mit der "kid" aus dem
@@ -273,29 +313,35 @@ vornherein vertraut.
 Zwei Dinge sind fest im Validator hinterlegt (per Umgebungsvariable / `application.yaml`)
 und werden **nicht** aus dem Netz geladen:
 
-1. **Der erwartete `issuer`-Wert** (`WIF_ISSUER`, hier `https://issuer-web`). Der Validator
+1. **Der erwartete `issuer`-Wert** (`WIF_ISSUER`, hier `https://issuer.wif.local`). Der Validator
    akzeptiert kein Token, dessen `iss` davon abweicht, und keine Discovery-Antwort, deren
    `issuer`-Feld davon abweicht.
 2. **Das Root-Zertifikat der internen CA** (`WIF_ISSUER_CA`, Datei `/trust/ca.crt`). Der
    Validator baut sich daraus einen eigenen, isolierten TLS-Vertrauensspeicher
-   (`SSLSocketFactory` in `JwksTrustConfig`) und akzeptiert für `https://issuer-web` **nur**
+   (`SSLSocketFactory` in `JwksTrustConfig`) und akzeptiert für `https://issuer.wif.local` **nur**
    Serverzertifikate dieser CA - keinen öffentlichen Zertifizierungsstellen-Speicher, kein
    `curl -k`. Das Root-Zertifikat erreicht ihn auf einem anderen Weg als die Daten (im Lab:
    das schreibgeschützte Volume `ca-trust`, stellvertretend für die anderweitige Verteilung).
 
-Weil der Validator sicher weiß, dass er mit dem **echten** `issuer-web` spricht (Punkt 2),
-und dieser ihm die öffentlichen Schlüssel des Clusters liefert, kann er jede Token-Signatur
-prüfen. Und weil er nur Tokens mit dem einen erwarteten `iss` (Punkt 1) und der einen
-erwarteten `aud` akzeptiert, kann sich kein fremder Aussteller einschleichen.
+Die `jwks_uri` aus dem Discovery-Dokument übernimmt der Validator nur, wenn sie auf dem
+HTTPS-Ursprung der Issuer-URL liegt (gleiches Schema, gleicher Host, gleicher Port).
+Schlüssel lädt er so immer vom Endpunkt, für dessen Namen der Issuer steht - nie von einem
+anderen Host, der bloß ein Zertifikat derselben CA hat. Andernfalls startet er nicht.
 
-Dass `issuer-web` die **richtigen** Schlüssel ausliefert, sichert die Schreibseite: Nur ein
-Client mit dem Publisher-Zertifikat der internen CA darf Discovery-Dokument und JWKS
-ersetzen.
+Weil der Validator sicher weiß, dass er mit dem **echten** Issuer-Endpoint spricht
+(Punkt 2), und dieser ihm die öffentlichen Schlüssel des Clusters liefert, kann er jede
+Token-Signatur prüfen. Und weil er nur Tokens mit dem einen erwarteten `iss` (Punkt 1) und
+der einen erwarteten `aud` akzeptiert, kann sich kein fremder Aussteller einschleichen.
+
+Dass der Issuer-Endpoint die **richtigen** Schlüssel ausliefert, sichert der Cluster selbst:
+Der Issuer-Pod übernimmt nur, was der API-Server liefert, es gibt keinen Schreibweg von
+außen, und der Namespace `wif-issuer` sowie die Route für `issuer.wif.local` sind gegen
+Änderungen durch andere als Cluster-Admins geschützt.
 
 > **Kurz:** Der Validator vertraut (a) der internen CA und (b) einem konkreten
 > Issuer-Namen. Aus diesen beiden Ankern plus der veröffentlichten JWKS ergibt sich alles
-> Weitere - ganz ohne Rückfrage beim Cluster. Die Echtheit der JWKS selbst hängt am
-> Publisher-Zertifikat.
+> Weitere - ganz ohne Rückfrage beim Cluster. Die Echtheit der JWKS selbst hängt daran, dass
+> nur die Steuerung des Clusters bestimmt, was der Issuer-Pod ausliefert.
 
 ### PKIX in einem Satz
 
@@ -330,7 +376,7 @@ erreichen kann **und** selbst ein Credential besitzt, um die TokenReview-API auf
 |---|---|---|
 | **Widerruf ("Revocation")** | Nicht möglich vor `exp`. Ein einmal ausgestelltes Token gilt bis zum Ablauf, auch wenn Pod oder ServiceAccount längst weg sind. Gegenmittel: kurze Laufzeiten, optional eine `jti`-Sperrliste. | Sofort. Der API-Server verweigert ein Token, dessen Pod/ServiceAccount nicht mehr existiert. |
 | **Verfügbarkeit** | Hohe Unabhängigkeit. Ist der Cluster kurz weg, prüft der Dienst trotzdem weiter (JWKS ist gecacht, hier 5 Minuten). | Harte Abhängigkeit: Ist der API-Server nicht erreichbar, schlägt jede Prüfung fehl. |
-| **Netzwerk** | Nur ein Weg nach außen zum Issuer-Endpoint. Der Cluster muss von außen gar nicht erreichbar sein. | Der externe Dienst muss den API-Server erreichen - oft unerwünscht bei einem Dienst außerhalb des Cluster-Netzes. |
+| **Netzwerk** | Nur ein Weg zum Issuer-Endpoint (eine Ingress-Route). Der API-Server muss von außen gar nicht erreichbar sein. | Der externe Dienst muss den API-Server erreichen - oft unerwünscht bei einem Dienst außerhalb des Cluster-Netzes. |
 | **Credentials beim Prüfer** | Keine. Der Validator braucht kein Cluster-Konto, nur öffentliche Metadaten. | Der Prüfer braucht ein eigenes ServiceAccount-Token mit Recht auf `TokenReview` - wieder ein Credential, das verwaltet werden muss. |
 | **Pro-Anfrage-Kosten** | Nur lokale Rechenarbeit (Signaturprüfung). | Ein Netzwerk-Roundtrip zum API-Server je Anfrage. |
 | **Aktualität der Identitätsdaten** | Nur, was im Token steht (Snapshot vom Ausstellungszeitpunkt). | Live-Zustand des Clusters. |
@@ -348,7 +394,7 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **`aud` (Audience)** | Claim im Token: für welchen Empfänger das Token bestimmt ist. Hier `wif-demo-validator`. Der Validator lehnt jeden anderen Wert ab. |
 | **audience-gebundenes Token** | Ein Token, das nur für einen bestimmten Empfänger (`aud`) brauchbar ist. Bei einem anderen Dienst vorgezeigt, wird es abgelehnt. |
 | **Bearer-Token** | "Inhaber-Token": Wer es vorzeigt (im Header `Authorization: Bearer <token>`), gilt als berechtigt. Deshalb kurze Laufzeit und `aud`-Bindung. |
-| **Bootstrap** | Hier: der Einmal-Container, der beim Start den Cluster einrichtet (Namespaces, Publisher-Zertifikat als Secret, CA als ConfigMap, Manifeste). Veröffentlicht selbst nichts. |
+| **Bootstrap** | Hier: der Einmal-Container, der beim Start den Cluster einrichtet (Namespaces, Serverzertifikat des Issuer-Ingress als Secret, CA als ConfigMap, Manifeste). Veröffentlicht selbst nichts. |
 | **CA (Certificate Authority)** | Stelle, die Zertifikate unterschreibt. Hier die Root-CA der (Lab-)internen PKI. |
 | **Claim** | Ein einzelnes Feld im JWT-Payload, z. B. `iss`, `sub`, `exp`. |
 | **Cluster** | Verbund von Rechnern (Nodes), der von Kubernetes gemeinsam als eine Plattform verwaltet wird. |
@@ -360,9 +406,11 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **Federation** | Verbund: zwei Systeme erkennen die Identitätsnachweise des jeweils anderen an, ohne gemeinsames Passwort. |
 | **`hostAliases`** | Feld im Pod, das feste Name-zu-IP-Einträge in die `/etc/hosts` des Pods schreibt - für Namen, die CoreDNS nicht kennt. |
 | **`iat` (Issued At)** | Claim: Ausstellungszeitpunkt des Tokens. |
-| **`iss` (Issuer)** | Claim: URL des Ausstellers. Hier `https://issuer-web`. |
+| **Ingress / Ingress-Controller** | Ein `Ingress` beschreibt, unter welchem Host und Pfad ein Dienst im Cluster von außen erreichbar ist; der Ingress-Controller (hier Traefik) setzt das um und beendet TLS. |
+| **ingress-lb** | Im Lab der Stellvertreter des Load Balancers vor den Ingress-Knoten: reicht nur TCP 443 an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. |
+| **`iss` (Issuer)** | Claim: URL des Ausstellers. Hier `https://issuer.wif.local`. |
 | **Issuer / Issuer-Endpoint** | Der Aussteller bzw. die URL, unter der seine öffentlichen Metadaten (Discovery-Dokument, JWKS) liegen. |
-| **jwks-publisher** | Deployment im Cluster, das Discovery-Dokument und JWKS bei jeder Änderung per mTLS zu `issuer-web` hochlädt. |
+| **Issuer-Pod** | Deployment `issuer` im Namespace `wif-issuer`: spiegelt Discovery-Dokument und JWKS vom API-Server und liefert sie nur lesend hinter dem Ingress `issuer.wif.local` aus. |
 | **`jti` (JWT ID)** | Eindeutige Kennung eines einzelnen Tokens. Grundlage für eine Sperrliste, falls doch Widerruf nötig ist. |
 | **JWKS (JSON Web Key Set)** | Öffentlich veröffentlichte Menge von Schlüsseln, gegen die JWT-Signaturen geprüft werden. |
 | **`kid` (Key ID)** | Kennung eines Schlüssels. Steht im JWS-Header des Tokens und im JWKS, damit der Prüfer den richtigen Schlüssel findet. |
@@ -370,8 +418,8 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **Kubernetes** | System zum Betreiben von Container-Workloads auf einem Cluster. |
 | **`kubernetes.io`-Claim** | Zusatz-Claim im ServiceAccount-Token mit Namespace, Pod- und ServiceAccount-Angaben. |
 | **k3s** | Leichtgewichtige Kubernetes-Distribution; hier läuft der ganze Cluster als ein einzelner Container. |
-| **mTLS (mutual TLS)** | TLS, bei dem sich auch der Client mit einem Zertifikat ausweist. Hier der Schreibweg Publisher → `issuer-web`. |
-| **Namespace** | Benannter Bereich im Cluster zur Gruppierung von Objekten. Hier `wif-demo` (Consumer) und `wif-publisher` (Publisher). |
+| **Namespace** | Benannter Bereich im Cluster zur Gruppierung von Objekten. Hier `wif-demo` (Workloads) und `wif-issuer` (Issuer-Pod). |
+| **NetworkPolicy** | Kubernetes-Regel, welche Pods mit wem reden dürfen. Der Issuer-Pod nimmt nur Verbindungen von Traefik an und spricht nur mit dem API-Server. |
 | **`nbf` (Not Before)** | Claim: Zeitpunkt, vor dem das Token noch nicht gültig ist. |
 | **Node** | Ein einzelner Rechner (physisch oder virtuell) im Cluster, auf dem Pods laufen. |
 | **OIDC (OpenID Connect)** | Standard für Identitäts-Tokens, aufbauend auf OAuth 2.0. Definiert u. a. das Discovery-Dokument. |
@@ -383,7 +431,7 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **RBAC (Role-Based Access Control)** | Kubernetes-Rechtesystem: Wer (Nutzer/ServiceAccount) darf was (Verben) auf welchen Objekten. |
 | **Relying Party** | Die Partei, die sich auf ein Token verlässt (es prüft), statt es auszustellen. Hier der Validator. |
 | **`RS256` / `ES256`** | Signaturalgorithmen für JWS. Der Validator akzeptiert nur diese beiden; der Cluster nutzt `RS256`. |
-| **Rotation** | Regelmäßiger Austausch von Schlüsseln oder Credentials. Bei kurzlebigen Tokens automatisch, bei API-Keys Handarbeit. Die Signaturschlüssel des Clusters rotiert hier `sa-keys rotate`; der vorherige öffentliche Schlüssel bleibt im JWKS, damit ältere Tokens gültig bleiben. |
+| **Rotation** | Regelmäßiger Austausch von Schlüsseln oder Credentials. Bei kurzlebigen Tokens automatisch, bei API-Keys Handarbeit. Die Signaturschlüssel des Clusters wechselt hier `sa-keys` in zwei Phasen (`stage`, dann `activate`); der vorherige öffentliche Schlüssel bleibt im JWKS, damit ältere Tokens gültig bleiben. Im Notfall entfernt `sa-keys retire` ihn sofort. |
 | **ServiceAccount** | Maschinen-Identität innerhalb des Clusters, auf die Tokens ausgestellt werden. |
 | **`sub` (Subject)** | Claim: wer das Token repräsentiert. Hier `system:serviceaccount:wif-demo:consumer`. |
 | **TokenRequest-API** | API des API-Servers, über die kurzlebige, audience-gebundene ServiceAccount-Tokens angefordert werden. |
@@ -402,5 +450,6 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 - [Use Cases](use-cases.md) - der Ende-zu-Ende-Ablauf Schritt für Schritt, mit allen Fehlerfällen.
 - [ADR 0001](adr/0001-offline-jwks-statt-tokenreview.md) - warum offline statt TokenReview.
 - [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - warum ein eigener Issuer-Endpoint.
-- [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - Publisher, mTLS-Upload, interne PKI, getrennte Netze.
+- [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - interne PKI, getrennte Netze.
 - [ADR 0004](adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md) - Keycloak als Autorisierungsserver pro Fachbereich.
+- [ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) - Issuer-Pod im Cluster, Pull über einen Ingress, Schlüsselwechsel in zwei Phasen.

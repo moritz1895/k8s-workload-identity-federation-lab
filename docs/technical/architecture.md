@@ -3,9 +3,11 @@
 **Für wen / was lernst du hier:** Du kennst JWT/JWS/JWK, aber wenig Kubernetes und Docker.
 Diese Seite erklärt, aus welchen Containern das Lab besteht, in welchen Netzen sie hängen,
 wer mit wem redet, welche Volumes es gibt, in welcher Reihenfolge alles startet und warum
-Validator und `issuer-web` feste IP-Adressen haben. Danach verstehst du die `compose.yaml`
-Zeile für Zeile. Die Entscheidung hinter dem Aufbau steht in
-[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
+einige Container feste IP-Adressen haben. Danach verstehst du die `compose.yaml` Zeile für
+Zeile. Die Entscheidungen hinter dem Aufbau stehen in
+[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI, getrennte
+Netze) und [ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) (Issuer-Pod
+hinter einem Ingress).
 
 ---
 
@@ -14,10 +16,11 @@ Zeile für Zeile. Die Entscheidung hinter dem Aufbau steht in
 Ein Programm *innerhalb* eines Kubernetes-Clusters (der "Pod") bekommt vom Cluster ein
 kurzlebiges JWT ausgestellt. Es schickt dieses Token an einen Dienst *außerhalb* des Clusters
 (den "Validator"). Der Validator prüft das Token **offline**: Er lädt die öffentlichen
-Signatur-Schlüssel des Ausstellers (JWKS) über HTTPS vom Issuer-Endpoint `issuer-web` und
+Signatur-Schlüssel des Ausstellers (JWKS) über HTTPS von `https://issuer.wif.local` und
 verifiziert danach jedes Token lokal – Signatur, `iss`, `aud`, `exp`. Er ruft den
-Kubernetes-API-Server nie zurück. Die Schlüssel bringt ein Publisher im Cluster per mTLS zu
-`issuer-web`. Das Ganze nennt man **Workload Identity Federation**.
+Kubernetes-API-Server nie zurück. Unter `issuer.wif.local` liefert ein Pod im Cluster
+(`issuer`) eine Kopie von Discovery-Dokument und JWKS über einen Ingress aus. Das Ganze nennt
+man **Workload Identity Federation**.
 
 Ein paar Begriffe vorweg:
 
@@ -28,11 +31,11 @@ Ein paar Begriffe vorweg:
 | **API-Server** | Die zentrale Kubernetes-Komponente, mit der man redet (`kubectl` spricht mit ihr). Stellt auch die ServiceAccount-Tokens aus. |
 | **Pod** | Kleinste Ausführungseinheit in Kubernetes: ein oder mehrere Container, die zusammen laufen. |
 | **ServiceAccount** | Eine Maschinen-Identität innerhalb des Clusters. Ein Pod läuft "als" ein ServiceAccount und kann sich dafür ein Token ausstellen lassen. |
-| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `manifests/10-publisher.yaml`, `manifests/20-consumer.yaml`, `manifests/30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
-| **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-publisher`. |
+| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `01-traefik-config.yaml`, `05-issuer-admission.yaml`, `10-issuer.yaml`, `20-consumer.yaml`, `30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
+| **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-issuer`. |
+| **Ingress** | Kubernetes-Objekt, das HTTP(S)-Routen von außen zu einem Service im Cluster beschreibt; umgesetzt vom Ingress-Controller (hier das in k3s mitgelieferte Traefik). |
 | **OIDC-Discovery** | Konvention, unter der ein Token-Aussteller seine Metadaten unter `<issuer>/.well-known/openid-configuration` als JSON veröffentlicht – darin steht u. a. die `jwks_uri`. |
 | **JWKS** | JSON Web Key Set: die Liste der öffentlichen Schlüssel, gegen die man Token-Signaturen prüft. |
-| **mTLS** | TLS, bei dem sich auch der Client mit einem Zertifikat ausweist. |
 
 ---
 
@@ -42,18 +45,18 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 
 | Service | Image | Zweck | Läuft wie lange |
 |---|---|---|---|
-| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web`, `keycloak`, `validator` und `service-r`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
-| `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`) oder rotieren (`rotate`). Ohne Netz. | einmalig / auf Anforderung |
-| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s). Stellt die Pod-Tokens aus. Im Cluster laufen `jwks-publisher`, `consumer`, `reader` und `stranger`. | dauerhaft |
-| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret für den Publisher, ConfigMap `internal-ca` in `wif-publisher` und `wif-demo`, Manifeste anwenden. Veröffentlicht nichts. | einmalig, Exit 0 |
-| `issuer-web` | `nginx:1.29-alpine` | Issuer-Endpoint: `:443` liefert Discovery-Dokument + JWKS aus, `:8443` nimmt Uploads des Publishers per mTLS an. | dauerhaft |
+| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für den Issuer-Ingress (`issuer.wif.local`), `keycloak`, `validator` und `service-r`, fremde CA für den Negativtest. Ohne Netz (`network_mode: none`). | einmalig |
+| `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`), in zwei Phasen wechseln (`stage`, `activate`) oder im Notfall den vorherigen entfernen (`retire`). Ohne Netz. | einmalig / auf Anforderung |
+| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Ingress-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer` (Issuer-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
+| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret `issuer-tls` in `wif-issuer`, ConfigMap `internal-ca` in `wif-demo`, Manifeste anwenden. | einmalig, Exit 0 |
+| `ingress-lb` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor den Ingress-Knoten: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. | dauerhaft |
 | `validator` | `wif-lab/validator` (aus `validator/`) | Der Dienst *außerhalb* des Clusters. Spring Boot 4 / Java 25. Prüft die Tokens offline. | dauerhaft |
 | `validator-foreign-ca` | `wif-lab/validator` | Negativtest: Validator mit fremder CA, muss beim Start scheitern. Profil `negative`. | auf Anforderung |
 | `keycloak` | `quay.io/keycloak/keycloak:26.8.2` | Autorisierungsserver des Fachbereichs (Realm `domain-rst`): tauscht ServiceAccount-Tokens gegen Access-Tokens. Siehe [autorisierungsserver.md](autorisierungsserver.md). | dauerhaft |
 | `keycloak-gateway` | `nginx:1.29-alpine` | Einziger Weg der Pods zu Keycloak; leitet nur `/realms/domain-rst/` weiter. | dauerhaft |
 | `keycloak-admin` | `nginx:1.29-alpine` | Admin-Konsole vom Host (`127.0.0.1:18443`). Profil `admin`. | auf Anforderung |
 | `service-r` | `wif-lab/service-r` (aus `service-r/`) | Dienst R: Spring-Security-Resource-Server, prüft Access-Tokens und Scopes. | dauerhaft |
-| `demo` | `wif-lab/tools` | Der Ende-zu-Ende-Test (`all`, `authz`, `pre-rotation`, `post-rotation`). Profil `demo`. | auf Anforderung |
+| `demo` | `wif-lab/tools` | Der Ende-zu-Ende-Test (`all`, `authz`, `hardening`, `resilience`, `pre-rotation`, `staged`, `post-rotation`). Profil `demo`. | auf Anforderung |
 
 Der Host braucht nur **Docker + Compose v2**. Kein `kubectl`, kein `k3d`, kein Java auf dem
 Host – alles steckt in den Containern.
@@ -64,14 +67,15 @@ Host – alles steckt in den Containern.
 
 ```
       cluster-net 172.31.7.0/24                          relying-net 172.31.8.0/24
- ┌───────────────────────────────┐                     ┌───────────────────────────────┐
- │ server  .2  (Alias k3s-server)│   ┌─────────────┐   │                               │
- │  API-Server nur auf .2:6443   │   │ issuer-web  │   │ validator  .10                │
- │  Pod jwks-publisher ──────────┼──►│ .7.20:8443  │   │  GET Discovery + JWKS ───┐    │
- │    PUT, mTLS                  │   │   Upload    │   │                          │    │
- │                               │   │ .8.20:443 ◄─┼───┼──────────────────────────┘    │
- │ bootstrap, demo               │   │   Lesen     │   │ demo, validator-foreign-ca    │
- └───────────────┬───────────────┘   └─────────────┘   └──────────────▲────────────────┘
+ ┌────────────────────────────────────┐                ┌───────────────────────────────┐
+ │ server  .2  (Alias k3s-server)     │                │                               │
+ │  API-Server nur auf .2:6443        │  ┌──────────┐  │ validator  .10                │
+ │  Traefik Node-Port nur .2:30443 ◄──┼──┤ingress-lb│◄─┼── GET Discovery + JWKS        │
+ │   └─ Ingress issuer.wif.local      │  │.7.20     │  │   (https://issuer.wif.local)  │
+ │       └─ Pod issuer (sync + web)   │  │ .8.20:443│  │ keycloak .30 (ebenso)         │
+ │                                    │  └──────────┘  │                               │
+ │ bootstrap, demo                    │                │ demo, validator-foreign-ca    │
+ └───────────────┬────────────────────┘                └──────────────▲────────────────┘
                  │ server .2                                          │ validator .10 :8443
                  │                workload-net 172.31.9.0/24          │ (Host 127.0.0.1:18080)
                  └──── Pod consumer: HTTPS GET /whoami, Bearer ───────┘
@@ -83,16 +87,16 @@ Autorisierungs-Pfad (Details in [autorisierungsserver.md](autorisierungsserver.m
 
 ```
  workload-net                               relying-net
- Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► issuer-web .8.20:443
+ Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► ingress-lb .8.20:443
       │                          nur /realms/domain-rst/                ▲
       └── HTTPS :8443 ─────────► service-r .9.40 │ .8.40 ───────────────┘ Discovery + JWKS
                                                      keycloak-admin .8.32 (Profil admin, Host 127.0.0.1:18443)
 ```
 
-`issuer-web` ist das einzige Bauteil, das in beiden Bereichen hängt: Der Upload-Listener
-`:8443` bindet nur an `172.31.7.20` (Cluster-Seite), der Lese-Listener `:443` an alle
-Adressen. Der Validator hängt nur in `relying-net` und `workload-net` und erreicht damit
-weder den API-Server noch den Upload-Listener.
+`ingress-lb` ist das einzige Bauteil, das `relying-net` mit `cluster-net` verbindet: Es
+lauscht nur auf `172.31.8.20:443` und leitet ausschließlich an `172.31.7.2:30443` weiter. Der
+API-Server und der Node-Port lauschen nur auf der `cluster-net`-Adresse des Servers. Die
+Relying Parties erreichen damit vom Cluster nur die Ingress-Route.
 
 ---
 
@@ -102,15 +106,17 @@ weder den API-Server noch den Upload-Listener.
 
 - **`entrypoint: ["bash", "/work/pki-init.sh"]`**, `restart: "no"`, **`network_mode: none`**.
 - **`volumes`:** `pki-ca` (CA-Schlüssel, nur hier eingehängt), `ca-trust` (Root-Zertifikat),
-  `issuer-tls`, `keycloak-tls`, `validator-tls`, `service-r-tls`, `publisher-tls`, `pki-demo`.
+  `issuer-tls`, `keycloak-tls`, `service-r-tls`, `validator-tls`, `pki-demo`.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolspki-initsh--die-lab-pki).
 
 ### `sa-keys` – die Signaturschlüssel
 
 - **`entrypoint: ["bash", "/work/sa-keys.sh"]`**, `command: ["init"]`, ohne Netz.
 - **`volumes`:** `sa-keys:/sa-keys` (rw).
-- `docker compose run --rm sa-keys rotate` rotiert den Schlüssel; danach muss `server` neu
-  starten. Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolssa-keyssh--signaturschlüssel-und-rotation).
+- `docker compose run --rm sa-keys stage` und später `… activate` wechseln den Schlüssel in
+  zwei Phasen; `… retire` entfernt im Notfall den vorherigen Schlüssel sofort. Danach muss
+  `server` jeweils neu starten. Details:
+  [bootstrap-und-issuer.md](bootstrap-und-issuer.md#zweiphasiger-schlüsselwechsel).
 
 ### `server` – der Kubernetes-Cluster
 
@@ -118,16 +124,19 @@ weder den API-Server noch den Upload-Listener.
 - **`privileged: true`** – k3s startet intern selbst Container und braucht dafür erweiterte
   Rechte. Nur im Lab akzeptabel.
 - **`command`** – Startflags des k3s-Servers:
-  - `--disable=traefik`, `--disable=servicelb`, `--disable=metrics-server` – schalten
-    Cluster-Zusatzkomponenten ab, die das Lab nicht braucht.
+  - `--disable=servicelb`, `--disable=metrics-server` – schalten Cluster-Zusatzkomponenten
+    ab, die das Lab nicht braucht. Traefik bleibt an; konfiguriert wird es über
+    `manifests/01-traefik-config.yaml`.
   - `--tls-san=k3s-server` – trägt den Namen `k3s-server` als **SAN** (Subject Alternative
     Name, siehe [trust-und-tls.md](trust-und-tls.md)) in das Serverzertifikat des API-Servers
     ein, damit `kubectl` ihn unter diesem Namen erreicht.
   - `--node-ip`, `--advertise-address`, `--bind-address` = `172.31.7.2` – der API-Server
     lauscht nur auf seiner Adresse in `cluster-net`.
-  - `service-account-issuer=https://issuer-web` – **die zentrale Einstellung**: jeder
-    ausgestellte Pod-Token trägt `iss=https://issuer-web`.
-  - `service-account-jwks-uri=https://issuer-web/openid/v1/jwks` – Wert, der im
+  - `--kube-proxy-arg=nodeport-addresses=172.31.7.0/24` – Node-Ports (Traefik: 30443) nur
+    auf der `cluster-net`-Adresse, nicht in `workload-net`.
+  - `service-account-issuer=https://issuer.wif.local` – **die zentrale Einstellung**: jeder
+    ausgestellte Pod-Token trägt `iss=https://issuer.wif.local`.
+  - `service-account-jwks-uri=https://issuer.wif.local/openid/v1/jwks` – Wert, der im
     Discovery-Dokument als `jwks_uri` landet.
   - `service-account-signing-key-file=/sa-keys/signing.key`,
     `service-account-key-file=/sa-keys/verify.pub` – eigene Schlüsseldateien aus `sa-keys`.
@@ -136,46 +145,50 @@ weder den API-Server noch den Upload-Listener.
   `K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml`, `K3S_KUBECONFIG_MODE=644`.
 - **`volumes`:** `k3s-data` (Cluster-Datenbank), `kubeconfig:/output`, `sa-keys:/sa-keys:ro`.
 - **`networks`:** `cluster-net` mit fester IP `172.31.7.2` und **Alias** `k3s-server`,
-  `workload-net` mit `172.31.9.2`. Über `workload-net` erreichen Pods den Validator; der
-  API-Server lauscht dort nicht.
+  `workload-net` mit `172.31.9.2`. Über `workload-net` erreichen Pods Validator, Keycloak
+  (Gateway) und `service-r`; API-Server und Node-Port lauschen dort nicht.
 - **`depends_on: sa-keys → service_completed_successfully`**.
 - **`healthcheck`:** `kubectl get --raw /readyz`.
 
 ### `bootstrap` – der Einmal-Job
 
 - **`entrypoint: ["bash", "/work/bootstrap.sh"]`**, `restart: "no"`.
-- **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`,
-  `publisher-tls:/publisher-tls:ro`, `./manifests:/manifests:ro`, `./tools:/work:ro`.
+- **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `issuer-tls:/issuer-tls:ro`,
+  `./manifests:/manifests:ro`, `./tools:/work:ro`.
 - **`networks`:** nur `cluster-net`.
 - **`depends_on`:** `server → service_healthy`, `pki-init → service_completed_successfully`.
-- Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md).
+- Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolsbootstrapsh-schritt-für-schritt).
 
-### `issuer-web` – der Issuer-Endpoint
+### `ingress-lb` – der Weg der Relying Parties in den Cluster
 
-- **Image:** `nginx:1.29-alpine` (über `${NGINX_IMAGE}` austauschbar).
-- **`entrypoint`:** legt `/oidc/.tmp` an, übergibt `/oidc` an den Benutzer `nginx` (damit
-  `PUT` schreiben darf) und startet nginx.
-- **`volumes`:** `oidc-web:/oidc` (die hochgeladenen Dokumente, rw), `issuer-tls:/tls:ro`
-  (Serverzertifikat), `ca-trust:/trust:ro` (zum Prüfen der Client-Zertifikate), die Config
-  `./tools/nginx-issuer.conf`.
+- **Image:** `nginx:1.29-alpine` (über `${NGINX_IMAGE}` austauschbar),
+  `command: nginx -c /etc/nginx/ingress-lb.conf`; `mem_limit: 32m`.
+- **Härtung:** `read_only: true` mit `tmpfs` für `/tmp` und `/var/cache/nginx`,
+  `cap_drop: ALL`, nur `NET_BIND_SERVICE`, `SETUID`, `SETGID` zurück (Port 443, Wechsel der
+  Worker auf den Benutzer `nginx`), `no-new-privileges`.
+- **`volumes`:** `ca-trust:/trust:ro` (nur für den Healthcheck), die Config
+  `./tools/nginx-ingress-lb.conf`.
 - **`networks`:** `cluster-net` mit `172.31.7.20`, `relying-net` mit `172.31.8.20` und Alias
-  `issuer-web`.
-- **`depends_on: pki-init → service_completed_successfully`**.
-- **`healthcheck`:** `test -s /oidc/openid/v1/jwks` – gesund, sobald der Publisher das erste
-  JWKS hochgeladen hat (`retries: 60`, alle 5 s).
+  `issuer.wif.local`.
+- TCP-Pass-through `172.31.8.20:443` → `172.31.7.2:30443`; TLS endet bei Traefik im Cluster.
+- **`depends_on: server → service_healthy`**.
+- **`healthcheck`:** `curl` mit Lab-CA auf `https://issuer.wif.local/openid/v1/jwks` – gesund,
+  sobald der Issuer-Pod das JWKS über den Ingress ausliefert (`retries: 120`, alle 5 s,
+  `start_period: 30s`).
+- Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#ingress-traefik-und-ingress-lb).
 
 ### `validator` – der Dienst außerhalb des Clusters
 
 - **`build.context: ./validator`** – Multi-Stage-Build, siehe
   [build-und-betrieb.md](build-und-betrieb.md).
-- **`environment`:** `WIF_ISSUER` (Default `https://issuer-web`), `WIF_AUDIENCE` (Default
-  `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`, `VALIDATOR_TLS_DIR=/tls`.
+- **`environment`:** `WIF_ISSUER` (Default `https://issuer.wif.local`), `WIF_AUDIENCE`
+  (Default `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`, `VALIDATOR_TLS_DIR=/tls`.
 - **`volumes`:** `ca-trust:/trust:ro` – das Root-Zertifikat der internen CA – und
   `validator-tls:/tls:ro` – das eigene Serverzertifikat. Kein Volume der Cluster-Seite.
 - **`networks`:** `relying-net` mit `172.31.8.10`, `workload-net` mit `172.31.9.10`.
 - **`ports: "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"`** – nur HTTPS, kein
   HTTP-Listener; vom Host unter `https://localhost:18080` (Lab-CA). Läuft als `USER 10001`.
-- **`depends_on: issuer-web → service_healthy`**.
+- **`depends_on: ingress-lb → service_healthy`**.
 - **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`,
   `start_period: 40s`.
 
@@ -196,7 +209,7 @@ weder den API-Server noch den Upload-Listener.
   anderen Bridge-Netzen erreichbar, unabhängig von der Host-Adresse (im Lab gemessen).
 - **`volumes`:** `keycloak-tls:/tls:ro`, `ca-trust:/trust:ro`,
   `./keycloak/realm-domain-rst.json` (Realm-Import, ro).
-- **`depends_on`:** `pki-init → service_completed_successfully`, `issuer-web → service_healthy`.
+- **`depends_on`:** `pki-init → service_completed_successfully`, `ingress-lb → service_healthy`.
 - **`healthcheck`:** `GET /health/ready` auf `localhost:9000` per Bash-`/dev/tcp` (kein `curl`
   im Image).
 - Konfiguration im Detail: [autorisierungsserver.md](autorisierungsserver.md#keycloak).
@@ -235,13 +248,13 @@ weder den API-Server noch den Upload-Listener.
 ### `demo` – die Ende-zu-Ende-Prüfung
 
 - Gleiches Image wie `bootstrap` (`wif-lab/tools`), Profil `demo`.
-- **`command: ["all"]`** – Phase; außerdem `authz`, `pre-rotation` und `post-rotation`.
+- **`command: ["all"]`** – Phase; außerdem `authz`, `hardening`, `resilience`,
+  `pre-rotation`, `staged` und `post-rotation`.
 - **`environment`:** `WIF_AUDIENCE`, `VALIDATOR_URL=https://validator:8443`, `KC_REALM_ISSUER`.
-- **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `pki-demo:/pki-demo:ro`
-  (Negativtest-Zertifikate), `demo-state:/state` (Token und `kid`s zwischen den
-  Rotationsphasen).
-- **`networks`:** `cluster-net` (für `kubectl` und den Upload-Listener) und `relying-net`
-  (für `issuer-web :443` und den Validator).
+- **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `pki-demo:/pki-demo:ro`,
+  `demo-state:/state` (Token und `kid`s zwischen den Phasen des Schlüsselwechsels).
+- **`networks`:** `cluster-net` (für `kubectl`) und `relying-net` (für
+  `https://issuer.wif.local` über `ingress-lb`, Validator und Keycloak).
 - **`depends_on`:** `validator`, `service-r` und `keycloak-gateway` → `service_healthy`.
 - Die Schritte: [../use-cases.md](../use-cases.md#verifikation-auf-einen-blick).
 
@@ -257,22 +270,21 @@ braucht.
 | Volume | Beschrieben von | Gelesen von | Inhalt |
 |---|---|---|---|
 | `pki-ca` | `pki-init` | – | Root-CA: `ca.crt`, `ca.key`. |
-| `ca-trust` | `pki-init` | `issuer-web`, `bootstrap`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
-| `issuer-tls` | `pki-init` | `issuer-web` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:issuer-web`). |
-| `publisher-tls` | `pki-init` | `bootstrap` (→ Secret) | Client-Zertifikat `tls.crt` / `tls.key` (`CN=jwks-publisher`). |
-| `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `wrong-cn.*`, `foreign-ca.crt`, `foreign-publisher.*`. |
+| `ca-trust` | `pki-init` | `bootstrap`, `ingress-lb`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
+| `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer`) | Serverzertifikat `tls.crt` / `tls.key` des Ingress (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
+| `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `foreign-ca.crt`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
 | `validator-tls` | `pki-init` | `validator`, `validator-foreign-ca` | Serverzertifikat `tls.crt` / `tls.key` (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
 | `service-r-tls` | `pki-init` | `service-r` | Serverzertifikat `tls.crt` / `tls.key` (`CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
-| `sa-keys` | `sa-keys` | `server` (ro) | `signing.key`, `current.pub`, `previous.pub`, `verify.pub`. |
+| `sa-keys` | `sa-keys` | `server` (ro) | `signing.key`, `current.pub`, `staged.*` (zwischen `stage` und `activate`), `previous.pub`, `verify.pub`. |
 | `k3s-data` | `server` | – | Interne k3s-Datenbank, Cluster-Zustand. |
 | `kubeconfig` | `server` | `bootstrap`, `demo` | `kubeconfig.yaml` – Adresse + Admin-Zugang für `kubectl`. |
-| `oidc-web` | `issuer-web` (per `PUT`) | `issuer-web` | `.well-known/openid-configuration`, `openid/v1/jwks` – unter ihrem URL-Pfad abgelegt. |
-| `demo-state` | `demo` | `demo` | Token und `kid`s von vor der Rotation. |
+| `demo-state` | `demo` | `demo` | Token und `kid`s zwischen den Phasen des Schlüsselwechsels. |
 
-Zwischen Cluster-Seite und Validator gibt es **kein** gemeinsames Volume. Die Daten
-(Discovery-Dokument, JWKS) erreichen den Validator nur über HTTPS von `issuer-web`, der
-Vertrauensanker (`ca.crt`) über `ca-trust`.
+Zwischen Cluster-Seite und Relying Parties gibt es **kein** gemeinsames Volume. Die Daten
+(Discovery-Dokument, JWKS) erreichen Validator und Keycloak nur über HTTPS von
+`issuer.wif.local`, der Vertrauensanker (`ca.crt`) über `ca-trust`. Die Kopie, die der
+Issuer-Pod ausliefert, liegt in einem `emptyDir` im Pod, nicht in einem Docker-Volume.
 
 > **`down -v`:** `docker compose down` allein lässt die Volumes stehen; erst `docker compose
 > down -v` löscht sie. Siehe [build-und-betrieb.md](build-und-betrieb.md).
@@ -283,41 +295,45 @@ Vertrauensanker (`ca.crt`) über `ca-trust`.
 
 | Netz | Subnetz | Mitglieder | Zweck |
 |---|---|---|---|
-| `cluster-net` | `172.31.7.0/24` | `server` (.2, Alias `k3s-server`), `issuer-web` (.20), `bootstrap`, `demo` | Der Cluster und sein einziger Weg nach außen: der Upload-Listener. |
-| `relying-net` | `172.31.8.0/24` | `issuer-web` (.20, Alias `issuer-web`), `validator` (.10), `keycloak` (.30, Alias `keycloak`), `keycloak-gateway` (.31), `keycloak-admin` (.32), `service-r` (.40), `demo`, `validator-foreign-ca` | Öffentlicher Lese-Listener, Relying Parties und Autorisierungsserver. |
+| `cluster-net` | `172.31.7.0/24` | `server` (.2, Alias `k3s-server`), `ingress-lb` (.20), `bootstrap`, `demo` | Der Cluster: API-Server und Ingress-Node-Port lauschen nur hier. |
+| `relying-net` | `172.31.8.0/24` | `ingress-lb` (.20, Alias `issuer.wif.local`), `validator` (.10), `keycloak` (.30, Alias `keycloak`), `keycloak-gateway` (.31), `keycloak-admin` (.32), `service-r` (.40), `demo`, `validator-foreign-ca` | Relying Parties und Autorisierungsserver; Zugang zum Cluster nur über `ingress-lb :443`. |
 | `workload-net` | `172.31.9.0/24` | `server` (.2), `validator` (.10), `keycloak-gateway` (.30), `service-r` (.40) | Pods rufen Validator, Keycloak (über das Gateway) und `service-r` auf. |
 
 - **`driver: bridge`** – der Standard-Netzwerktyp von Docker: ein privates virtuelles LAN.
   Container im selben Netz erreichen sich über Service-Namen und Aliase.
 - **`ipam`** legt das Subnetz fest; feste Adressen kommen über `ipv4_address`.
 - Pod-Verkehr verlässt den k3s-Container mit dessen Adresse im jeweiligen Netz. Ein Pod
-  erreicht deshalb den Validator über `workload-net` und `issuer-web` über `cluster-net`.
+  erreicht deshalb den Validator über `workload-net`.
 
 Keycloak selbst hängt nicht in `workload-net`. Weil Docker veröffentlichte Ports auch aus
 anderen Bridge-Netzen erreichbar macht, veröffentlicht er keinen Port; nicht veröffentlichte
-Ports wie `issuer-web :443` oder Keycloak `:9000` bleiben auf ihre Netze beschränkt.
+Ports wie `ingress-lb :443` oder Keycloak `:9000` bleiben auf ihre Netze beschränkt.
 
 `tools/run-all-checks.sh` prüft die Trennung von Validator und `service-r` aus
-(`172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.8.20:8443` nicht erreichbar) und von Keycloak
-aus (zusätzlich `172.31.7.20:8443`). `demo.sh authz` (Prüfung 20) prüft aus einem Pod, dass
-Keycloak nur über das Gateway und nur mit dem Realm `domain-rst` erreichbar ist.
+(`172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443`, `172.31.9.2:30443` nicht
+erreichbar) und von Keycloak aus (`172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443`,
+`172.31.7.20:443` nicht erreichbar, `172.31.8.20:443` erreichbar). `demo.sh authz`
+(Prüfung 20) prüft aus einem Pod, dass Keycloak nur über das Gateway und nur mit dem Realm
+`domain-rst` erreichbar ist.
 
 ### Warum feste IPs – und warum brauchen die Pods `hostAliases`?
 
-Validator und `issuer-web` laufen **außerhalb** des Clusters. Der cluster-interne DNS
-(CoreDNS) kennt nur Dinge *im* Cluster. Die Pods lösen die Namen deshalb über `hostAliases`
-auf, die statische Zeilen in `/etc/hosts` schreiben:
+Validator, Keycloak-Gateway und `service-r` laufen **außerhalb** des Clusters. Der
+cluster-interne DNS (CoreDNS) kennt nur Dinge *im* Cluster. Die Pods lösen die Namen deshalb
+über `hostAliases` auf, die statische Zeilen in `/etc/hosts` schreiben:
 
 | Pod | Name | IP |
 |---|---|---|
 | `consumer` (`manifests/20-consumer.yaml`) | `validator.wif.local` | `172.31.9.10` (Validator in `workload-net`) |
 | `consumer`, `reader`, `stranger` | `keycloak` | `172.31.9.30` (`keycloak-gateway` in `workload-net`) |
 | `consumer`, `reader` | `service-r.wif.local` | `172.31.9.40` (`service-r` in `workload-net`) |
-| `jwks-publisher` (`manifests/10-publisher.yaml:116`) | `issuer-web` | `172.31.7.20` (`issuer-web` in `cluster-net`) |
 
-Damit diese Einträge stimmen, **müssen** die Adressen fest sein. `172.31.7.20` steht
-außerdem in `tools/nginx-issuer.conf` als Bind-Adresse des Upload-Listeners und in
-`tools/demo.sh` (`UPLOAD_ADDR`). Der Name `validator.wif.local` ist frei gewählt.
+Damit diese Einträge stimmen, **müssen** die Adressen fest sein. Weitere feste Adressen:
+`172.31.7.2` (Ziel in `tools/nginx-ingress-lb.conf`, Egress-Ziel der NetworkPolicy
+`issuer-to-api-server`), `172.31.8.20` (Bind-Adresse in `tools/nginx-ingress-lb.conf`,
+`INGRESS_LB_ADDR` in `tools/demo.sh`). Außerhalb des Clusters löst `issuer.wif.local` über
+den Compose-Alias von `ingress-lb` in `relying-net` auf. Die Namen unter `wif.local` sind frei
+gewählt.
 
 ---
 
@@ -327,19 +343,20 @@ außerdem in `tools/nginx-issuer.conf` als Bind-Adresse des Upload-Listeners und
 Bedingung des Vorgängers erfüllt ist:
 
 ```
-pki-init     ─┬─ completed ──────────────────────────────┐
-sa-keys      ─┼─ completed                                │
-              ▼                                           ▼
-server       healthy (kubectl get --raw /readyz)     issuer-web  startet, liefert noch nichts
-              │                                           │
-              ▼   (+ pki-init completed)                  │
-bootstrap    Namespaces, Secret, ConfigMaps, Manifeste,   │
-             Rollouts jwks-publisher, consumer,           │
-             reader, stranger, Exit 0                     │
-              │                                           │
-              ▼                                           │
-jwks-publisher (Pod) ── PUT mTLS ────────────────────────►│ healthy (JWKS-Datei vorhanden)
-                                                          ▼
+pki-init     ─┬─ completed
+sa-keys      ─┤  completed
+              ▼
+server       healthy (kubectl get --raw /readyz)
+              ├────────────────────────────────────────┐
+              ▼   (+ pki-init completed)               ▼
+bootstrap    Namespaces, Secret, ConfigMap,       ingress-lb  startet, Healthcheck
+             Manifeste, Rollouts issuer,                      noch rot
+             traefik, consumer, reader,                │
+             stranger, Exit 0                          │
+              │                                        │
+              ▼                                        │
+Pod issuer   sync holt den ersten Stand, web ready ──► │ healthy (JWKS über den Ingress)
+                                                       ▼
 validator    entrypoint.sh wartet auf /trust/ca.crt, OIDC-Discovery, JWKSource
              healthy (curl --cacert … https://localhost:8443/healthz)
 keycloak     Realm-Import, healthy (/health/ready auf :9000)
@@ -351,7 +368,7 @@ service-r    nach pki-init: entrypoint.sh baut Truststore, healthy (curl --cacer
 demo         nur bei "docker compose run --rm demo" (wartet auf validator, service-r, keycloak-gateway)
 ```
 
-`validator` und `keycloak` hängen beide nur an `issuer-web` und starten parallel;
+`validator` und `keycloak` hängen beide an `ingress-lb` und starten parallel;
 `service-r` wartet nur auf `pki-init`. `demo` wartet über `keycloak-gateway` indirekt auf Keycloaks Healthcheck;
 da `/health/ready` schon vor dem Abschluss des ersten Bootstraps UP meldet, wiederholt Prüfung 8
 die Realm-Discovery bis zu 60 s.
@@ -364,7 +381,7 @@ Vorhandene CA, Zertifikate und Signaturschlüssel bleiben erhalten.
 ## Weiterlesen
 
 - [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap,
-  Publisher und nginx-Config im Detail
+  Issuer-Pod, Ingress und Härtung im Detail
 - [validator.md](validator.md) – der Java-Service innen
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak, Realm und `service-r`
 - [trust-und-tls.md](trust-und-tls.md) – die TLS-Vertrauensbeziehungen
