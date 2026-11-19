@@ -1,0 +1,19 @@
+<section id="fehlerfaelle-betrieb">
+<h2>Anhang: Prüfungen zu Veröffentlichung, Netzen und Rotation</h2>
+<table class="tbl">
+<tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
+<tr><td>U1</td><td>JWKS-Upload ohne oder mit fremdem Zertifikat</td><td>demo</td><td class="fail">400</td></tr>
+<tr><td>U2</td><td>Upload mit falschem CN oder über den öffentlichen Port</td><td>demo</td><td class="fail">403</td></tr>
+<tr><td>U3</td><td>Veröffentlichtes JWKS nach den Versuchen</td><td>demo</td><td class="pass">unverändert</td></tr>
+<tr><td>N1</td><td>Keycloak, Dienst R, Validator → API-Server</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
+<tr><td>N2</td><td>Prüfende Dienste → Upload-Port von issuer-web</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
+<tr><td>N3</td><td>Validator mit fremder CA</td><td>run-all-checks.sh</td><td class="fail">startet nicht</td></tr>
+<tr><td>R1</td><td>Schlüsselrotation: neues JWKS veröffentlicht</td><td>run-all-checks.sh</td><td class="pass">neue kid</td></tr>
+<tr><td>R2</td><td>Tokens mit altem und mit neuem Schlüssel</td><td>run-all-checks.sh</td><td class="pass">200</td></tr>
+</table>
+<ul class="pts">
+<li>Schreiben darf nur der Publisher – geprüft über Zertifikat, DN und Netz</li>
+<li>Bei der Rotation bleibt der alte Schlüssel zum Prüfen im JWKS, Tokens von vorher gelten weiter</li>
+</ul>
+<aside>N3: Mit einer fremden CA scheitert schon die Verbindung zu issuer-web, der Dienst startet nicht. R2 gilt für beide Prüfer: Der Validator akzeptiert Tokens von vor und nach der Rotation, Keycloak stellt für einen mit dem neuen Schlüssel signierten Client-Nachweis ein Access-Token aus.</aside>
+</section>

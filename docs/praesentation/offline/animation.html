@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIF-Ablauf Schritt für Schritt</title>
+<style>
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+</style>
+<style>
+/* Layout: Bühne (Canvas) links, Erklärung + Steuerung rechts; unter 960px untereinander. */
+:root {
+  --bg: #f4f5f2;
+  --surface: #ffffff;
+  --ink: #1b232c;
+  --muted: #5b6672;
+  --line: #c9cfd5;
+  --accent: #1f62b0;
+  --trust: #b8650f;
+  --token: #6b4bb8;
+  --ok: #23774a;
+  --bad: #b3261e;
+  --zone-a: #e9eef5;
+  --zone-b: #eef3ec;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161b; --surface: #1b2128; --ink: #e6eaee; --muted: #9aa5b1; --line: #3a444f;
+    --accent: #6ea8ec; --trust: #e3a04f; --token: #a98ef0; --ok: #5fbf88; --bad: #f07a72;
+    --zone-a: #19222d; --zone-b: #1a241d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161b; --surface: #1b2128; --ink: #e6eaee; --muted: #9aa5b1; --line: #3a444f;
+  --accent: #6ea8ec; --trust: #e3a04f; --token: #a98ef0; --ok: #5fbf88; --bad: #f07a72;
+  --zone-a: #19222d; --zone-b: #1a241d; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
+header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+h1 { font-size: 22px; font-weight: 700; margin: 0; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); font-size: 14px; }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; padding: 12px 24px 24px; align-items: start; }
+@media (max-width: 960px) { .stage { grid-template-columns: 1fr; } }
+#canvas-wrap { cursor: pointer; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; line-height: 0; }
+#canvas-wrap canvas { display: block; width: 100% !important; height: auto !important; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.phase { font-weight: 600; color: var(--accent); }
+.count { font-variant-numeric: tabular-nums; }
+.panel h2 { font-size: 20px; line-height: 1.3; margin: 0; text-wrap: balance; }
+.panel .text { margin: 0; }
+.inspect { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre; overflow-x: auto; }
+.inspect:empty { display: none; }
+.inspect-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
+.inspect-label:empty { display: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; }
+button { font: inherit; font-size: 14px; font-weight: 500; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:disabled { opacity: 0.45; cursor: default; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); padding-top: 10px; }
+.steps .ph { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 0 2px; }
+.steps .ph:first-child { margin-top: 0; }
+.steps button { width: 100%; text-align: left; border: none; padding: 4px 8px; font-size: 13.5px; font-weight: 400; border-radius: 5px; display: flex; gap: 8px; }
+.steps button .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.6em; }
+.steps button[aria-current="step"] { background: var(--zone-a); font-weight: 600; }
+.steps button[aria-current="step"] .n { color: var(--accent); }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+/* Einbettung in eine Präsentation (?embed): nur Bühne und Erklärung, Steuerung über postMessage */
+body.embed { background: transparent; }
+body.embed header, body.embed .controls, body.embed .hint, body.embed .steps { display: none; }
+body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; }
+body.embed .panel { max-height: 100vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Workload Identity Federation: Ablauf Schritt für Schritt</h1>
+  <p>PoC k8s-workload-identity-federation-lab · vom „Pass“ zum „Visum“ bis zum Aufruf von Dienst R · jeder Schritt per Klick</p>
+</header>
+<div class="stage">
+  <div>
+    <div id="canvas-wrap" role="img" aria-label="Animierte Darstellung des aktuellen Schritts: Komponenten des Labs und die Nachrichten zwischen ihnen."></div>
+    <div class="legend" aria-hidden="true">
+      <span><i style="background:var(--trust)"></i>Zertifikate der PKI</span>
+      <span><i style="background:var(--accent)"></i>Schlüssel zum Prüfen</span>
+      <span><i style="background:var(--token)"></i>„Pass“, „Visum“ und Anfragen</span>
+      <span><i style="background:var(--ok)"></i>erfolgreich</span>
+      <span><i style="background:var(--bad)"></i>abgelehnt</span>
+      <span><i style="background:transparent; border:1.5px dashed var(--line)"></i>mögliche Verbindung</span>
+    </div>
+  </div>
+  <aside class="panel" aria-live="polite">
+    <div class="meta"><span class="phase" id="phase"></span><span class="count" id="count"></span></div>
+    <h2 id="title"></h2>
+    <p class="text" id="text"></p>
+    <div class="inspect-label" id="inspect-label"></div>
+    <pre class="inspect" id="inspect"></pre>
+    <div class="controls">
+      <button id="btn-prev" type="button">◀ Zurück</button>
+      <button id="btn-next" type="button" class="primary">Weiter ▶</button>
+      <button id="btn-replay" type="button">Schritt wiederholen</button>
+    </div>
+    <p class="hint">Weiter mit Klick auf das Bild, → oder Leertaste; zurück mit ←.</p>
+    <ol class="steps" id="steps"></ol>
+  </aside>
+</div>
+
+<script src="lib/p5.min.js"></script>
+<script>
+"use strict";
+const W = 1280, H = 720;
+
+// Knoten im Entwurfsraster 1280 x 720
+const N = {
+  pki: { x: 300, y: 20,  w: 230, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
+  api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt „Pässe“ aus" },
+  pub: { x: 290, y: 330, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
+  pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "ServiceAccount consumer" },
+  iss: { x: 540, y: 146, w: 210, h: 110, t: "issuer-web", s: "Upload 8443 · Lesen 443" },
+  kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", s: "für Pods nur Realm-Pfade" },
+  r:   { x: 960, y: 500, w: 220, h: 92, t: "Dienst R", s: "service-r" }
+};
+const ZONES = [
+  { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster", tone: "zone-a" },
+  { x: 846, y: 118, w: 410, h: 586, label: "Fachbereich", tone: "zone-b" }
+];
+
+const PH = ["Überblick", "Vorbereitung", "Identität: der „Pass“", "Rechte: das „Visum“", "Aufruf von Dienst R", "Gegenproben und Betrieb"];
+
+// Schritt-Bausteine
+const mv = (a, b, label, tone, net, flip) => ({ k: "move", a, b, label, tone, net, flip });
+const par = (...moves) => ({ k: "par", moves });
+const chk = (at, items, side) => ({ k: "check", at, items, side: side || "right" });
+const blkTo = (a, x, y, lbl) => ({ k: "block", a, x, y, lbl });
+
+const STEPS = [
+  { ph: 0, title: "Überblick: „Pass“, „Visum“, Aufruf",
+    text: "Der Pod bekommt vom Cluster einen „Pass“, tauscht ihn bei Keycloak seines Fachbereichs gegen ein „Visum“ und ruft damit Dienst R auf. Im Pod liegt dafür weder ein Passwort noch ein Client-Zertifikat. Die folgenden Schritte zeigen, was im Hintergrund nötig ist, damit das sicher funktioniert.",
+    il: "", inspect: "",
+    segs: [par(mv("api", "pod", "„Pass“", "token"), mv("pod", "kc", "„Pass“ zeigen", "token"), mv("kc", "pod", "„Visum“", "token"), mv("pod", "r", "„Visum“ zeigen", "token"))],
+    fx: null },
+
+  { ph: 1, title: "Die interne PKI sichert die Verbindungen",
+    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für issuer-web, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Das einzige Client-Zertifikat erhält der Publisher – eine Infrastruktur-Komponente, nicht jede Workload. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "issuer-web  Server-Zert. + Root-CA\nKeycloak    Server-Zert. + Root-CA\nDienst R    Server-Zert. + Root-CA\nPublisher   Client-Zert. + Root-CA\nPod         nur Root-CA\n(Pfeile im Bild vereinfacht)",
+    segs: [par(mv("pki", "iss", "", "trust"), mv("pki", "kc", "", "trust"), mv("pki", "pub", "Client-Zert.", "trust", undefined, true))],
+    fx: s => { ["iss", "kc", "r"].forEach(n => s.cert.add(n)); ["iss", "pub", "pod", "kc", "r"].forEach(n => s.ca.add(n)); s.clientCert = true; } },
+  { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
+    text: "Der API-Server bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine Adresse außerhalb des Clusters ein: issuer-web. Dort sollen Prüfer die öffentlichen Schlüssel finden.",
+    il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer-web\nservice-account-jwks-uri\n  = https://issuer-web/openid/v1/jwks",
+    segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer-web"], "right")],
+    fx: s => { s.apiKey = 1; } },
+  { ph: 1, title: "Der Publisher bringt die Schlüssel nach außen",
+    text: "Keycloak darf den Cluster nicht erreichen. Deshalb liest ein Pod im Cluster, der Publisher, die öffentlichen Schlüssel beim API-Server und lädt sie zu issuer-web hoch. Schreiben darf dort nur, wer das Client-Zertifikat des Publishers vorweist. Der private Schlüssel verlässt den Cluster nie.",
+    il: "Details", inspect: "Hochgeladen werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen\nissuer-web:\n  Port 8443: Upload, nur Client-Zert.\n  Port 443:  Lesen für alle Prüfer\nAbgleich alle 15 s",
+    segs: [mv("api", "pub", "Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), chk("iss", ["Zertifikat von der internen CA", "DN exakt CN=jwks-publisher"], "above")],
+    fx: s => { s.issJwks = 1; } },
+
+  { ph: 2, title: "Der Pod bekommt seinen „Pass“",
+    text: "Kubernetes legt dem Pod ein ServiceAccount-Token als Datei ab: den „Pass“. Er nennt, wer die Workload ist, gilt nur für Keycloak und nur 600 Sekunden. Vor Ablauf wird er automatisch erneuert. Der Pod muss dafür nichts besitzen und nichts tun.",
+    il: "Inhalt des „Passes“", inspect: "iss (Aussteller): https://issuer-web\nsub (wer):\n  system:serviceaccount:\n    wif-demo:consumer\naud (für wen): Keycloak-Realm\nexp (Ablauf): Ausstellung + 600 s",
+    segs: [mv("api", "pod", "„Pass“", "token")],
+    fx: s => { s.files.push("„Pass“"); } },
+
+  { ph: 3, title: "Der Pod fragt bei Keycloak nach Rechten",
+    text: "Der Pod ruft Keycloak seines Fachbereichs auf. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Vor Keycloak sitzt ein Gateway (im Bild nicht eigens gezeigt): Es lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
+    il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
+    segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["Gateway: nur Realm-Pfade"], "below")], fx: null },
+  { ph: 3, title: "Keycloak holt die Schlüssel des Clusters",
+    text: "Im „Pass“ steht als Aussteller https://issuer-web. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die öffentlichen Schlüssel bei issuer-web und merkt sie sich. Beim Cluster fragt Keycloak nie nach.",
+    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer-web\n  Schlüssel:\n    https://issuer-web/openid/v1/jwks",
+    segs: [mv("kc", "iss", "GET Schlüssel · TLS", "token"), mv("iss", "kc", "Cluster-JWKS · TLS", "key")],
+    fx: s => { s.jwks.add("kc"); } },
+  { ph: 3, title: "Keycloak prüft den „Pass“",
+    text: "Keycloak prüft die Signatur mit dem passenden Schlüssel, ob der Pass für Keycloak ausgestellt wurde und ob er noch gilt. Dann sucht es den Eintrag (Client), der zu genau diesem Aussteller und diesem „wer“ gehört. Vergleich zu heute: Statt Merkmalen im Subject-DN ordnet Keycloak über Aussteller + sub zu. Gibt es keinen Eintrag, ist hier Schluss.",
+    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer-web)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
+    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "Client workload-a gefunden"], "below")], fx: null },
+  { ph: 3, title: "Keycloak stellt das „Visum“ aus",
+    text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
+    il: "Inhalt des „Visums“", inspect: "iss (Aussteller): Keycloak-Realm\naud (für wen): service-r = Dienst R\nazp (Client): workload-a\nscope (Rechte):\n  r:orders:read r:orders:write\nexp (Ablauf): Ausstellung + 300 s",
+    segs: [mv("kc", "pod", "„Visum“ · TLS", "token")],
+    fx: s => { s.files.push("„Visum“"); } },
+
+  { ph: 4, title: "Aufruf von Dienst R",
+    text: "Der Pod ruft Dienst R auf und legt das „Visum“ vor – über normales TLS, ohne Client-Zertifikat: Die Identität steckt im Visum. Den „Pass“ bekommt Dienst R nie zu sehen; er würde ihn ablehnen, weil Aussteller und Empfänger nicht passen.",
+    il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <„Visum“>",
+    segs: [mv("pod", "r", "GET /orders · TLS", "token")], fx: null },
+  { ph: 4, title: "Dienst R holt die Schlüssel des Realms",
+    text: "Beim ersten „Visum“ lädt Dienst R die öffentlichen Schlüssel des Realms bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne Gateway. issuer-web braucht Dienst R nicht.",
+    il: "", inspect: "",
+    segs: [mv("r", "kc", "GET Schlüssel · TLS", "token"), mv("kc", "r", "Realm-JWKS · TLS", "key")],
+    fx: s => { s.jwks.add("r"); } },
+  { ph: 4, title: "Dienst R prüft das „Visum“",
+    text: "Dienst R ist ein Standard-Spring-Resource-Server. Er prüft Signatur, Aussteller, Empfänger und Ablauf und macht aus jedem Scope eine Authority. Den Namen der Workload (azp) sieht er, entscheidet aber nur nach Scopes.",
+    il: "In Spring Security", inspect: "http.oauth2ResourceServer(\n    o -> o.jwt(…))\n\nPrincipal: workload-a (aus azp)\nAuthorities:\n  SCOPE_r:orders:read\n  SCOPE_r:orders:write",
+    segs: [chk("r", ["Signatur passt", "Aussteller = Realm", "nur für Dienst R", "noch gültig"], "left")], fx: null },
+  { ph: 4, title: "Die Regel im Dienst greift: 200",
+    text: "GET /orders verlangt SCOPE_r:orders:read – vorhanden, also 200. Vergleich zu heute: Statt „DN → Rolle“ im Dienst gilt „Scope → Authority“. Welche Workload welche Rechte bekommt, steht im Realm; welcher Scope welchen Endpunkt schützt, steht im Code von Dienst R.",
+    il: "Regeln in Dienst R", inspect: "GET /orders\n  → SCOPE_r:orders:read\nPOST /orders\n  → SCOPE_r:orders:write\nDELETE /orders/{id}\n  → SCOPE_r:orders:admin",
+    segs: [mv("r", "pod", "200 · TLS", "ok")], fx: null },
+
+  { ph: 5, title: "Gegenprobe: fehlendes Recht gibt 403",
+    text: "Löschen verlangt SCOPE_r:orders:admin. Dieses Recht hat der Fachbereich der Workload nicht gegeben, also antwortet Dienst R mit 403. Das „Visum“ ist gültig, es reicht nur nicht für diese Aktion.",
+    il: "", inspect: "",
+    segs: [mv("pod", "r", "DELETE /orders/7", "token"), mv("r", "pod", "403", "bad")], fx: null },
+  { ph: 5, title: "Gegenprobe: kein Weg in den Cluster",
+    text: "Keycloak holt die Cluster-Schlüssel bei issuer-web, Dienst R braucht nur Keycloak. Keiner von beiden hat einen Netzweg in den Cluster oder Zugangsdaten dafür – und keiner braucht sie.",
+    il: "", inspect: "",
+    segs: [par(blkTo("kc", 478, 300, "left"), blkTo("r", 478, 520, "right"))], fx: null },
+  { ph: 5, title: "Betrieb: Schlüsselwechsel im Cluster",
+    text: "Der Cluster bekommt einen neuen Signaturschlüssel. Der Publisher bemerkt die Änderung und lädt die neuen Schlüssel hoch; der alte bleibt zum Prüfen drin. Taucht ein „Pass“ mit unbekannter Key-ID auf, lädt Keycloak die Schlüssel bei issuer-web neu. Der alte Schlüssel kann weg, wenn alle alten Pässe abgelaufen und die Caches erneuert sind – frühestens nach 600 s plus der Zeit, die Prüfer Schlüssel zwischenspeichern.",
+    il: "Schlüssel nach dem Wechsel", inspect: "<neu>  signiert neue „Pässe“\n<alt>  nur noch zum Prüfen",
+    segs: [mv("api", "pub", "neue Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), mv("kc", "iss", "GET (neue Key-ID)", "token"), mv("iss", "kc", "Cluster-JWKS", "key")],
+    fx: s => { s.apiKey = 2; s.issJwks = 2; } }
+];
+
+function freshState() {
+  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], clientCert: false, apiKey: 0, issJwks: 0, pubHas: false };
+}
+function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
+
+const DUR = { move: 1900, item: 650, block: 1600, gap: 350 };
+function segDur(seg) {
+  if (seg.k === "move") return DUR.move;
+  if (seg.k === "check") return seg.items.length * DUR.item + 300;
+  if (seg.k === "block") return DUR.block;
+  if (seg.k === "par") return Math.max(...seg.moves.map(segDur));
+  return 0;
+}
+function stepDur(i) { return STEPS[i].segs.reduce((a, s) => a + segDur(s) + DUR.gap, 0); }
+
+// ---------- Zustand der Seite ----------
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let cur = 0, t0 = 0;
+
+const el = id => document.getElementById(id);
+function buildList() {
+  const ol = el("steps");
+  let last = -1;
+  STEPS.forEach((st, i) => {
+    if (st.ph !== last) { const li = document.createElement("li"); li.className = "ph"; li.textContent = PH[st.ph]; ol.appendChild(li); last = st.ph; }
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "step-" + (i + 1);
+    b.innerHTML = '<span class="n">' + (i + 1) + "</span><span></span>";
+    b.lastChild.textContent = st.title;
+    b.addEventListener("click", () => go(i));
+    li.appendChild(b); ol.appendChild(li);
+  });
+}
+function renderPanel() {
+  const st = STEPS[cur];
+  el("phase").textContent = PH[st.ph];
+  el("count").textContent = "Schritt " + (cur + 1) + " von " + STEPS.length;
+  el("title").textContent = st.title;
+  el("text").textContent = st.text;
+  el("inspect-label").textContent = st.il || "";
+  el("inspect").textContent = st.inspect || "";
+  el("btn-prev").disabled = cur === 0;
+  el("btn-next").disabled = cur === STEPS.length - 1;
+  document.querySelectorAll(".steps button").forEach((b, i) => {
+    b.parentElement.hidden = STEPS[i].ph !== STEPS[cur].ph;
+    if (i === cur) { b.setAttribute("aria-current", "step"); if (!EMBED) b.scrollIntoView({ block: "nearest" }); }
+    else b.removeAttribute("aria-current");
+  });
+}
+function now() { return performance.now(); }
+function elapsed() { return reduceMotion ? Infinity : now() - t0; }
+function go(i) {
+  cur = Math.max(0, Math.min(STEPS.length - 1, i));
+  t0 = now();
+  renderPanel();
+  if (typeof postState === "function") postState();
+}
+el("btn-prev").addEventListener("click", () => go(cur - 1));
+el("btn-next").addEventListener("click", () => go(cur + 1));
+el("btn-replay").addEventListener("click", () => go(cur));
+el("canvas-wrap").addEventListener("click", () => go(cur + 1));
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") { go(cur + 1); e.preventDefault(); }
+  else if (e.key === "ArrowLeft") { go(cur - 1); e.preventDefault(); }
+  else if (e.key === " " && !(e.target instanceof HTMLButtonElement)) { go(cur + 1); e.preventDefault(); }
+});
+
+// ---------- Zeichnen (p5) ----------
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  ["bg", "surface", "ink", "muted", "line", "accent", "trust", "token", "ok", "bad", "zone-a", "zone-b"].forEach(k => C[k] = cs.getPropertyValue("--" + k).trim());
+}
+const center = n => ({ x: N[n].x + N[n].w / 2, y: N[n].y + N[n].h / 2 });
+// Randpunkt eines Knotens in Richtung eines Zielpunkts
+function edgePoint(n, toward) {
+  const c = center(n), b = N[n];
+  const dx = toward.x - c.x, dy = toward.y - c.y;
+  const sx = dx === 0 ? Infinity : (b.w / 2 + 6) / Math.abs(dx);
+  const sy = dy === 0 ? Infinity : (b.h / 2 + 6) / Math.abs(dy);
+  const s = Math.min(sx, sy);
+  return { x: c.x + dx * s, y: c.y + dy * s };
+}
+function ends(a, b) { const p = edgePoint(a, center(b)), q = edgePoint(b, center(a)); return [p, q]; }
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+let FONT = "sans-serif";
+const sketch = p => {
+  let scaleF = 1;
+  function size() {
+    const wrap = document.getElementById("canvas-wrap");
+    const w = Math.max(320, wrap.clientWidth);
+    scaleF = w / W;
+    return [w, w * H / W];
+  }
+  p.setup = () => {
+    const [w, h] = size();
+    p.createCanvas(w, h);
+    p.pixelDensity(EMBED ? 2 : Math.min(2, window.devicePixelRatio || 1));
+    p.textFont(FONT);
+    document.fonts.load('16px "IBM Plex Sans"').then(() => { if (document.fonts.check('16px "IBM Plex Sans"')) FONT = "IBM Plex Sans"; }).catch(() => {});
+    readColors();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
+    new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  };
+  p.windowResized = () => { const [w, h] = size(); p.resizeCanvas(w, h); };
+
+  const col = (k, a) => { const c = p.color(C[k === "key" ? "accent" : k] || "#888"); if (a !== undefined) c.setAlpha(a); return c; };
+
+  function pill(x, y, label, tone, filled) {
+    p.textSize(14.5); p.textStyle(p.BOLD);
+    const tw = p.textWidth(label) + 20;
+    p.noStroke();
+    p.fill(filled ? col(tone) : col("surface"));
+    if (!filled) { p.stroke(col(tone)); p.strokeWeight(1.5); }
+    p.rectMode(p.CENTER); p.rect(x, y, tw, 26, 13); p.rectMode(p.CORNER);
+    p.noStroke(); p.fill(filled ? col("surface") : col(tone));
+    p.textAlign(p.CENTER, p.CENTER); p.text(label, x, y + 1);
+    p.textStyle(p.NORMAL);
+  }
+  function badge(x, y, label, tone) {
+    p.textSize(13); p.textStyle(p.BOLD);
+    const tw = p.textWidth(label) + 12;
+    p.noStroke(); p.fill(col(tone, 40)); p.rect(x, y, tw, 21, 4);
+    p.fill(col(tone)); p.textAlign(p.LEFT, p.CENTER); p.text(label, x + 6, y + 11);
+    p.textStyle(p.NORMAL);
+    return tw + 4;
+  }
+  function node(n, st, active) {
+    const b = N[n];
+    p.stroke(active ? col("accent") : col("line")); p.strokeWeight(active ? 2.5 : 1.5);
+    p.fill(col("surface")); p.rect(b.x, b.y, b.w, b.h, 10);
+    p.noStroke(); p.fill(col("ink")); p.textAlign(p.LEFT, p.TOP);
+    p.textSize(18); p.textStyle(p.BOLD); p.text(b.t, b.x + 12, b.y + 8);
+    p.textStyle(p.NORMAL); p.textSize(14); p.fill(col("muted")); p.text(b.s, b.x + 12, b.y + 30);
+    // Merkmale, bei Platzmangel in einer zweiten Zeile
+    const bl = [];
+    if (st.cert.has(n)) bl.push(["Zert.", "trust"]);
+    if (n === "pub" && st.clientCert) bl.push(["Client-Zert.", "trust"]);
+    if (st.ca.has(n)) bl.push(["CA", "trust"]);
+    if (n === "api" && st.apiKey) bl.push([st.apiKey === 2 ? "Schlüssel neu + alt" : "Signaturschlüssel", "accent"]);
+    if (n === "iss" && st.issJwks) bl.push([st.issJwks === 2 ? "Cluster-JWKS (2)" : "Cluster-JWKS", "accent"]);
+    if (n === "kc" && st.jwks.has("kc")) bl.push(["Cluster-JWKS", "accent"]);
+    if (n === "kc" && st.files.includes("„Visum“")) bl.push(["Realm-Schlüssel", "accent"]);
+    if (n === "r" && st.jwks.has("r")) bl.push(["Realm-JWKS", "accent"]);
+    if (n === "pki") bl.push(["CA-Schlüssel", "trust"]);
+    let bx = b.x + 12, by = b.y + 54;
+    p.textSize(13); p.textStyle(p.BOLD);
+    bl.forEach(([label, tone]) => {
+      const w = p.textWidth(label) + 16;
+      if (bx + w > b.x + b.w - 8) { bx = b.x + 12; by += 24; }
+      bx += badge(bx, by, label, tone);
+    });
+    if (n === "pod" && st.files.length) {
+      let fx = b.x; const fy = b.y + b.h + 8;
+      st.files.forEach(f => { fx += badge(fx, fy, f, "token"); });
+    }
+  }
+  function zones() {
+    ZONES.forEach(z => {
+      p.noStroke(); p.fill(col(z.tone)); p.rect(z.x, z.y, z.w, z.h, 14);
+      p.fill(col("muted")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.LEFT, p.TOP);
+      p.text(z.label, z.x + 14, z.y + 10); p.textStyle(p.NORMAL);
+    });
+  }
+  const LINKS = [["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["pod", "kc"], ["pod", "r"], ["r", "kc"]];
+  function staticLinks() {
+    p.stroke(col("line")); p.strokeWeight(1.2);
+    p.drawingContext.setLineDash([4, 5]);
+    LINKS.forEach(([a, b]) => { const [u, v] = ends(a, b); p.line(u.x, u.y, v.x, v.y); });
+    p.drawingContext.setLineDash([]);
+  }
+  function arrowHead(x, y, ang, c) {
+    p.push(); p.translate(x, y); p.rotate(ang); p.noStroke(); p.fill(c);
+    p.triangle(0, 0, -11, -5.5, -11, 5.5); p.pop();
+  }
+  function drawMove(seg, t, k) {
+    let [u, v] = ends(seg.a, seg.b);
+    // Hin- und Rückweg auf versetzten Linien, Beschriftung jeweils außen
+    const [lo, hi] = seg.a < seg.b ? [u, v] : [v, u];
+    const len = Math.hypot(hi.x - lo.x, hi.y - lo.y) || 1;
+    const sign = (seg.a < seg.b ? 1 : -1) * (seg.flip ? -1 : 1);
+    const nx = -(hi.y - lo.y) / len * sign, ny = (hi.x - lo.x) / len * sign;
+    u = { x: u.x + nx * 7, y: u.y + ny * 7 }; v = { x: v.x + nx * 7, y: v.y + ny * 7 };
+    const c = col(seg.tone);
+    const e = ease(clamp01(t));
+    p.stroke(c); p.strokeWeight(2.5);
+    const hx = u.x + (v.x - u.x) * Math.max(e, 0.02), hy = u.y + (v.y - u.y) * Math.max(e, 0.02);
+    p.line(u.x, u.y, hx, hy);
+    if (e >= 0.98) arrowHead(v.x, v.y, Math.atan2(v.y - u.y, v.x - u.x), c);
+    if (!seg.label) { if (t < 1) { p.noStroke(); p.fill(c); p.circle(hx, hy, 14); } return; }
+    if (t < 1) { pill(hx, hy, seg.label, seg.tone, true); return; }
+    p.textSize(14.5); p.textStyle(p.BOLD);
+    const off = 12 + Math.abs(nx) * (p.textWidth(seg.label) / 2 + 10) + Math.abs(ny) * 13;
+    p.textStyle(p.NORMAL);
+    pill((u.x + v.x) / 2 + nx * off, (u.y + v.y) / 2 + ny * off, seg.label, seg.tone, false);
+  }
+  function drawBlock(seg, t) {
+    const target = { x: seg.x, y: seg.y };
+    const u = edgePoint(seg.a, target);
+    const e = ease(clamp01(t / 0.6));
+    const hx = u.x + (target.x - u.x) * e, hy = u.y + (target.y - u.y) * e;
+    p.stroke(col("bad")); p.strokeWeight(2.5); p.drawingContext.setLineDash([8, 6]);
+    p.line(u.x, u.y, hx, hy); p.drawingContext.setLineDash([]);
+    if (t > 0.6) {
+      p.strokeWeight(4); const s = 11;
+      p.line(hx - s, hy - s, hx + s, hy + s); p.line(hx - s, hy + s, hx + s, hy - s);
+      p.noStroke(); p.fill(col("bad")); p.textSize(14); p.textStyle(p.BOLD);
+      if (seg.lbl === "left") { p.textAlign(p.RIGHT, p.CENTER); p.text("kein Netzweg in den Cluster", hx - 16, hy - 18); }
+      else { p.textAlign(p.LEFT, p.CENTER); p.text("kein Netzweg in den Cluster", hx + 18, hy - 18); }
+      p.textStyle(p.NORMAL);
+    }
+  }
+  function drawCheck(seg, tms) {
+    const b = N[seg.at];
+    const shown = Math.min(seg.items.length, Math.floor(tms / DUR.item) + 1);
+    p.textSize(14.5);
+    const w = Math.max(...seg.items.map(s => p.textWidth(s))) + 48;
+    const h = seg.items.length * 25 + 14;
+    let x, y;
+    if (seg.side === "right") { x = b.x + b.w + 14; y = b.y; }
+    else if (seg.side === "left") { x = b.x - w - 14; y = b.y; }
+    else if (seg.side === "above") { x = b.x + b.w / 2 - w / 2; y = b.y - h - 12; }
+    else { x = b.x + b.w / 2 - w / 2; y = b.y + b.h + 12; }
+    x = Math.max(8, Math.min(W - w - 8, x)); y = Math.max(8, Math.min(H - h - 8, y));
+    p.stroke(col("accent")); p.strokeWeight(1.5); p.fill(col("surface")); p.rect(x, y, w, h, 8);
+    p.noStroke(); p.textAlign(p.LEFT, p.CENTER);
+    for (let i = 0; i < shown; i++) {
+      const yy = y + 19 + i * 25;
+      p.fill(col("ok")); p.textStyle(p.BOLD); p.text("✓", x + 12, yy);
+      p.fill(col("ink")); p.textStyle(p.NORMAL); p.text(seg.items[i], x + 30, yy);
+    }
+  }
+
+  p.draw = () => {
+    if (!C.ink) readColors();
+    const total = stepDur(cur);
+    const e = elapsed();
+    const done = e >= total;
+    const st = stateBefore(cur);
+    if (done && STEPS[cur].fx) STEPS[cur].fx(st);
+
+    p.textFont(FONT);
+    p.clear(); p.background(col("surface"));
+    p.push(); p.scale(scaleF);
+    zones(); staticLinks();
+    // aktive Knoten des Schritts
+    const act = new Set();
+    STEPS[cur].segs.forEach(s => { (s.k === "par" ? s.moves : [s]).forEach(m => { if (m.a) { act.add(m.a); act.add(m.b); } if (m.at) act.add(m.at); }); });
+    Object.keys(N).forEach(n => node(n, st, act.has(n)));
+
+    // Segmente abspielen
+    let acc = 0, moveNo = 0;
+    const overlays = [];
+    for (const seg of STEPS[cur].segs) {
+      const d = segDur(seg), local = e - acc;
+      if (local >= 0) {
+        const list = seg.k === "par" ? seg.moves : [seg];
+        for (const m of list) {
+          const md = segDur(m), tt = local / md;
+          if (m.k === "move") drawMove(m, isFinite(tt) ? tt : 2, moveNo++);
+          if (m.k === "block") drawBlock(m, isFinite(tt) ? Math.min(tt, 1) : 1);
+          if (m.k === "check") overlays.push([m, isFinite(local) ? local : Infinity]);
+        }
+      }
+      acc += d + DUR.gap;
+    }
+    overlays.forEach(([m, l]) => drawCheck(m, l));
+    p.pop();
+  };
+};
+
+const EMBED = new URLSearchParams(location.search).has("embed");
+if (EMBED) document.body.classList.add("embed");
+function postState() { if (window.parent !== window) window.parent.postMessage({ wif: "state", step: cur, total: STEPS.length }, "*"); }
+window.addEventListener("message", e => {
+  const m = e.data || {};
+  if (m.wif === "next") go(cur + 1);
+  else if (m.wif === "prev") go(cur - 1);
+  else if (m.wif === "first") go(0);
+  else if (m.wif === "last") go(STEPS.length - 1);
+  else if (m.wif === "state") postState();
+});
+buildList();
+renderPanel();
+t0 = now();
+postState();
+new p5(sketch, "canvas-wrap");
+</script>
+</body>
+</html>

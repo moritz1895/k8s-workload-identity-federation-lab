@@ -1,12 +1,12 @@
 <section id="offline-online">
-<h2>Offline prüfen (dieser PoC) vs. online prüfen</h2>
+<h2>Prüfen ohne Rückfrage (dieser PoC) vs. online beim Cluster</h2>
 <div class="cols">
 <div class="col">
-<p class="colh">Offline über JWKS – dieser PoC</p>
+<p class="colh">Ohne Rückfrage, über JWKS – dieser PoC</p>
 <!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
 <div class="host" style="width:800px; height:170px">
-<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Validator</p></div>
-<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">issuer-web</p><p class="d">öffentliche Daten</p></div>
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">issuer-web</p><p class="d">für alle Prüfer lesbar</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
 <p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
 </div>
@@ -19,14 +19,14 @@
 <p class="sh">Grenzen</p>
 <ul class="pts">
 <li>kein Widerruf vor exp – daher nur 10 min Laufzeit</li>
-<li>neue Schlüssel erst nach Cache-Ablauf bekannt</li>
+<li>Rotation braucht Überlappung: alter Schlüssel bleibt Token-Laufzeit + Cache-Dauer im JWKS</li>
 </ul>
 </div>
 <div class="col">
 <p class="colh">Online über TokenReview-API</p>
 <!-- host 800x170: same geometry -->
 <div class="host" style="width:800px; height:170px">
-<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Validator</p></div>
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
 <div class="box accent" style="left:540px; top:40px; width:260px; height:120px"><p class="t">API-Server</p><p class="d">im Cluster</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
 <p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">pro Anfrage, mit Credential</p>
@@ -44,6 +44,9 @@
 </ul>
 </div>
 </div>
-<p class="note">Denkbarer Ausbau: hybrid – offline als Regelfall, TokenReview nur für besonders sensible Operationen</p>
-<aside>Der PoC zeigt bewusst die Offline-Variante, weil sie dem typischen Federation-Muster entspricht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen.</aside>
+<ul class="pts">
+<li>Denkbarer Ausbau: hybrid – ohne Rückfrage als Regelfall, TokenReview nur für besonders sensible Operationen</li>
+<li>Mit Keycloak kommt eine Laufzeitabhängigkeit hinzu: Ohne erreichbaren Keycloak gibt es nach Ablauf kein neues Access-Token</li>
+</ul>
+<aside>Der PoC prüft Tokens ohne Rückfrage beim Aussteller: Die öffentlichen Schlüssel werden vorab geladen und gecacht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen. Taucht eine unbekannte kid auf, laden die Prüfer das JWKS neu; der alte Schlüssel muss trotzdem lange genug im JWKS bleiben, damit ältere Tokens gültig bleiben.</aside>
 </section>

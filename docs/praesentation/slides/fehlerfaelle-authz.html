@@ -1,0 +1,20 @@
+<section id="fehlerfaelle-authz">
+<h2>Anhang: Prüfungen zu Token-Austausch und Zugriff</h2>
+<p class="note">consumer liest und schreibt · reader nur lesen · stranger im Realm unbekannt · Dienst S = zweiter Dienst</p>
+<table class="tbl small">
+<tr class="head"><th style="width:6%">Nr.</th><th style="width:64%">Situation</th><th style="width:30%">Ergebnis</th></tr>
+<tr><td>1</td><td>consumer holt ein Access-Token zum Lesen und Schreiben</td><td class="pass">200, Token für Dienst R</td></tr>
+<tr><td>2</td><td>reader will zusätzlich Schreibrecht</td><td class="fail">400 invalid_scope</td></tr>
+<tr><td>3</td><td>stranger fragt ein Token an</td><td class="fail">401 invalid_client</td></tr>
+<tr><td>4</td><td>Nachweis mit einem Token für einen anderen Empfänger</td><td class="fail">400 invalid_client</td></tr>
+<tr><td>5</td><td>Gefälschter Nachweis (fremder Cluster, fremder Schlüssel)</td><td class="fail">401 invalid_client</td></tr>
+<tr><td>6</td><td>consumer liest und schreibt bei Dienst R</td><td class="pass">200</td></tr>
+<tr><td>7</td><td>reader will schreiben, consumer will löschen</td><td class="fail">403 insufficient_scope</td></tr>
+<tr><td>8</td><td>Token für Dienst S, oder für R und S zugleich, bei R</td><td class="fail">401</td></tr>
+<tr><td>9</td><td>Manipuliertes Access-Token bei R</td><td class="fail">401</td></tr>
+<tr><td>10</td><td>ServiceAccount-Token direkt bei R</td><td class="fail">401</td></tr>
+<tr><td>11</td><td>Keycloak-Administration über das Gateway</td><td class="fail">404</td></tr>
+</table>
+<p class="note">400 und 401 bedeuten beide „abgelehnt“ – bei falscher Audienz antwortet Keycloak mit 400</p>
+<aside>Die Fälle entsprechen den Abschnitten 9 bis 20 von docker compose run --rm demo authz. 400 statt 401 bei Fall 4 ist Keycloaks Antwort auf eine falsche Audienz; beides heißt „abgelehnt“. Fall 11 betrifft Admin-API, Admin-Konsole und Master-Realm. Nicht in der Tabelle: Dienst R spricht nur TLS mit Zertifikat der internen CA, und die Workload holt bei drei Aufrufen nur ein Access-Token (Cache).</aside>
+</section>

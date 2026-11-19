@@ -1,33 +1,36 @@
 <section id="architektur">
-<h2>Akteure und Beziehungen im PoC</h2>
+<h2>Wie die Schlüssel des Clusters zu Keycloak kommen</h2>
 <!-- host 1664x540
- cluster 0,0,760,540
- API 40,60,680,120   (bottom mid 380,180 ; right mid 720,120)
- POD 40,400,680,120  (top mid 380,400 ; right mid 720,460)
- ISS 1064,60,600,120 (left mid 1064,120 ; bottom mid 1364,180)
- VAL 1064,400,600,120 (left mid 1064,460 ; top mid 1364,400)
+ cluster panel 0,0,840,540
+ API 40,60,320,140   (bottom mid 200,200 ; right mid 360,130)
+ PUB 520,60,280,140  (left mid 520,130 ; right mid 800,130)
+ POD 40,400,760,120  (top 400 at x200 ; right mid 800,460)
+ ISS 1104,60,560,140 (left mid 1104,130 ; bottom mid 1384,200)
+ VAL 1104,400,560,120 (left mid 1104,460 ; top mid 1384,400)
 -->
 <div class="host" style="height:540px">
-<div class="panel" style="left:0px; top:0px; width:760px; height:540px"></div>
-<p class="ph" style="left:24px; top:14px; width:712px">Kubernetes-Cluster (k3s)</p>
-<div class="box accent" style="left:40px; top:60px; width:680px; height:120px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
-<div class="box" style="left:40px; top:400px; width:680px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
-<div class="box" style="left:1064px; top:60px; width:600px; height:120px"><p class="t">issuer-web (nginx)</p><p class="d">Discovery-Dokument + JWKS per HTTPS</p></div>
-<div class="box ok" style="left:1064px; top:400px; width:600px; height:120px"><p class="t">Validator (Spring Boot)</p><p class="d">externer Dienst, außerhalb des Clusters</p></div>
-<x-connector class="ln" x1="380" y1="180" x2="380" y2="400"></x-connector>
-<x-connector class="ln dash" x1="720" y1="120" x2="1064" y2="120"></x-connector>
-<x-connector class="ln" x1="720" y1="460" x2="1064" y2="460"></x-connector>
-<x-connector class="ln" x1="1364" y1="400" x2="1364" y2="180"></x-connector>
-<p class="lbl" style="left:396px; top:240px; width:310px">kurzlebiges Token (10 min), nur für den Validator</p>
-<p class="lbl" style="left:744px; top:48px; width:300px">jwks-publisher: Push per mTLS bei Änderung</p>
-<p class="lbl" style="left:744px; top:388px; width:300px">GET /whoami mit Bearer-Token</p>
-<p class="lbl" style="left:1380px; top:236px; width:284px">HTTPS: Discovery + JWKS, 5 min Cache</p>
-<p class="warn" style="left:776px; top:226px; width:272px">Validator spricht nie mit dem API-Server</p>
+<div class="panel" style="left:0px; top:0px; width:840px; height:540px"></div>
+<p class="ph" style="left:24px; top:14px; width:792px">Kubernetes-Cluster (k3s)</p>
+<div class="box accent" style="left:40px; top:60px; width:320px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
+<div class="box" style="left:520px; top:60px; width:280px; height:140px"><p class="t">Publisher</p><p class="d">liest JWKS, pusht bei Änderung</p></div>
+<div class="box" style="left:40px; top:400px; width:760px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
+<div class="box" style="left:1104px; top:60px; width:560px; height:140px"><p class="t">issuer-web (nginx)</p><p class="d">:443 liest jeder, :8443 schreibt nur der Publisher</p></div>
+<div class="box accent" style="left:1104px; top:400px; width:560px; height:120px"><p class="t">Keycloak (Fachbereich)</p><p class="d">prüft ServiceAccount-Tokens</p></div>
+<x-connector class="ln" x1="360" y1="130" x2="520" y2="130"></x-connector>
+<x-connector class="ln" x1="200" y1="200" x2="200" y2="400"></x-connector>
+<x-connector class="ln" x1="800" y1="130" x2="1104" y2="130"></x-connector>
+<x-connector class="ln" x1="800" y1="460" x2="1104" y2="460"></x-connector>
+<x-connector class="ln" x1="1384" y1="400" x2="1384" y2="200"></x-connector>
+<p class="lbl" style="left:216px; top:270px; width:280px">Token, 10 min</p>
+<p class="lbl" style="left:856px; top:60px; width:232px">PUT per mTLS (Port 8443)</p>
+<p class="lbl" style="left:856px; top:390px; width:232px">POST /token, TLS</p>
+<p class="lbl" style="left:1400px; top:260px; width:264px">GET Discovery + JWKS, TLS</p>
+<p class="warn" style="left:856px; top:226px; width:232px">kein Netzweg von Keycloak zum API-Server</p>
 </div>
 <ul class="pts">
-<li>Der Pod bekommt sein Token automatisch vom Cluster – kein Secret im Deployment</li>
-<li>issuer-web veröffentlicht nur öffentliche Metadaten, entkoppelt vom API-Server</li>
-<li>Der Validator besitzt kein Cluster-Credential und braucht keinen Netzweg in den Cluster</li>
+<li>Keycloak darf den API-Server nicht erreichen – darum bringt der Publisher die öffentlichen Schlüssel nach außen zu issuer-web</li>
+<li>Schreiben darf nur der Publisher, per mTLS: ein einziges Infrastruktur-Zertifikat statt eines pro Workload</li>
+<li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
 </ul>
-<aside>Vier Akteure: API-Server stellt aus, Pod nutzt das Token, issuer-web veröffentlicht die öffentlichen Schlüssel, Validator prüft. Die gestrichelte Linie ist der Push des jwks-publisher aus dem Cluster: per mTLS-Client-Zertifikat, sobald sich die Schlüssel ändern. Wichtigste Botschaft: Zwischen Validator und API-Server gibt es keine Verbindung.</aside>
+<aside>Der Publisher ist ein Pod im Cluster mit der eingebauten Rolle system:service-account-issuer-discovery. Alle 15 Sekunden vergleicht er das JWKS des API-Servers mit dem, was issuer-web ausliefert, und lädt nur bei Abweichung hoch. Den Upload-Port 8443 erreicht man nur aus dem Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau CN=jwks-publisher. Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>

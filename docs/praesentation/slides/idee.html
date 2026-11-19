@@ -1,34 +1,36 @@
 <section id="idee">
-<h2>Die Idee: Workload Identity Federation</h2>
-<div style="display:flex; gap:64px; align-items:flex-start">
-<!-- host 1000x540
- P 330,0,340,130   (left mid 330,65 ; right mid 670,65)
- W 0,410,340,130   (top mid 170,410 ; right mid 340,475)
- D 660,410,340,130 (top mid 830,410 ; left mid 660,475)
+<h2>Die Idee: Pass und Visum</h2>
+<!-- host 1664x520
+ P 662,0,340,130  (left mid 662,65 ; bottom mid 832,130)
+ W 0,300,340,140  (top mid 170,300 ; right edge x340 ; bottom mid 170,440)
+ K 662,300,340,140 (top mid 832,300 ; left edge x662)
+ R 1324,300,340,140 (bottom mid 1494,440)
+ P->W hv (662,65)->(170,300) ; P->K (832,130)->(832,300) dashed
+ W->K y350 (340->662) ; K->W y410 (662->340) dashed
+ W->R: (170,440)->(170,480)->(1494,480)->(1494,440)
 -->
-<div class="host" style="width:1000px; height:540px">
-<div class="box accent" style="left:330px; top:0px; width:340px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster · „Passamt“</p></div>
-<div class="box" style="left:0px; top:410px; width:340px; height:130px"><p class="t">Workload</p><p class="d">Pod im Cluster · „Reisende:r“</p></div>
-<div class="box" style="left:660px; top:410px; width:340px; height:130px"><p class="t">Externer Dienst</p><p class="d">Validator · „Grenzkontrolle“</p></div>
-<x-connector class="ln" x1="330" y1="65" x2="170" y2="410" route="hv"></x-connector>
-<x-connector class="ln dash" x1="670" y1="65" x2="830" y2="410" route="hv"></x-connector>
-<x-connector class="ln" x1="340" y1="475" x2="660" y2="475"></x-connector>
-<p class="lbl" style="left:186px; top:200px; width:270px">1 · stellt signiertes Token aus</p>
-<p class="lbl" style="left:544px; top:200px; width:270px">2 · veröffentlicht Prüfschlüssel (JWKS)</p>
-<p class="lbl" style="left:356px; top:420px; width:288px; text-align:center">3 · zeigt Token vor</p>
-</div>
-<table class="tbl" style="width:600px">
-<tr class="head"><th style="width:50%">Reisepass</th><th style="width:50%">Token</th></tr>
-<tr><td>Passamt stellt Pass aus</td><td>Cluster stellt JWT aus</td></tr>
-<tr><td>Siegel des Staates</td><td>Signatur, prüfbar über JWKS</td></tr>
-<tr><td>Ablaufdatum</td><td>exp</td></tr>
-<tr><td>Visum gilt nur für ein Land</td><td>aud (Audience)</td></tr>
-<tr><td>Grenze ruft nicht beim Passamt an</td><td>Prüfung offline</td></tr>
-</table>
+<div class="host" style="height:520px">
+<div class="box accent" style="left:662px; top:0px; width:340px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster · „Passamt“</p></div>
+<div class="box" style="left:0px; top:300px; width:340px; height:140px"><p class="t">Workload</p><p class="d">Pod im Cluster · „Reisende:r“</p></div>
+<div class="box accent" style="left:662px; top:300px; width:340px; height:140px"><p class="t">Keycloak</p><p class="d">„Botschaft“ des Fachbereichs</p></div>
+<div class="box ok" style="left:1324px; top:300px; width:340px; height:140px"><p class="t">Dienst R</p><p class="d">„Grenze“ · prüft das Visum</p></div>
+<x-connector class="ln" x1="662" y1="65" x2="170" y2="300" route="hv"></x-connector>
+<x-connector class="ln dash" x1="832" y1="130" x2="832" y2="300"></x-connector>
+<x-connector class="ln" x1="340" y1="350" x2="662" y2="350"></x-connector>
+<x-connector class="ln dash" x1="662" y1="410" x2="340" y2="410"></x-connector>
+<x-connector class="ln" x1="170" y1="440" x2="170" y2="480" head="none"></x-connector>
+<x-connector class="ln" x1="170" y1="480" x2="1494" y2="480" head="none"></x-connector>
+<x-connector class="ln" x1="1494" y1="480" x2="1494" y2="440"></x-connector>
+<p class="lbl" style="left:186px; top:120px; width:440px">1 · stellt den Pass aus (ServiceAccount-Token)</p>
+<p class="lbl" style="left:848px; top:170px; width:440px">2 · veröffentlicht die Prüfmerkmale (JWKS)</p>
+<p class="lbl" style="left:356px; top:280px; width:290px">3 · zeigt den Pass vor</p>
+<p class="lbl" style="left:356px; top:364px; width:290px">4 · stellt Visum aus</p>
+<p class="lbl" style="left:1020px; top:488px; width:290px">5 · zeigt das Visum vor</p>
 </div>
 <ul class="pts">
-<li>Federation: Zwei Systeme erkennen Identitätsnachweise an, ohne gemeinsames Passwort</li>
-<li>Der Dienst kennt die Workload nicht persönlich – er vertraut der ausstellenden Plattform</li>
+<li>Pass = ServiceAccount-Token (wer ich bin) · Visum = Access-Token mit Scopes (was ich darf)</li>
+<li>Geprüft wird ohne Rückfrage beim Aussteller: Die Prüfmerkmale werden vorab geladen und gecacht</li>
+<li>Federation: Keycloak erkennt den Pass aus dem Cluster an – ohne gemeinsames Passwort</li>
 </ul>
-<aside>Analogie Reisepass: Der Grenzbeamte kennt mich nicht und ruft nicht beim Passamt an. Er prüft Siegel und Ablaufdatum anhand öffentlich bekannter Merkmale. Genau so prüft der Validator das Token.</aside>
+<aside>Analogie: Das Passamt (der Cluster) stellt der Workload einen Pass aus. Die Botschaft des Ziellandes (Keycloak des Fachbereichs) prüft den Pass anhand öffentlich bekannter Merkmale, ohne beim Passamt anzurufen, und stellt ein Visum aus: das Access-Token mit genau den Rechten, die der Fachbereich dieser Workload gibt. An der Grenze (Dienst R) zählt nur noch das Visum. Pass und Visum sind kurz gültig: 10 bzw. 5 Minuten.</aside>
 </section>

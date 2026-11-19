@@ -1,5 +1,5 @@
 <section id="ablauf">
-<h2>Ablauf einer Anfrage</h2>
+<h2>Anhang: Variante Pod → Validator, ohne Keycloak</h2>
 <!-- host 1664x560
  heads top 0 h 80: API 0..320 (c160) ; POD 448..768 (c608) ; VAL 896..1216 (c1056) ; ISS 1344..1664 (c1504)
  lifelines y 80 -> 560
@@ -14,20 +14,20 @@
 <x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="1504" y1="80" x2="1504" y2="556" head="none"></x-connector>
-<div class="box ok" style="left:896px; top:384px; width:320px; height:100px"><p class="t">3 · prüft offline</p><p class="d">Signatur, iss, aud, exp</p></div>
-<x-connector class="ln" x1="1056" y1="170" x2="1504" y2="170"></x-connector>
-<x-connector class="ln" x1="160" y1="270" x2="608" y2="270"></x-connector>
-<x-connector class="ln" x1="608" y1="360" x2="1056" y2="360"></x-connector>
-<x-connector class="ln dash" x1="1056" y1="540" x2="608" y2="540"></x-connector>
-<p class="lbl" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS laden</p>
-<p class="lbl" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
-<p class="lbl" style="left:624px; top:290px; width:416px">2 · GET /whoami mit Bearer-Token</p>
-<p class="lbl" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>
+<div class="box ok fragment" data-fragment-index="3" style="left:896px; top:384px; width:320px; height:100px"><p class="t">3 · prüft lokal</p><p class="d">Signatur, iss, aud, exp</p></div>
+<x-connector class="ln fragment" data-fragment-index="0" x1="1056" y1="170" x2="1504" y2="170"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="1" x1="160" y1="270" x2="608" y2="270"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="2" x1="608" y1="360" x2="1056" y2="360"></x-connector>
+<x-connector class="ln dash fragment" data-fragment-index="4" x1="1056" y1="540" x2="608" y2="540"></x-connector>
+<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS laden (TLS)</p>
+<p class="lbl fragment" data-fragment-index="1" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
+<p class="lbl fragment" data-fragment-index="2" style="left:624px; top:290px; width:416px">2 · GET /whoami über HTTPS mit Bearer-Token</p>
+<p class="lbl fragment" data-fragment-index="4" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>
 </div>
 <ul class="pts">
-<li>Schritt 0 passiert einmal beim Start; danach prüft der Validator jede Anfrage rein lokal</li>
-<li>Der Validator fragt nie beim Cluster nach und speichert keinen Zustand</li>
-<li>Das kubelet erneuert das Token automatisch vor Ablauf – die Anwendung muss nichts tun</li>
+<li>Der Validator, ein eigener Spring-Boot-Dienst, prüft das ServiceAccount-Token selbst – mit derselben Vertrauenskette wie Keycloak</li>
+<li>Er beantwortet nur „wer bist du?“; Rechte gibt es hier nicht (Vorstufe, ADR 0001–0003)</li>
+<li>Dafür bekommt der Pod ein zweites ServiceAccount-Token mit aud = wif-demo-validator</li>
 </ul>
-<aside>Schritt 1: Das kubelet ruft die TokenRequest-API mit audience wif-demo-validator und 600 Sekunden Laufzeit auf. Schritt 4: 200 mit den Claims im Body, oder 401 mit kurzem Ablehnungsgrund. Die JWKS werden 5 Minuten gecacht und im Hintergrund aktualisiert.</aside>
+<aside>Die Schritte erscheinen beim Präsentieren nacheinander per Klick. Schritt 1: Das kubelet ruft die TokenRequest-API mit audience wif-demo-validator und 600 Sekunden Laufzeit auf. Schritt 2 läuft über HTTPS mit einem Zertifikat der internen CA. Schritt 4: 200 mit den Claims im Body, oder 401 mit kurzem Ablehnungsgrund. Die JWKS werden 5 Minuten gecacht.</aside>
 </section>
