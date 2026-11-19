@@ -713,7 +713,7 @@ pre_rotation() {
 }
 
 staged_phase() {
-    section "key change 1/2: the staged key is served as verify-only key"
+    section "key change 1/2: the staged key is published ahead, it does not sign yet"
     [ -s "$STATE/pre-rotation-token" ] || fail "run the pre-rotation phase first"
     local staged_kid="" i token assertion
     for i in $(seq 1 36); do

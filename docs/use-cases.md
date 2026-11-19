@@ -395,7 +395,7 @@ das mit `kubectl apply --dry-run=server`, `kubectl auth can-i` und Aufrufen aus 
    es und die aktuell veröffentlichten `kid`s im Volume `demo-state` und prüft, dass der
    Validator es annimmt.
 2. `docker compose run --rm sa-keys stage` - **Phase 1**: Ein neuer Schlüssel entsteht als
-   `staged.key`; sein öffentlicher Schlüssel kommt nur in `verify.pub`. Signiert wird
+   `staged.key`; sein öffentlicher Schlüssel wird über `verify.pub` vorab veröffentlicht. Signiert wird
    weiter mit `signing.key`.
 3. `docker compose restart server` und `docker compose up -d --wait server` - kube-apiserver
    liest die Schlüsseldateien nur beim Start.

@@ -529,7 +529,7 @@ beiden bisherigen Pods liefern unverändert aus. Danach stellt das Skript alles 
 
 ```bash
 docker compose run --rm demo pre-rotation
-docker compose run --rm sa-keys stage        # Phase 1: neuer Schlüssel nur zum Prüfen
+docker compose run --rm sa-keys stage        # Phase 1: neuer Schlüssel vorab veröffentlicht, signiert noch nicht
 docker compose restart server && docker compose up -d --wait server
 docker compose run --rm demo staged
 docker compose run --rm sa-keys activate     # Phase 2: neuer Schlüssel signiert
@@ -548,7 +548,7 @@ token kid: <kid-alt>
 HTTP 200
 PASS: pre-rotation token accepted (200)
 
-== key change 1/2: the staged key is served as verify-only key ==
+== key change 1/2: the staged key is published ahead, it does not sign yet ==
 published kids now:
   <kid-alt>
   <kid-neu>

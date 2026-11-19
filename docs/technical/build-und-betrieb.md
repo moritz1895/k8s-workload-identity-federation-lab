@@ -179,7 +179,7 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
 
 ```bash
 docker compose run --rm demo pre-rotation    # Token + kids vor dem Wechsel sichern
-docker compose run --rm sa-keys stage        # Phase 1: neuer Schlüssel nur als Prüfschlüssel
+docker compose run --rm sa-keys stage        # Phase 1: neuer Schlüssel vorab veröffentlicht, signiert noch nicht
 docker compose restart server                # kube-apiserver liest die Schlüssel nur beim Start
 docker compose up -d --wait server
 docker compose run --rm demo staged          # neue kid ausgeliefert? signiert wird noch mit der alten

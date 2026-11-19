@@ -62,7 +62,7 @@ services:
 
   # ServiceAccount signing keys. A key change runs in two phases, each followed by
   # `docker compose restart server`:
-  #   docker compose run --rm sa-keys stage      (new key verifies only)
+  #   docker compose run --rm sa-keys stage      (new key published ahead, does not sign yet)
   #   docker compose run --rm sa-keys activate   (new key signs, once it is served)
   sa-keys:
     build:

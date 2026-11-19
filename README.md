@@ -36,7 +36,7 @@ docker compose down -v                # alles wieder entfernen
 Schlüsselwechsel in zwei Phasen (`run-all-checks.sh` führt beide aus):
 
 ```bash
-docker compose run --rm sa-keys stage      # Phase 1: neuer Schlüssel nur zum Prüfen
+docker compose run --rm sa-keys stage      # Phase 1: neuer Schlüssel vorab veröffentlicht, signiert noch nicht
 docker compose restart server              # API-Server liest die Schlüsseldateien neu
 # warten, bis https://issuer.wif.local/openid/v1/jwks die neue kid enthält
 docker compose run --rm sa-keys activate   # Phase 2: neuer Schlüssel signiert

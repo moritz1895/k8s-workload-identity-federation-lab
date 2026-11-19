@@ -2,15 +2,16 @@
 # Manages the ServiceAccount token signing keys of the lab cluster. A key change runs
 # in two phases, each followed by a restart of the API server:
 #   init     — create the first signing key (no-op when one exists)
-#   stage    — phase 1: create the next key and add its public key to the verify set
-#              only; the API server keeps signing with the current key
+#   stage    — phase 1: create the next key and publish its public key ahead (verify
+#              set, hence JWKS); the API server keeps signing with the current key
 #   activate — phase 2: the staged key becomes the signing key; the previous signing
 #              key stays in the verify set, older keys are dropped
 #   retire   — emergency: drop the previous key from the verify set at once, e.g.
 #              when it is compromised; tokens signed with it stop being accepted
 #              once the relying parties refresh their keys
-# Run `activate` only after the staged key is served at the JWKS URL, so no relying
-# party sees a token whose kid it cannot find yet. Between two `activate` runs lie at
+# Phase 1 exists because the relying parties get keys with a delay (issuer pod sync,
+# caches): run `activate` only after the staged key is served at the JWKS URL, so no
+# relying party sees a token whose kid it cannot find yet. Between two `activate` runs lie at
 # least the maximum token lifetime plus the relying parties' key cache time.
 # The API server signs with signing.key and publishes every key in verify.pub.
 set -euo pipefail
@@ -52,7 +53,7 @@ case "${1:-}" in
         if [ -s "$DIR/staged.key" ]; then
             echo "sa-keys: a staged key exists already, keeping it"
         else
-            echo "sa-keys: phase 1 — staging the next key as verify-only key"
+            echo "sa-keys: phase 1 — publishing the next key ahead; it does not sign yet"
             generate_key "$DIR/staged"
         fi
         assemble_verify_set

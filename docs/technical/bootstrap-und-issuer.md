@@ -78,7 +78,7 @@ Der API-Server signiert ServiceAccount-Tokens mit eigenen Schlüsseldateien aus 
 |---|---|
 | `signing.key` | privater RSA-2048-Schlüssel, `service-account-signing-key-file` |
 | `current.pub` | öffentlicher Teil von `signing.key` |
-| `staged.key` / `staged.pub` | der nächste Schlüssel, solange er nur Prüfschlüssel ist (zwischen `stage` und `activate`) |
+| `staged.key` / `staged.pub` | der nächste Schlüssel, solange er vorab veröffentlicht ist, aber noch nicht signiert (zwischen `stage` und `activate`) |
 | `previous.pub` | öffentlicher Teil des vorherigen Signierschlüssels (nach `activate`) |
 | `verify.pub` | `current.pub` + `staged.pub` + `previous.pub`, soweit vorhanden; `service-account-key-file` – diese Schlüssel erscheinen im JWKS |
 
@@ -95,7 +95,7 @@ jeweils `docker compose restart server`.
 ### Zweiphasiger Schlüsselwechsel
 
 ```bash
-docker compose run --rm sa-keys stage        # neuer Schlüssel nur als Prüfschlüssel
+docker compose run --rm sa-keys stage        # neuer Schlüssel vorab veröffentlicht, signiert noch nicht
 docker compose restart server
 # warten, bis der Issuer-Pod die neue kid ausliefert (demo staged prüft das)
 docker compose run --rm sa-keys activate     # neuer Schlüssel signiert, alter bleibt Prüfschlüssel

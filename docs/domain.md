@@ -219,13 +219,17 @@ Der Cluster signiert mit genau einem privaten Schlüssel, veröffentlicht aber a
 Prüfschlüssel im JWKS. Ein Wechsel läuft in zwei Phasen, jeweils mit Neustart des
 API-Servers ([`tools/sa-keys.sh`](../tools/sa-keys.sh)):
 
-1. **`sa-keys stage`**: Der neue öffentliche Schlüssel kommt zunächst nur als
-   **Prüfschlüssel** ins JWKS; signiert wird weiter mit dem bisherigen Schlüssel.
+1. **`sa-keys stage`**: Der neue öffentliche Schlüssel wird **vorab veröffentlicht**, also
+   ins JWKS aufgenommen. Signiert wird weiter mit dem bisherigen Schlüssel; noch braucht
+   kein Token den neuen.
 2. **`sa-keys activate`**: Erst wenn der Issuer-Pod den neuen Schlüssel ausliefert, wird er
-   zum **Signierschlüssel**. Der bisherige bleibt als Prüfschlüssel, ältere fallen weg.
+   zum **Signierschlüssel**. Ab hier prüfen die Relying Parties mit beiden: mit dem neuen
+   die neuen Tokens, mit dem bisherigen die noch gültigen alten. Ältere fallen weg.
 
-So ist nie ein Token mit einer `kid` unterwegs, die die Relying Parties nicht abrufen
-können; schon das erste Token mit dem neuen Schlüssel wird akzeptiert. Zwischen zwei
+Die Relying Parties bekommen neue Schlüssel nur mit Verzögerung (Abgleich des
+Issuer-Pods, Zwischenspeicher bei Keycloak und Validator). Durch die Vorab-Veröffentlichung
+ist nie ein Token mit einer `kid` unterwegs, die sie nicht abrufen können; schon das erste
+Token mit dem neuen Schlüssel wird akzeptiert. Zwischen zwei
 `activate` liegt mindestens die maximale Token-Laufzeit plus die Zeit, die die Relying
 Parties Schlüssel zwischenspeichern.
 

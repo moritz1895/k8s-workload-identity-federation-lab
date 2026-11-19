@@ -83,10 +83,25 @@ kube-proxy öffnet Node-Ports nur auf der Adresse in `cluster-net`
 **Schlüsselwechsel in zwei Phasen** (`sa-keys stage` / `sa-keys activate`, jeweils mit
 Neustart des API-Servers):
 
-1. `stage`: Der neue öffentliche Schlüssel kommt zuerst nur als Prüfschlüssel ins JWKS.
-   Weiter geht es erst, wenn der Issuer-Pod ihn ausliefert.
-2. `activate`: Erst dann wird er zum Signierschlüssel. Der bisherige bleibt als
-   Prüfschlüssel, ältere fallen weg.
+1. `stage`: Der neue öffentliche Schlüssel wird vorab veröffentlicht, also ins JWKS
+   aufgenommen. Signiert wird noch mit dem bisherigen Schlüssel, es gibt also noch kein
+   Token, das ihn braucht. Weiter geht es erst, wenn der Issuer-Pod ihn ausliefert.
+2. `activate`: Erst dann wird er zum Signierschlüssel. Ab hier stehen der neue und der
+   bisherige Schlüssel im JWKS: der neue für neue Tokens, der bisherige für Tokens, die
+   noch gültig sind. Ältere fallen weg.
+
+| Zeitpunkt | Signiert mit | Im JWKS |
+|---|---|---|
+| vorher | A | A |
+| nach `stage` | A | A, B (B vorab veröffentlicht) |
+| nach `activate` | B | B, A (A für noch gültige Tokens) |
+| nach dem nächsten `activate` | C | C, B |
+
+Phase 1 ist nötig, weil die Relying Parties neue Schlüssel nur mit Verzögerung bekommen:
+Der Issuer-Pod gleicht alle 15 Sekunden ab, Keycloak und Validator speichern Schlüssel
+zwischen. Würde der API-Server sofort mit einem neuen Schlüssel signieren, könnte ein Token
+mit der neuen `kid` ankommen, bevor sie ausgeliefert wird. Keycloak würde dann neu laden,
+den alten Stand bekommen, ablehnen und frühestens nach 10 Sekunden wieder laden.
 
 So gibt es keinen Moment, in dem ein Token mit einer `kid` unterwegs ist, die der
 Issuer-Pod noch nicht ausliefert. Das deckt auch mehrere Replikas mit kurz verschiedenem
