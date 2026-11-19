@@ -127,8 +127,7 @@ const N = {
   pub: { x: 290, y: 330, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
   pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "ServiceAccount consumer" },
   iss: { x: 540, y: 146, w: 210, h: 110, t: "issuer-web", s: "Upload 8443 · Lesen 443" },
-  gw:  { x: 600, y: 396, w: 200, h: 86, t: "keycloak-gateway", s: "nur Realm-Pfade" },
-  kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", s: "Realm des Fachbereichs" },
+  kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", s: "für Pods nur Realm-Pfade" },
   r:   { x: 960, y: 500, w: 220, h: 92, t: "Dienst R", s: "service-r" }
 };
 const ZONES = [
@@ -148,14 +147,14 @@ const STEPS = [
   { ph: 0, title: "Überblick: „Pass“, „Visum“, Aufruf",
     text: "Der Pod bekommt vom Cluster einen „Pass“, tauscht ihn bei Keycloak seines Fachbereichs gegen ein „Visum“ und ruft damit Dienst R auf. Im Pod liegt dafür weder ein Passwort noch ein Client-Zertifikat. Die folgenden Schritte zeigen, was im Hintergrund nötig ist, damit das sicher funktioniert.",
     il: "", inspect: "",
-    segs: [par(mv("api", "pod", "„Pass“", "token"), mv("pod", "gw", "„Pass“ zeigen", "token"), mv("gw", "kc", "", "token"), mv("kc", "gw", "", "token"), mv("gw", "pod", "„Visum“", "token"), mv("pod", "r", "„Visum“ zeigen", "token"))],
+    segs: [par(mv("api", "pod", "„Pass“", "token"), mv("pod", "kc", "„Pass“ zeigen", "token"), mv("kc", "pod", "„Visum“", "token"), mv("pod", "r", "„Visum“ zeigen", "token"))],
     fx: null },
 
   { ph: 1, title: "Die interne PKI sichert die Verbindungen",
-    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für issuer-web, das Gateway, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Das einzige Client-Zertifikat erhält der Publisher – eine Infrastruktur-Komponente, nicht jede Workload. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
-    il: "Wer bekommt was", inspect: "issuer-web  Server-Zert. + Root-CA\nGateway     Server-Zert. + Root-CA\nKeycloak    Server-Zert. + Root-CA\nDienst R    Server-Zert. + Root-CA\nPublisher   Client-Zert. + Root-CA\nPod         nur Root-CA\n(Pfeile im Bild vereinfacht)",
-    segs: [par(mv("pki", "iss", "", "trust"), mv("pki", "gw", "", "trust"), mv("pki", "kc", "", "trust"), mv("pki", "pub", "Client-Zert.", "trust", undefined, true))],
-    fx: s => { ["iss", "kc", "gw", "r"].forEach(n => s.cert.add(n)); ["iss", "pub", "pod", "gw", "kc", "r"].forEach(n => s.ca.add(n)); s.clientCert = true; } },
+    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für issuer-web, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Das einzige Client-Zertifikat erhält der Publisher – eine Infrastruktur-Komponente, nicht jede Workload. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "issuer-web  Server-Zert. + Root-CA\nKeycloak    Server-Zert. + Root-CA\nDienst R    Server-Zert. + Root-CA\nPublisher   Client-Zert. + Root-CA\nPod         nur Root-CA\n(Pfeile im Bild vereinfacht)",
+    segs: [par(mv("pki", "iss", "", "trust"), mv("pki", "kc", "", "trust"), mv("pki", "pub", "Client-Zert.", "trust", undefined, true))],
+    fx: s => { ["iss", "kc", "r"].forEach(n => s.cert.add(n)); ["iss", "pub", "pod", "kc", "r"].forEach(n => s.ca.add(n)); s.clientCert = true; } },
   { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
     text: "Der API-Server bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine Adresse außerhalb des Clusters ein: issuer-web. Dort sollen Prüfer die öffentlichen Schlüssel finden.",
     il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer-web\nservice-account-jwks-uri\n  = https://issuer-web/openid/v1/jwks",
@@ -174,9 +173,9 @@ const STEPS = [
     fx: s => { s.files.push("„Pass“"); } },
 
   { ph: 3, title: "Der Pod fragt bei Keycloak nach Rechten",
-    text: "Der Pod ruft Keycloak seines Fachbereichs auf. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Der Name keycloak zeigt im Pod auf ein Gateway: Es lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
+    text: "Der Pod ruft Keycloak seines Fachbereichs auf. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Vor Keycloak sitzt ein Gateway (im Bild nicht eigens gezeigt): Es lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
     il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
-    segs: [mv("pod", "gw", "POST /token · TLS", "token"), chk("gw", ["nur Realm des Fachbereichs"], "below"), mv("gw", "kc", "POST /token · TLS", "token")], fx: null },
+    segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["Gateway: nur Realm-Pfade"], "below")], fx: null },
   { ph: 3, title: "Keycloak holt die Schlüssel des Clusters",
     text: "Im „Pass“ steht als Aussteller https://issuer-web. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die öffentlichen Schlüssel bei issuer-web und merkt sie sich. Beim Cluster fragt Keycloak nie nach.",
     il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer-web\n  Schlüssel:\n    https://issuer-web/openid/v1/jwks",
@@ -189,7 +188,7 @@ const STEPS = [
   { ph: 3, title: "Keycloak stellt das „Visum“ aus",
     text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
     il: "Inhalt des „Visums“", inspect: "iss (Aussteller): Keycloak-Realm\naud (für wen): service-r = Dienst R\nazp (Client): workload-a\nscope (Rechte):\n  r:orders:read r:orders:write\nexp (Ablauf): Ausstellung + 300 s",
-    segs: [mv("kc", "gw", "„Visum“ · TLS", "token"), mv("gw", "pod", "„Visum“ · TLS", "token")],
+    segs: [mv("kc", "pod", "„Visum“ · TLS", "token")],
     fx: s => { s.files.push("„Visum“"); } },
 
   { ph: 4, title: "Aufruf von Dienst R",
@@ -392,7 +391,7 @@ const sketch = p => {
       p.text(z.label, z.x + 14, z.y + 10); p.textStyle(p.NORMAL);
     });
   }
-  const LINKS = [["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["pod", "gw"], ["gw", "kc"], ["pod", "r"], ["r", "kc"]];
+  const LINKS = [["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["pod", "kc"], ["pod", "r"], ["r", "kc"]];
   function staticLinks() {
     p.stroke(col("line")); p.strokeWeight(1.2);
     p.drawingContext.setLineDash([4, 5]);

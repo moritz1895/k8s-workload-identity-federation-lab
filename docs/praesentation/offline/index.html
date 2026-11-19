@@ -321,14 +321,14 @@ section.cover { justify-content: center; gap: 28px; }
 <x-connector class="ln" x1="1384" y1="400" x2="1384" y2="200"></x-connector>
 <p class="lbl" style="left:216px; top:270px; width:280px">Token, 10 min</p>
 <p class="lbl" style="left:856px; top:60px; width:232px">PUT per mTLS (Port 8443)</p>
-<p class="lbl" style="left:856px; top:390px; width:232px">POST /token über keycloak-gateway</p>
+<p class="lbl" style="left:856px; top:390px; width:232px">POST /token, TLS</p>
 <p class="lbl" style="left:1400px; top:260px; width:264px">GET Discovery + JWKS, TLS</p>
 <p class="warn" style="left:856px; top:226px; width:232px">kein Netzweg von Keycloak zum API-Server</p>
 </div>
 <ul class="pts">
 <li>Keycloak darf den API-Server nicht erreichen – darum bringt der Publisher die öffentlichen Schlüssel nach außen zu issuer-web</li>
 <li>Schreiben darf nur der Publisher, per mTLS: ein einziges Infrastruktur-Zertifikat statt eines pro Workload</li>
-<li>Pods erreichen Keycloak nur über keycloak-gateway, das nur die Realm-Pfade durchlässt</li>
+<li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
 </ul>
 <aside>Der Publisher ist ein Pod im Cluster mit der eingebauten Rolle system:service-account-issuer-discovery. Alle 15 Sekunden vergleicht er das JWKS des API-Servers mit dem, was issuer-web ausliefert, und lädt nur bei Abweichung hoch. Den Upload-Port 8443 erreicht man nur aus dem Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau CN=jwks-publisher. Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>
