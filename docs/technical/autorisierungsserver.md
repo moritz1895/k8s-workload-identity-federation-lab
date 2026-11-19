@@ -274,7 +274,7 @@ PEM-Bundle `spring.ssl.bundle.pem.service-r` liest `keystore.certificate` und
 `service-r-tls` (in den Container nach `/tls`), Schlüssel gehört uid 10001 mit Modus `400`.
 Pods rufen `https://service-r.wif.local:8443` mit `--cacert /etc/internal-ca/ca.crt` auf;
 der Healthcheck nutzt `curl --cacert /trust/ca.crt https://localhost:8443/healthz`. Vom Host:
-`https://127.0.0.1:18081`. Die MockMvc-Slice-Tests laufen ohne TLS.
+`https://localhost:18081`. Die MockMvc-Slice-Tests laufen ohne TLS.
 
 Prüfung 14b in `demo.sh authz` zeigt Subject `CN=service-r.wif.local` und die Lab-Root-CA als
 Aussteller, prüft, dass auf 8080 kein Klartext-Listener antwortet, dass Klartext-HTTP auf 8443
@@ -364,7 +364,7 @@ API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Upload-Listener
 
 | Im Lab | In Produktion |
 |---|---|
-| Workload → `validator` über HTTP (`service-r` spricht nur HTTPS mit einem Zertifikat der Lab-CA) | TLS oder mTLS, z. B. über ein Service Mesh; optional sender-gebundene Tokens (DPoP oder mTLS-gebunden), damit ein abgegriffenes Access-Token allein nicht reicht |
+| Alle Dienste außerhalb des Clusters (`validator`, `service-r`, Keycloak über das Gateway) sprechen einseitiges TLS mit Zertifikaten der internen PKI | zusätzlich mTLS (z. B. über ein Service Mesh) oder sender-gebundene Tokens (DPoP oder mTLS-gebunden) als Option, damit ein abgegriffenes Access-Token allein nicht reicht |
 | Realm per `--import-realm` (nur Anlage, `IGNORE_EXISTING`), Daten im Container | keycloak-config-cli oder Terraform in der CI als einziger Schreiber, Drift-Erkennung, Admin-Events an ein externes System; externe Datenbank, mehrere Knoten |
 | Cluster-RBAC ist Lab-Standard | Rechte auf `serviceaccounts/token` und auf das Anlegen von Pods mit fremdem `serviceAccountName` bewusst vergeben und überwachen – sie entscheiden mit, wer welche Scopes bekommt |
 | `KC_TRUSTSTORE_PATHS` ergänzt den Default-Truststore | Truststore auf die interne PKI beschränken, falls Keycloak keine öffentlichen Endpunkte braucht |

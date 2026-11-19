@@ -9,7 +9,7 @@
 set -euo pipefail
 
 PHASE="${1:-all}"
-VALIDATOR_URL="${VALIDATOR_URL:-http://validator:8080}"
+VALIDATOR_URL="${VALIDATOR_URL:-https://validator:8443}"
 AUD="${WIF_AUDIENCE:-wif-demo-validator}"
 NS="wif-demo"
 ISSUER=https://issuer-web
@@ -56,8 +56,32 @@ published_kids() { curl -fsS --cacert "$CA" "$ISSUER/openid/v1/jwks" | jq -r '.k
 
 # $1 = bearer token -> echoes HTTP status, leaves body in /tmp/body
 whoami_status() {
-    curl -s -o /tmp/body -w '%{http_code}' \
-        -H "Authorization: Bearer $1" "$VALIDATOR_URL/whoami"
+    printf 'Authorization: Bearer %s\n' "$1" | curl -s --cacert "$CA" -o /tmp/body -w '%{http_code}' \
+        -H @- "$VALIDATOR_URL/whoami"
+}
+
+# A service outside the cluster speaks TLS only, with a certificate of the internal PKI.
+# $1 = pod, $2 = host name, $3 = label
+tls_only_checks() {
+    local pod=$1 host=$2 label=$3 plain untrusted
+    echo "$label: server certificate as seen by pod $pod"
+    kubectl -n "$NS" exec "$pod" -- sh -c \
+        'curl -sv --cacert /etc/internal-ca/ca.crt -o /dev/null "https://$0:8443/healthz" 2>&1' "$host" \
+        | grep -E "subject:|issuer:|SSL connection using" | sed 's/^\* */  /'
+    if kubectl -n "$NS" exec "$pod" -- curl -s -o /dev/null --max-time 4 "http://$host:8080/healthz" 2> /dev/null; then
+        fail "$label answers plain HTTP on 8080"
+    fi
+    pass "$label: no plain-HTTP listener on 8080"
+    plain=$(kubectl -n "$NS" exec "$pod" -- curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
+        "http://$host:8443/healthz" 2> /dev/null || true)
+    echo "plain HTTP to the TLS port: HTTP $plain"
+    [ "$plain" != "200" ] && pass "$label: plain HTTP on the TLS port is not served" \
+        || fail "$label served plain HTTP on its TLS port"
+    untrusted=$(kubectl -n "$NS" exec "$pod" -- sh -c \
+        'curl -s -o /dev/null --max-time 4 "https://$0:8443/healthz"; echo $?' "$host" 2> /dev/null || true)
+    echo "curl with the public CA bundle only: exit $untrusted (60 = certificate not trusted)"
+    [ "$untrusted" = "60" ] && pass "$label: certificate trusted only via the internal CA" \
+        || fail "$label: expected curl exit 60 without the internal CA, got $untrusted"
 }
 
 # PUT to the upload listener; extra curl args select the client identity.
@@ -82,12 +106,17 @@ base_checks() {
 
     section "3. consumer POD  ->  external validator   (happy path)"
     POD=$(kubectl -n "$NS" get pod -l app=consumer -o jsonpath='{.items[0].metadata.name}')
-    echo "pod $POD  ->  http://validator.wif.local:8080/whoami   (token from projected volume)"
+    echo "pod $POD  ->  https://validator.wif.local:8443/whoami   (token from projected volume)"
+    # printf is a shell builtin: the token reaches curl on stdin, never in its arguments.
     POD_STATUS=$(kubectl -n "$NS" exec "$POD" -- sh -c \
-        'curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $(cat /var/run/secrets/tokens/sa-token)" http://validator.wif.local:8080/whoami' || true)
+        'printf "Authorization: Bearer %s\n" "$(cat /var/run/secrets/tokens/sa-token)" \
+            | curl -s --cacert /etc/internal-ca/ca.crt -o /dev/null -w "%{http_code}" -H @- https://validator.wif.local:8443/whoami' || true)
     expect_status 200 "$POD_STATUS" "pod token accepted"
     kubectl -n "$NS" exec "$POD" -- sh -c \
-        'curl -s -H "Authorization: Bearer $(cat /var/run/secrets/tokens/sa-token)" http://validator.wif.local:8080/whoami' | jq .
+        'printf "Authorization: Bearer %s\n" "$(cat /var/run/secrets/tokens/sa-token)" \
+            | curl -s --cacert /etc/internal-ca/ca.crt -H @- https://validator.wif.local:8443/whoami' | jq .
+
+    tls_only_checks "$POD" validator.wif.local "validator"
 
     section "4. negative: wrong audience  ->  rejected"
     WRONG_AUD=$(kubectl -n "$NS" create token consumer --audience "not-this-service" --duration 10m)
@@ -289,24 +318,7 @@ authz_checks() {
     expect_status 200 "$(call_service_r "$CONSUMER" "$CONSUMER_RW" POST /orders)" "POST /orders with r:orders:write"
 
     section "14b. R speaks TLS only, with a certificate of the internal PKI"
-    echo "server certificate as seen by the consumer pod:"
-    kubectl -n "$NS" exec "$CONSUMER" -- sh -c \
-        'curl -sv --cacert /etc/internal-ca/ca.crt -o /dev/null https://service-r.wif.local:8443/healthz 2>&1' \
-        | grep -E "subject:|issuer:|SSL connection using" | sed 's/^\* */  /'
-    if kubectl -n "$NS" exec "$CONSUMER" -- curl -s -o /dev/null --max-time 4 http://service-r.wif.local:8080/healthz 2> /dev/null; then
-        fail "R answers plain HTTP on 8080"
-    fi
-    pass "no plain-HTTP listener on 8080"
-    PLAIN=$(kubectl -n "$NS" exec "$CONSUMER" -- curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
-        http://service-r.wif.local:8443/healthz || true)
-    echo "plain HTTP to the TLS port: HTTP $PLAIN"
-    [ "$PLAIN" != "200" ] && pass "plain HTTP on the TLS port is not served" \
-        || fail "R served plain HTTP on its TLS port"
-    UNTRUSTED=$(kubectl -n "$NS" exec "$CONSUMER" -- sh -c \
-        'curl -s -o /dev/null --max-time 4 https://service-r.wif.local:8443/healthz; echo $?' 2> /dev/null || true)
-    echo "curl with the public CA bundle only: exit $UNTRUSTED (60 = certificate not trusted)"
-    [ "$UNTRUSTED" = "60" ] && pass "R's certificate is trusted only via the internal CA" \
-        || fail "expected curl exit 60 without the internal CA, got $UNTRUSTED"
+    tls_only_checks "$CONSUMER" service-r.wif.local "service-r"
 
     section "15. missing scope  ->  403"
     echo "reader: POST /orders with only r:orders:read"

@@ -98,12 +98,12 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
   │                                                                                        │     │
   │   ServiceAccount "consumer"  ── die Identität, auf die das Token ausgestellt wird       │     │
   │                                                                                        ▼     │
-  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTP raus   │     │
+  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTPS raus  │     │
   │        │                                                                                     │
   │   Pod "jwks-publisher"  ── liest Discovery-Doc + JWKS vom API-Server, lädt sie hoch ──┐      │
   └────────┼──────────────────────────────────────────────────────────────────────────────┼──────┘
            │                                                    PUT, mTLS (CN=jwks-publisher)
-           │  HTTP  GET /whoami        Authorization: Bearer <JWT>                         ▼
+           │  HTTPS GET /whoami        Authorization: Bearer <JWT>                         ▼
            ▼                                                             ┌──────────────────────────┐
    ┌─────────────────────────────┐         OIDC-Discovery + JWKS         │  Issuer-Endpoint         │
    │  Validator (Relying Party)  │ ──────────  nur HTTPS  ─────────────► │  "issuer-web" (nginx)    │
@@ -211,7 +211,7 @@ Serverzertifikat von `issuer-web` und das Client-Zertifikat des Publishers
 Spring-Boot-Service (Java), der **nicht** im Cluster läuft. Er ist der externe Dienst, gegen
 den sich der Pod ausweist.
 
-Der Validator bietet zwei HTTP-Endpunkte:
+Der Validator bietet zwei Endpunkte, nur über HTTPS (Port 8443, Zertifikat der internen PKI):
 
 | Pfad | Zweck |
 |---|---|

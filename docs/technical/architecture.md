@@ -42,7 +42,7 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 
 | Service | Image | Zweck | Läuft wie lange |
 |---|---|---|---|
-| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web`, `keycloak` und `service-r`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
+| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web`, `keycloak`, `validator` und `service-r`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`) oder rotieren (`rotate`). Ohne Netz. | einmalig / auf Anforderung |
 | `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s). Stellt die Pod-Tokens aus. Im Cluster laufen `jwks-publisher`, `consumer`, `reader` und `stranger`. | dauerhaft |
 | `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret für den Publisher, ConfigMap `internal-ca` in `wif-publisher` und `wif-demo`, Manifeste anwenden. Veröffentlicht nichts. | einmalig, Exit 0 |
@@ -72,9 +72,9 @@ Host – alles steckt in den Containern.
  │                               │   │ .8.20:443 ◄─┼───┼──────────────────────────┘    │
  │ bootstrap, demo               │   │   Lesen     │   │ demo, validator-foreign-ca    │
  └───────────────┬───────────────┘   └─────────────┘   └──────────────▲────────────────┘
-                 │ server .2                                          │ validator .10 :8080
-                 │                workload-net 172.31.9.0/24          │ (Host :18080)
-                 └──── Pod consumer: GET /whoami, Bearer-Token ───────┘
+                 │ server .2                                          │ validator .10 :8443
+                 │                workload-net 172.31.9.0/24          │ (Host 127.0.0.1:18080)
+                 └──── Pod consumer: HTTPS GET /whoami, Bearer ───────┘
 
  pki-init, sa-keys: ohne Netz (network_mode: none)
 ```
@@ -102,7 +102,7 @@ weder den API-Server noch den Upload-Listener.
 
 - **`entrypoint: ["bash", "/work/pki-init.sh"]`**, `restart: "no"`, **`network_mode: none`**.
 - **`volumes`:** `pki-ca` (CA-Schlüssel, nur hier eingehängt), `ca-trust` (Root-Zertifikat),
-  `issuer-tls`, `keycloak-tls`, `service-r-tls`, `publisher-tls`, `pki-demo`.
+  `issuer-tls`, `keycloak-tls`, `validator-tls`, `service-r-tls`, `publisher-tls`, `pki-demo`.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolspki-initsh--die-lab-pki).
 
 ### `sa-keys` – die Signaturschlüssel
@@ -169,19 +169,21 @@ weder den API-Server noch den Upload-Listener.
 - **`build.context: ./validator`** – Multi-Stage-Build, siehe
   [build-und-betrieb.md](build-und-betrieb.md).
 - **`environment`:** `WIF_ISSUER` (Default `https://issuer-web`), `WIF_AUDIENCE` (Default
-  `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`.
-- **`volumes`:** nur `ca-trust:/trust:ro` – das Root-Zertifikat der internen CA. Kein Volume
-  der Cluster-Seite.
+  `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`, `VALIDATOR_TLS_DIR=/tls`.
+- **`volumes`:** `ca-trust:/trust:ro` – das Root-Zertifikat der internen CA – und
+  `validator-tls:/tls:ro` – das eigene Serverzertifikat. Kein Volume der Cluster-Seite.
 - **`networks`:** `relying-net` mit `172.31.8.10`, `workload-net` mit `172.31.9.10`.
-- **`ports: "${VALIDATOR_HOST_PORT:-18080}:8080"`** – zusätzlich auf dem Host veröffentlicht,
-  damit man vom Host aus mit `curl` prüfen kann.
+- **`ports: "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"`** – nur HTTPS, kein
+  HTTP-Listener; vom Host unter `https://localhost:18080` (Lab-CA). Läuft als `USER 10001`.
 - **`depends_on: issuer-web → service_healthy`**.
-- **`healthcheck`:** `curl -fsS http://localhost:8080/healthz`, `start_period: 40s`.
+- **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`,
+  `start_period: 40s`.
 
 ### `validator-foreign-ca` – der Negativtest
 
 - Gleiches Image wie `validator`, aber `WIF_ISSUER_CA=/pki-demo/foreign-ca.crt` aus dem
-  Volume `pki-demo`, nur in `relying-net`, Profil `negative`.
+  Volume `pki-demo`, nur in `relying-net`, Profil `negative`. Es hängt auch `validator-tls` ein,
+  damit der Start allein an der fremden Issuer-CA (PKIX) scheitert.
 - `docker compose run --rm validator-foreign-ca` muss mit einem Fehlercode enden
   (`PKIX path building failed`).
 
@@ -234,7 +236,7 @@ weder den API-Server noch den Upload-Listener.
 
 - Gleiches Image wie `bootstrap` (`wif-lab/tools`), Profil `demo`.
 - **`command: ["all"]`** – Phase; außerdem `authz`, `pre-rotation` und `post-rotation`.
-- **`environment`:** `WIF_AUDIENCE`, `VALIDATOR_URL=http://validator:8080`, `KC_REALM_ISSUER`.
+- **`environment`:** `WIF_AUDIENCE`, `VALIDATOR_URL=https://validator:8443`, `KC_REALM_ISSUER`.
 - **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `pki-demo:/pki-demo:ro`
   (Negativtest-Zertifikate), `demo-state:/state` (Token und `kid`s zwischen den
   Rotationsphasen).
@@ -260,6 +262,7 @@ braucht.
 | `publisher-tls` | `pki-init` | `bootstrap` (→ Secret) | Client-Zertifikat `tls.crt` / `tls.key` (`CN=jwks-publisher`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `wrong-cn.*`, `foreign-ca.crt`, `foreign-publisher.*`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
+| `validator-tls` | `pki-init` | `validator`, `validator-foreign-ca` | Serverzertifikat `tls.crt` / `tls.key` (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
 | `service-r-tls` | `pki-init` | `service-r` | Serverzertifikat `tls.crt` / `tls.key` (`CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
 | `sa-keys` | `sa-keys` | `server` (ro) | `signing.key`, `current.pub`, `previous.pub`, `verify.pub`. |
 | `k3s-data` | `server` | – | Interne k3s-Datenbank, Cluster-Zustand. |
@@ -338,7 +341,7 @@ bootstrap    Namespaces, Secret, ConfigMaps, Manifeste,   │
 jwks-publisher (Pod) ── PUT mTLS ────────────────────────►│ healthy (JWKS-Datei vorhanden)
                                                           ▼
 validator    entrypoint.sh wartet auf /trust/ca.crt, OIDC-Discovery, JWKSource
-             healthy (curl /healthz)
+             healthy (curl --cacert … https://localhost:8443/healthz)
 keycloak     Realm-Import, healthy (/health/ready auf :9000)
               ▼
 keycloak-gateway  healthy (nc -z 127.0.0.1 8443)

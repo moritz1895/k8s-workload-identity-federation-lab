@@ -37,7 +37,7 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
   │  └────────┬─────────┘            │                                    │  validator (Spring)  │
   └───────────┼──────────────────────┘                                    │  prüft: Signatur,    │
               │  GET /whoami, Authorization: Bearer <JWT>                 │  iss, aud, exp, nbf  │
-              │  workload-net 172.31.9.0/24                               │  172.31.9.10:8080    │
+              │  workload-net 172.31.9.0/24                               │  172.31.9.10:8443    │
               └──── validator.wif.local -> 172.31.9.10 (hostAliases) ───► └──────────────────────┘
 
    WICHTIG: Der Validator sendet NIE eine Anfrage an den API-Server (server) und kann ihn
@@ -91,10 +91,12 @@ Lab löst [`tools/demo.sh`](../tools/demo.sh) (Abschnitt 3) diesen Aufruf aus.
    | `kubernetes.io` | Objekt mit `namespace`, `pod`, `serviceaccount` |
 
 3. **Die Workload ruft den Validator auf.** Der Pod sendet
-   `GET http://validator.wif.local:8080/whoami` mit dem Header
+   `GET https://validator.wif.local:8443/whoami` (TLS, Serverzertifikat der internen CA, geprüft
+   mit `--cacert /etc/internal-ca/ca.crt`) mit dem Header
    `Authorization: Bearer <Inhalt der Token-Datei>`. Der Name `validator.wif.local` zeigt
    per `hostAliases` auf `172.31.9.10` (die Adresse des Validators in `workload-net`). In `demo.sh`:
-   `kubectl -n wif-demo exec <pod> -- sh -c 'curl ... -H "Authorization: Bearer $(cat /var/run/secrets/tokens/sa-token)" ...'`.
+   `kubectl -n wif-demo exec <pod> -- sh -c 'printf "Authorization: Bearer %s\n" "$(cat …/sa-token)" | curl --cacert … -H @- …'`
+   (`printf` ist ein Shell-Builtin, das Token steht in keiner Argumentliste).
 
 4. **Der Validator hat die Schlüssel bereits (Discovery beim Start, danach Cache).** Beim
    Hochfahren hat `JwksTrustConfig` das Discovery-Dokument von
@@ -250,9 +252,9 @@ Bei einem abgelehnten Token:
 
 7. **validator startet** (`depends_on: issuer-web healthy`). `entrypoint.sh` wartet auf
    `/trust/ca.crt`, dann startet die JVM. Beim Hochfahren macht der Validator die
-   OIDC-Discovery (siehe Use Case 1, Schritt 4) und ist danach unter `:8080` bereit
+   OIDC-Discovery (siehe Use Case 1, Schritt 4) und ist danach unter `https://…:8443` bereit
    (`/healthz` liefert `{"status":"UP"}`; auf dem Host unter dem in `.env` gesetzten Port,
-   Standard `localhost:18080`).
+   Standard `https://localhost:18080`).
 
 8. **demo läuft nicht automatisch mit.** `demo` und `validator-foreign-ca` stecken hinter
    Compose-Profilen und laufen nur mit `docker compose run --rm ...`.
@@ -374,9 +376,10 @@ Validators (5 min). Siehe [ADR 0003](adr/0003-getrennte-vertrauensbereiche-inter
 | 0 | `GET https://issuer-web/.well-known/openid-configuration` (mit `--cacert /trust/ca.crt`) | `issuer` = `https://issuer-web`, `jwks_uri` gesetzt |
 | 1 | `GET https://issuer-web/openid/v1/jwks` | Schlüssel mit `kty` RSA, `alg` `RS256` |
 | 2 | `kubectl create token consumer --audience wif-demo-validator --duration 10m` + Payload dekodieren | Claims wie in Use Case 1, Schritt 2 |
-| 3 | Pod ruft mit dem **projizierten** Token `/whoami` auf | **HTTP 200** + Claims |
+| 3 | Pod ruft mit dem **projizierten** Token `https://validator.wif.local:8443/whoami` auf (Token über stdin) | **HTTP 200** + Claims |
+| 3 (TLS) | `tls_only_checks` für den Validator: Zertifikat, Klartext auf 8080 und 8443, nur öffentliche CAs | `CN=validator.wif.local` von der Lab-Root-CA; kein Listener auf 8080; `400`; curl Exit-Code 60 |
 | 4 | Token mit `--audience not-this-service` | **HTTP 401**, `JWT aud claim rejected` |
-| 5 | letztes Zeichen des gültigen Tokens ersetzt | **HTTP 401**, `Signed JWT rejected: Invalid signature` |
+| 5 | erstes Zeichen der Signatur ersetzt (das letzte base64url-Zeichen trägt nur 2 Datenbits) | **HTTP 401**, `Signed JWT rejected: Invalid signature` |
 | 6 | Upload-Versuche U1-U4 | **400, 400, 403, 403**; JWKS unverändert |
 | 7 (nur `DEMO_EXPIRY=1`) | 10-Minuten-Token, dann pollen bis Ablauf | Statuswechsel **200 → 401** |
 

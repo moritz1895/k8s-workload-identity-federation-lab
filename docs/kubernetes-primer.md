@@ -309,7 +309,8 @@ hostAliases:
 
 Der Validator hat im Docker-Netz `workload-net` die feste IP `172.31.9.10`
 ([`compose.yaml`](../compose.yaml)). Der Pod ruft ihn unter
-`http://validator.wif.local:8080/whoami` auf; der `hostAliases`-Eintrag sorgt dafür, dass
+`https://validator.wif.local:8443/whoami` auf (TLS mit Zertifikat der internen CA); der
+`hostAliases`-Eintrag sorgt dafür, dass
 dieser Name im Pod auf `172.31.9.10` zeigt.
 
 Ebenso im Publisher ([`manifests/10-publisher.yaml`](../manifests/10-publisher.yaml)):

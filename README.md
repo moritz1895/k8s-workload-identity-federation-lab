@@ -29,7 +29,7 @@ tools/run-all-checks.sh               # alles: Demos, Netztrennung, fremde CA, S
 docker compose down -v                # alles wieder entfernen
 ```
 
-Vom Host erreichbar: Validator `http://localhost:18080`, `service-r` `https://127.0.0.1:18081`
+Vom Host erreichbar (nur HTTPS): Validator `https://localhost:18080`, `service-r` `https://localhost:18081`
 (Zertifikat der Lab-CA, z. B. `curl --cacert <lab-ca>`).
 Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy, weil ein
 veröffentlichter Docker-Port auch aus dem Workload-Netz erreichbar ist:
@@ -48,7 +48,7 @@ docker compose stop keycloak-admin
  │  Pod consumer                │                                 (nginx, Zertifikat
  └────┬─────────────────────────┘                                  der internen CA)
       │                                                           issuer-web :443
-      │ Bearer-Token, GET /whoami                                       ▲
+      │ Bearer-Token, GET /whoami (HTTPS)                               ▲
       │ workload-net (172.31.9.0/24)                                    │ GET Discovery + JWKS
       │                                                                 │ relying-net (172.31.8.0/24)
       └──────────────────────────────────────────────────►  validator (Spring Boot)
@@ -75,7 +75,7 @@ ist ein echtes Geheimnis.
 | `K3S_IMAGE` | `rancher/k3s:v1.34.11-k3s1` | Gepinntes k3s-Image. |
 | `WIF_ISSUER` | `https://issuer-web` | Issuer, den der Validator erwartet; Basis der OIDC-Discovery. |
 | `WIF_AUDIENCE` | `wif-demo-validator` | Audienz, die der Validator verlangt. |
-| `VALIDATOR_HOST_PORT` | `18080` | Host-Port des Validators. |
+| `VALIDATOR_HOST_PORT` | `18080` | Host-Port (`127.0.0.1`) des HTTPS-Ports 8443 des Validators (`https://localhost:18080`). |
 | `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `issuer-web`. |
 | `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image. |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Lab-Admin der Keycloak-Admin-Konsole. |
@@ -83,9 +83,9 @@ ist ein echtes Geheimnis.
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin`; geht in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer: Audienz des `kc-token`, erwarteter `iss` in `service-r` und in `demo`. |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die `service-r` im Access-Token verlangt. |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) des HTTPS-Ports von `service-r` (`https://127.0.0.1:18081`). |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) des HTTPS-Ports von `service-r` (`https://localhost:18081`). |
 
-Weitere Laufzeitvariablen (`WIF_ISSUER_CA`, `SERVICE_R_TRUST_CA`, `JAVA_OPTS`, `DEMO_EXPIRY`,
+Weitere Laufzeitvariablen (`WIF_ISSUER_CA`, `VALIDATOR_TLS_DIR`, `SERVICE_R_TRUST_CA`, `SERVICE_R_TLS_DIR`, `JAVA_OPTS`, `DEMO_EXPIRY`,
 `VALIDATOR_URL`): [docs/technical/build-und-betrieb.md](docs/technical/build-und-betrieb.md#umgebungsvariablen-env--envexample).
 
 ## Dokumentation
@@ -127,8 +127,8 @@ Bewusst offene Punkte des Labs:
   Realm wird per JSON-Import nur einmal angelegt; real schreibt ihn ausschließlich
   keycloak-config-cli oder Terraform aus der CI, mit Drift-Erkennung und extern
   gespeicherten Admin-Events.
-- **HTTP zwischen Workloads und Validator** (`service-r` spricht nur HTTPS). Real TLS oder mTLS (z. B. Service
-  Mesh), optional sender-gebundene Tokens (DPoP, mTLS).
+- **TLS nur einseitig.** Alle Dienste außerhalb des Clusters sprechen TLS mit Zertifikaten der
+  internen PKI; real kommen mTLS oder sender-gebundene Tokens (z. B. DPoP) als Option dazu.
 - **Cluster-RBAC ist Teil der Autorisierung.** Wer Tokens für einen ServiceAccount anfordern
   oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes.
 

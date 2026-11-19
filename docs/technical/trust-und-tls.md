@@ -3,7 +3,7 @@
 **Für wen / was lernst du hier:** Du kennst JWT/JWS/JWK, aber nicht die Feinheiten von TLS:
 Serverzertifikat vs. CA, SAN, Hostname-Verification, PKIX-Pfadbildung, Truststore, mTLS.
 Diese Seite erklärt diese Begriffe kurz, zeigt dann die TLS-Vertrauensbeziehungen im
-Lab (A–C für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
+Lab (A–C und I für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
 im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidung dahinter:
 [ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
 
@@ -132,6 +132,25 @@ Validator mit fremder CA (`validator-foreign-ca`) startet nicht.
 
 ---
 
+## Beziehung I – Pods und `demo` → Validator
+
+**Wer:** der Pod `consumer` und der `demo`-Container.
+**Wohin:** `https://validator.wif.local:8443/whoami` (Pod, per `hostAliases` → `172.31.9.10`)
+bzw. `https://validator:8443` (`demo`, `VALIDATOR_URL`).
+
+Der Validator spricht nur HTTPS auf 8443 (TLS 1.3/1.2, Spring-SSL-Bundle `validator`). Sein
+Serverzertifikat stellt `pki-init` aus: Volume `validator-tls`, `CN=validator.wif.local`, SAN
+`DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`, Schlüssel uid
+10001. Der Pod prüft es mit `--cacert /etc/internal-ca/ca.crt` (ConfigMap `internal-ca`),
+`demo` mit `/trust/ca.crt`. Das SA-Token geht im Pod per `printf … | curl -H @-` über
+stdin an curl, steht also in keiner Argumentliste. Die gemeinsame Funktion `tls_only_checks`
+in `demo.sh` zeigt nach Prüfung 3 Subject und Aussteller, prüft, dass auf 8080 kein Listener
+antwortet, dass Klartext-HTTP auf 8443 mit `400` abgewiesen wird und dass curl nur mit dem
+öffentlichen CA-Bundle mit Exit-Code 60 scheitert. Dieses Serverzertifikat ist unabhängig vom
+ausgehenden Vertrauen des Validators zu `issuer-web` (Beziehung C).
+
+---
+
 ## Beziehungen D–H – Keycloak und `service-r`
 
 Keycloak bekommt von `pki-init` ein eigenes Serverzertifikat der internen CA (Volume
@@ -155,9 +174,9 @@ unterscheiden, und Issuer-URL und Hostname-Verification bleiben gleich.
 Anders als der Validator (eigene `SSLSocketFactory` nur für Nimbus) setzt `service-r` den
 Truststore prozessweit: Der Dienst baut ausgehend nur TLS-Verbindungen zu Keycloak auf. Sein
 eigenes Serverzertifikat (Beziehung H) ist davon unabhängig.
-Der Aufruf Workload → Validator läuft im Lab über HTTP; in
-Produktion gehört er hinter TLS oder mTLS (z. B. Service Mesh), optional mit
-sender-gebundenen Tokens (DPoP, mTLS).
+Alle Dienste außerhalb des Clusters sprechen damit TLS mit Zertifikaten der internen PKI
+(Beziehungen F, H, I). In Produktion kommen mTLS (z. B. Service Mesh) oder sender-gebundene
+Tokens (DPoP, mTLS-gebunden) als Option dazu.
 
 ---
 

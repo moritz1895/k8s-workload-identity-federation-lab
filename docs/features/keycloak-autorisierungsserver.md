@@ -312,7 +312,7 @@ Einträge in `compose.yaml`, `.env.example` und der Konfigurationstabelle der RE
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port des Admin-Proxys `keycloak-admin` (`127.0.0.1`, HTTPS, Lab-CA, nur Profil `admin`); geht auch in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer; Audienz des `kc-token` und `service-r.issuer`. |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die R im Access-Token verlangt. |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R (`127.0.0.1`, HTTPS: `https://127.0.0.1:18081`). |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R (`127.0.0.1`, HTTPS: `https://localhost:18081`). |
 
 Feste Keycloak-Einstellungen im Compose-Service (nicht in `.env`): `start --import-realm`,
 `KC_DB=dev-file`, `KC_HOSTNAME=https://keycloak:8443`,
@@ -364,10 +364,9 @@ aus `${SERVICE_R_TLS_DIR:/tls}/tls.crt` bzw. `tls.key` (Volume `service-r-tls`),
 - **Cluster-RBAC gehört zur Autorisierungsgrenze.** Wer Tokens für einen ServiceAccount
   anfordern (`serviceaccounts/token`) oder Pods mit dessen `serviceAccountName` anlegen
   darf, bekommt dessen Scopes. Diese Rechte sind entsprechend restriktiv zu vergeben.
-- **Transport zu den Diensten.** Im Lab spricht R nur HTTPS (Serverzertifikat der internen
-  CA); den Validator rufen Workloads über HTTP auf.
-  In Produktion läuft das über TLS oder mTLS (z. B. Service Mesh); optional binden DPoP oder
-  mTLS-gebundene Tokens das Access-Token an den Client.
+- **Transport zu den Diensten.** Alle Dienste außerhalb des Clusters sprechen TLS mit
+  Zertifikaten der internen PKI. In Produktion kommen mTLS (z. B. Service Mesh) oder
+  sender-gebundene Tokens wie DPoP als Option dazu.
 - **Admin-Zugang** nur aus einem getrennten Verwaltungsnetz. Im Lab startet der Proxy
   `keycloak-admin` nur bei Bedarf, weil ein veröffentlichter Docker-Port auch aus
   `workload-net` erreichbar ist.
@@ -583,11 +582,22 @@ Offen:
 ## 14. Offene Fragen
 
 1. **Scope-Schema:** Reicht `<dienst>:<ressource>:<aktion>`, oder braucht es einen
-   Fachbereichs-Präfix, damit Scopes über Realms hinweg eindeutig bleiben?
-2. **Bindung an den Cluster:** Ein Identity-Provider pro Cluster oder pro
-   Cluster-Verbund? Wer meldet einen neuen Cluster beim Fachbereich an?
-3. **Merkmale aus dem heutigen DN:** `<Anwendungskontext>` und `<Betriebsumgebung>` haben im
-   Token keine direkte Entsprechung. Werden sie über getrennte Realms/Cluster,
-   Namespace-Konventionen oder eigene Scopes abgebildet?
-4. **Access-Token-Laufzeit:** 300 s im Lab. Welche Laufzeit akzeptieren die Fachbereiche,
-   da ein entzogener Scope erst mit Ablauf des Tokens wirkt?
+   Fachbereichs-Präfix, damit Scopes über Realms hinweg eindeutig bleiben? Ein Scope ist
+   ein frei strukturierbarer Bezeichner (RFC 6749, Abschnitt 3.3: keine Leerzeichen, keine
+   Anführungszeichen, kein Backslash); seine Bedeutung ergibt sich nur zusammen mit Issuer
+   (Realm) und Audienz.
+2. **Bindung an den Cluster:** Ein Identity-Provider pro Cluster oder ein gemeinsamer
+   Issuer für einen Cluster-Verbund? Wer meldet einen neuen Cluster beim Fachbereich an?
+3. **Anwendungskontext im Scope:** Der `<Anwendungskontext>` aus dem heutigen DN wird Teil
+   des Scope-Namens; das genaue Schema ist noch festzulegen.
+4. **Absicherung im Cluster:** Wer darf im Namespace einer aufrufenden Workload Pods
+   anlegen und Tokens für ihren ServiceAccount anfordern, mit welchem Freigabeprozess, und
+   wie erfährt der Fachbereich davon? Ein Access-Token unterscheidet zwei Anwendungen, die
+   sich einen ServiceAccount teilen, nicht.
+
+### Festgelegt
+
+- **Betriebsumgebung:** Test und Produktion vertrauen einander nie. Jede Umgebung hat ihren
+  eigenen Realm (oder ihre eigene Keycloak-Instanz), der nur den Clustern derselben
+  Umgebung vertraut.
+- **Access-Token-Laufzeit:** 300 s im Lab; der Wert für den Betrieb ist Feinabstimmung.

@@ -299,7 +299,7 @@ wie in Schritt 1. So weiß der Validator, welchen Schlüssel aus dem JWKS er zum
 Das ist der Kern. Das Skript führt **im `consumer`-Pod** ein `curl` aus:
 
 ```
-pod consumer-7599bd45b8-skn4j  ->  http://validator.wif.local:8080/whoami
+pod consumer-7599bd45b8-skn4j  ->  https://validator.wif.local:8443/whoami   (token from projected volume)
 HTTP 200
 PASS: pod token accepted (200)
 ```
@@ -324,7 +324,10 @@ Was hier passiert ist:
    im Pod-Manifest (`manifests/20-consumer.yaml`) mit `audience: wif-demo-validator` und
    `expirationSeconds: 600` konfiguriert ist. Das kubelet erneuert das Token automatisch vor
    Ablauf.
-2. Der Pod schickt es als `Authorization: Bearer <token>` an `http://validator.wif.local:8080`.
+2. Der Pod schickt es als `Authorization: Bearer <token>` per HTTPS an
+   `https://validator.wif.local:8443` und prüft dessen Serverzertifikat mit der internen CA
+   (`--cacert /etc/internal-ca/ca.crt`). Das Token geht über stdin an curl (`-H @-`), nicht als
+   Argument.
    Diesen Namen kennt der Cluster-DNS nicht (der Validator ist ja außerhalb) — deshalb steht im
    Pod-Manifest ein `hostAliases`-Eintrag, der `validator.wif.local` fest auf die IP
    `172.31.9.10` zeigt. Genau diese IP hat der Validator-Container im Netz `workload-net`.
@@ -332,6 +335,11 @@ Was hier passiert ist:
    gecachten JWKS, prüft die **Signatur**, prüft `iss == https://issuer-web`, prüft
    `aud` enthält `wif-demo-validator`, prüft `exp`/`nbf` (mit 60 s Toleranz). Alles grün →
    **HTTP 200** plus die Claims.
+
+Direkt danach prüft `demo.sh` aus dem Pod, dass der Validator **nur** über HTTPS mit einem
+Zertifikat der internen CA erreichbar ist: Es zeigt Subject `CN=validator.wif.local` und die
+Lab-Root-CA als Aussteller, auf 8080 antwortet nichts, Klartext-HTTP auf 8443 wird mit `400`
+abgewiesen, und curl nur mit den öffentlichen CAs scheitert (Exit-Code 60).
 
 ### Schritte 4 & 5 — Absichtlich kaputte Fälle
 
@@ -350,7 +358,7 @@ PASS
 - **Falsche Audience:** Ein Token, das für `not-this-service` ausgestellt wurde. Signatur ok,
   aber `aud` passt nicht → abgelehnt. Das ist der Schutz gegen den „confused deputy": ein Token,
   das die Workload einem *anderen* Dienst gegeben hat, taugt hier nicht.
-- **Manipulierte Signatur:** Das letzte Zeichen eines gültigen Tokens wird verändert. Die
+- **Manipulierte Signatur:** Das erste Zeichen der Signatur eines gültigen Tokens wird verändert. Die
   Signatur passt nicht mehr zum Inhalt → abgelehnt.
 
 ### Schritt 6 — Fremde Uploads werden abgewiesen
@@ -428,10 +436,15 @@ docker compose exec server kubectl -n wif-publisher logs deploy/jwks-publisher
 POD=$(docker compose exec server kubectl -n wif-demo get pod -l app=consumer -o jsonpath='{.items[0].metadata.name}')
 docker compose exec server kubectl -n wif-demo exec "$POD" -- cat /var/run/secrets/tokens/sa-token
 
-# Validator direkt vom Host anfragen (ohne Token -> 401)
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18080/whoami
-curl -s http://localhost:18080/healthz
+# Validator direkt vom Host anfragen (nur HTTPS, Lab-CA; ohne Token -> 401)
+docker compose cp validator:/trust/ca.crt lab-ca.crt
+curl -s --cacert lab-ca.crt -o /dev/null -w '%{http_code}\n' https://localhost:18080/whoami
+curl -s --cacert lab-ca.crt https://localhost:18080/healthz
 ```
+
+Unter Windows (curl mit Schannel) zusätzlich `--ssl-no-revoke` angeben – die Lab-CA
+veröffentlicht keine Sperrliste. Schannel prüft bei einer IP-Adresse den Zertifikatsnamen
+gegen den CN statt gegen den IP-SAN, deshalb `localhost` statt `127.0.0.1` verwenden.
 
 Im nginx-Log siehst du, wer mit `issuer-web` spricht: der Validator von `172.31.8.10` aus
 (nur `GET`), der Publisher aus dem Cluster-Netz (`PUT` auf `:8443`, im Log mit

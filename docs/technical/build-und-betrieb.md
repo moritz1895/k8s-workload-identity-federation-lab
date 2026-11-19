@@ -47,7 +47,8 @@ WORKDIR /app
 COPY --from=build /build/target/validator.jar app.jar
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8080
+USER 10001
+EXPOSE 8443
 ENTRYPOINT ["/entrypoint.sh"]
 ```
 
@@ -61,12 +62,15 @@ Wichtige Punkte:
   geladen. (Setzt BuildKit voraus – bei Docker/Compose v2 Standard.)
 - **`finalName` = `validator`** in `pom.xml:83`, deshalb `target/validator.jar`.
 - **Laufzeit-Image** ist ein reines JRE-Image (`25-jre-noble`, Ubuntu-basiert). `curl` wird
-  nachinstalliert, weil der Compose-Healthcheck `curl -fsS http://localhost:8080/healthz`
+  nachinstalliert, weil der Compose-Healthcheck
+  `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`
   ausführt.
 - **`entrypoint.sh`** wartet vor dem `java`-Start, bis `/trust/ca.crt` da ist (siehe
   [validator.md](validator.md)), und startet dann mit `-XX:MaxRAMPercentage=75`.
+- **Nur HTTPS:** Der Container läuft als `USER 10001` und öffnet nur 8443; das
+  Serverzertifikat kommt aus dem Volume `validator-tls` (`VALIDATOR_TLS_DIR=/tls`).
 
-`service-r/Dockerfile` ist gleich aufgebaut (`finalName` `service-r`), startet aber als
+`service-r/Dockerfile` ist gleich aufgebaut (`finalName` `service-r`), ebenfalls als
 `USER 10001` und öffnet nur `EXPOSE 8443` (HTTPS). Der Healthcheck ist
 `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`; das Serverzertifikat kommt
 aus dem Volume `service-r-tls` (`SERVICE_R_TLS_DIR=/tls`). `OrdersEndpointSecurityTest`
@@ -213,25 +217,26 @@ Nach einem Lauf ist der Signaturschlüssel rotiert. Für einen frischen Ausgangs
 | `K3S_IMAGE` | `rancher/k3s:v1.34.11-k3s1` | Pinnt die k3s-Version. Bei Änderung sollte `KUBECTL_VERSION` in `tools/Dockerfile` mitziehen. | Service `server` |
 | `WIF_ISSUER` | `https://issuer-web` | Sollwert des `iss`-Claims **und** Basis-URL der OIDC-Discovery im Validator. Muss aus dem Validator-Container erreichbar sein (dort nur `issuer-web`) und zum SAN des Serverzertifikats passen (`DNS:issuer-web`). | Service `validator`, `validator/…/application.yaml:2` |
 | `WIF_AUDIENCE` | `wif-demo-validator` | Audience, die der Validator verlangt und mit der die Demo Tokens prägt. Muss zum `audience` des `sa-token` im Pod-Manifest passen (`manifests/20-consumer.yaml`). | Services `validator`, `demo` |
-| `VALIDATOR_HOST_PORT` | `18080` | Host-Port, auf dem der Validator-Port 8080 zusätzlich veröffentlicht wird (für `curl` vom Host). Nur diese Zuordnung, keine Funktionsänderung. | Service `validator` |
+| `VALIDATOR_HOST_PORT` | `18080` | Host-Port (`127.0.0.1`) für den HTTPS-Port 8443 des Validators: `https://localhost:18080` (Lab-CA). Nur diese Zuordnung, keine Funktionsänderung. | Service `validator` |
 | `NGINX_IMAGE` | `nginx:1.29-alpine` | Image von `issuer-web`. | Service `issuer-web` |
 | `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Pinnt die Keycloak-Version. | Service `keycloak` |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | `admin` / `lab-not-a-secret-change-me` | Lab-Admin der Keycloak-Admin-Konsole. Kein Geheimnis, nur Lab. | Service `keycloak` |
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin` (Profil `admin`); zugleich Port in `KC_HOSTNAME_ADMIN=https://localhost:<port>` von Keycloak. | Services `keycloak-admin`, `keycloak` |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer. Muss zur `audience` des `kc-token` in den Pod-Manifesten passen. | Services `service-r` (`service-r.issuer`), `demo` |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die `service-r` verlangt; muss zum Audience-Mapper im Realm passen. | Service `service-r` (`service-r.audience`) |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) für den HTTPS-Port 8443 von `service-r`: `https://127.0.0.1:18081` (Lab-CA). | Service `service-r` |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) für den HTTPS-Port 8443 von `service-r`: `https://localhost:18081` (Lab-CA). | Service `service-r` |
 
 Nicht in `.env`, aber zur Laufzeit auswertbar:
 
 | Variable | Default | Wirkung |
 |---|---|---|
 | `WIF_ISSUER_CA` | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, der der Validator für TLS zu `issuer-web` vertraut. Im Compose fest gesetzt (bei `validator-foreign-ca` `/pki-demo/foreign-ca.crt`), zusätzlich von `validator/entrypoint.sh` gelesen. |
+| `VALIDATOR_TLS_DIR` | `/tls` | Verzeichnis mit `tls.crt` / `tls.key` des HTTPS-Listeners des Validators (PEM-Bundle `validator`). Im Compose fest gesetzt, auch bei `validator-foreign-ca`. |
 | `SERVICE_R_TRUST_CA` | `/trust/ca.crt` | PEM-Datei der internen CA, aus der `service-r/entrypoint.sh` den Truststore baut. Im Compose fest gesetzt. |
 | `SERVICE_R_TLS_DIR` | `/tls` | Verzeichnis mit `tls.crt` / `tls.key` des HTTPS-Listeners von `service-r` (PEM-Bundle `service-r`). Im Compose fest gesetzt. |
 | `JAVA_OPTS` | – | Zusätzliche JVM-Flags, von beiden `entrypoint.sh` an `java` durchgereicht. |
 | `DEMO_EXPIRY` | `0` | `1` hängt an `demo.sh all` und `demo.sh authz` die echten Ablauf-Tests an (Prüfungen 7 und 21). |
-| `VALIDATOR_URL` | `http://validator:8080` | Ziel-URL, die `demo.sh` direkt anspricht (Service `demo`). |
+| `VALIDATOR_URL` | `https://validator:8443` | Ziel-URL, die `demo.sh` direkt anspricht (Service `demo`, geprüft mit `--cacert /trust/ca.crt`). |
 
 **Secrets:** Es gibt in diesem Lab keine echten Geheimnisse. `.env` steht in `.gitignore`;
 committe stattdessen nur `.env.example` mit Platzhaltern.
@@ -322,7 +327,7 @@ Prüf-Reihenfolge:
 docker compose ps                       # welcher Service hängt?
 docker compose logs issuer-web          # antwortet nginx, kam der Upload an?
 docker compose logs validator           # Discovery-Fehler? PKIX? CA fehlt?
-docker compose exec validator printenv WIF_ISSUER WIF_AUDIENCE WIF_ISSUER_CA
+docker compose exec validator printenv WIF_ISSUER WIF_AUDIENCE WIF_ISSUER_CA VALIDATOR_TLS_DIR
 ```
 
 Häufigste Ursachen: `WIF_ISSUER` falsch (→ [trust-und-tls.md](trust-und-tls.md)), PKI-Volumes

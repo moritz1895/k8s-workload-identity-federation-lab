@@ -36,6 +36,7 @@ volumes:
   publisher-tls:
   keycloak-tls:
   service-r-tls:
+  validator-tls:
   pki-demo:
   demo-state:
 
@@ -56,6 +57,7 @@ services:
       - publisher-tls:/pki/publisher
       - keycloak-tls:/pki/keycloak
       - service-r-tls:/pki/service-r
+      - validator-tls:/pki/validator
       - pki-demo:/pki/demo
       - ./tools:/work:ro
 
@@ -173,6 +175,7 @@ services:
 
   # The relying party: NOT in the cluster. Trusts the internal CA, does OIDC
   # discovery against issuer-web and validates pod tokens offline (Nimbus).
+  # HTTPS only (8443) with a serving certificate from the internal PKI.
   validator:
     build:
       context: ./validator
@@ -181,20 +184,22 @@ services:
       - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
       - WIF_ISSUER_CA=/trust/ca.crt
+      - VALIDATOR_TLS_DIR=/tls
     volumes:
       - ca-trust:/trust:ro
+      - validator-tls:/tls:ro
     networks:
       relying-net:
         ipv4_address: 172.31.8.10
       workload-net:
         ipv4_address: 172.31.9.10
     ports:
-      - "${VALIDATOR_HOST_PORT:-18080}:8080"
+      - "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"
     depends_on:
       issuer-web:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "--cacert", "/trust/ca.crt", "https://localhost:8443/healthz"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -208,8 +213,10 @@ services:
       - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
       - WIF_ISSUER_CA=/pki-demo/foreign-ca.crt
+      - VALIDATOR_TLS_DIR=/tls
     volumes:
       - pki-demo:/pki-demo:ro
+      - validator-tls:/tls:ro
     networks:
       - relying-net
     profiles:
@@ -355,7 +362,7 @@ services:
     image: wif-lab/tools
     environment:
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
-      - VALIDATOR_URL=http://validator:8080
+      - VALIDATOR_URL=https://validator:8443
       - KC_REALM_ISSUER=${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}
     volumes:
       - kubeconfig:/kube:ro

@@ -4,6 +4,7 @@
 #   - the serving certificate of issuer-web
 #   - the serving certificate of the domain authorization server (keycloak)
 #   - the serving certificate of resource server R (service-r)
+#   - the serving certificate of the validator
 #   - the client certificate of the in-cluster JWKS publisher (mTLS upload)
 #   - negative-test material: a client cert with the wrong CN and a foreign CA
 # Each artefact lands in its own volume so every component sees only what it needs.
@@ -16,6 +17,7 @@ ISSUER_DIR=/pki/issuer
 PUBLISHER_DIR=/pki/publisher
 KEYCLOAK_DIR=/pki/keycloak
 SERVICE_R_DIR=/pki/service-r
+VALIDATOR_DIR=/pki/validator
 DEMO_DIR=/pki/demo
 
 DAYS=825
@@ -54,6 +56,11 @@ keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
 subjectAltName=DNS:service-r.wif.local,DNS:service-r,DNS:localhost,IP:127.0.0.1"
 
+VALIDATOR_EXT="basicConstraints=CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:validator.wif.local,DNS:validator,DNS:localhost,IP:127.0.0.1"
+
 CLIENT_EXT="basicConstraints=CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=clientAuth"
@@ -63,7 +70,7 @@ if [ -s "$CA_DIR/ca.crt" ]; then
 else
     echo "pki-init: creating lab root CA"
     new_root "$CA_DIR" "WIF Lab Internal Root CA"
-    rm -f "$ISSUER_DIR"/* "$PUBLISHER_DIR"/* "$KEYCLOAK_DIR"/* "$SERVICE_R_DIR"/* "$DEMO_DIR"/*
+    rm -f "$ISSUER_DIR"/* "$PUBLISHER_DIR"/* "$KEYCLOAK_DIR"/* "$SERVICE_R_DIR"/* "$VALIDATOR_DIR"/* "$DEMO_DIR"/*
 fi
 
 cp "$CA_DIR/ca.crt" "$TRUST_DIR/ca.crt"
@@ -81,6 +88,11 @@ fi
 if [ ! -s "$SERVICE_R_DIR/tls.crt" ]; then
     echo "pki-init: issuing service-r serving certificate"
     issue_cert tls "/O=WIF Lab/CN=service-r.wif.local" "$SERVICE_R_EXT" "$CA_DIR/ca.crt" "$CA_DIR/ca.key" "$SERVICE_R_DIR"
+fi
+
+if [ ! -s "$VALIDATOR_DIR/tls.crt" ]; then
+    echo "pki-init: issuing validator serving certificate"
+    issue_cert tls "/O=WIF Lab/CN=validator.wif.local" "$VALIDATOR_EXT" "$CA_DIR/ca.crt" "$CA_DIR/ca.key" "$VALIDATOR_DIR"
 fi
 
 if [ ! -s "$PUBLISHER_DIR/tls.crt" ]; then
@@ -105,8 +117,11 @@ chmod 600 "$ISSUER_DIR"/*.key "$PUBLISHER_DIR"/*.key "$DEMO_DIR"/*.key
 chmod 644 "$KEYCLOAK_DIR"/tls.crt
 chown 1000:0 "$KEYCLOAK_DIR"/tls.key
 chmod 400 "$KEYCLOAK_DIR"/tls.key
-# service-r runs as uid 10001.
+# service-r and the validator run as uid 10001.
 chmod 644 "$SERVICE_R_DIR"/tls.crt
 chown 10001:0 "$SERVICE_R_DIR"/tls.key
 chmod 400 "$SERVICE_R_DIR"/tls.key
+chmod 644 "$VALIDATOR_DIR"/tls.crt
+chown 10001:0 "$VALIDATOR_DIR"/tls.key
+chmod 400 "$VALIDATOR_DIR"/tls.key
 echo "pki-init: done"

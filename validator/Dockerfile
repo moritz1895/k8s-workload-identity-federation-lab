@@ -14,5 +14,6 @@ WORKDIR /app
 COPY --from=build /build/target/validator.jar app.jar
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8080
+USER 10001
+EXPOSE 8443
 ENTRYPOINT ["/entrypoint.sh"]
