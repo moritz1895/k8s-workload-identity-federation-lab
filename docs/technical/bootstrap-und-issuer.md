@@ -44,6 +44,7 @@ Organisation, deren Root-Zertifikat real bereits auf allen Systemen verteilt ist
 | Vertrauensanker | `ca-trust` | Kopie von `ca.crt` |
 | Serverzertifikat `issuer-web` | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer-web`, SAN `DNS:issuer-web`, `extendedKeyUsage=serverAuth` |
 | Serverzertifikat Keycloak | `keycloak-tls` | `tls.crt` / `tls.key`, `CN=keycloak`, SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 1000:0`, `chmod 400`, weil Keycloak als uid 1000 läuft |
+| Serverzertifikat `service-r` | `service-r-tls` | `tls.crt` / `tls.key`, `CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 10001:0`, `chmod 400`, weil `service-r` als uid 10001 läuft |
 | Client-Zertifikat Publisher | `publisher-tls` | `tls.crt` / `tls.key`, `CN=jwks-publisher`, `extendedKeyUsage=clientAuth` |
 | Negativtests | `pki-demo` | `wrong-cn.*` (interne CA, `CN=not-the-publisher`), `smuggled-cn.*` (interne CA, `CN=jwks-publisher` nur im Feld `O`), `foreign-ca.crt`, `foreign-publisher.*` (fremde CA, `CN=jwks-publisher`) |
 

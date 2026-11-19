@@ -42,7 +42,7 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 
 | Service | Image | Zweck | Läuft wie lange |
 |---|---|---|---|
-| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web` und `keycloak`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
+| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web`, `keycloak` und `service-r`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`) oder rotieren (`rotate`). Ohne Netz. | einmalig / auf Anforderung |
 | `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s). Stellt die Pod-Tokens aus. Im Cluster laufen `jwks-publisher`, `consumer`, `reader` und `stranger`. | dauerhaft |
 | `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret für den Publisher, ConfigMap `internal-ca` in `wif-publisher` und `wif-demo`, Manifeste anwenden. Veröffentlicht nichts. | einmalig, Exit 0 |
@@ -85,7 +85,7 @@ Autorisierungs-Pfad (Details in [autorisierungsserver.md](autorisierungsserver.m
  workload-net                               relying-net
  Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► issuer-web .8.20:443
       │                          nur /realms/domain-rst/                ▲
-      └── HTTP :8080 ──────────► service-r .9.40 │ .8.40 ───────────────┘ Discovery + JWKS
+      └── HTTPS :8443 ─────────► service-r .9.40 │ .8.40 ───────────────┘ Discovery + JWKS
                                                      keycloak-admin .8.32 (Profil admin, Host 127.0.0.1:18443)
 ```
 
@@ -102,7 +102,7 @@ weder den API-Server noch den Upload-Listener.
 
 - **`entrypoint: ["bash", "/work/pki-init.sh"]`**, `restart: "no"`, **`network_mode: none`**.
 - **`volumes`:** `pki-ca` (CA-Schlüssel, nur hier eingehängt), `ca-trust` (Root-Zertifikat),
-  `issuer-tls`, `keycloak-tls`, `publisher-tls`, `pki-demo`.
+  `issuer-tls`, `keycloak-tls`, `service-r-tls`, `publisher-tls`, `pki-demo`.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolspki-initsh--die-lab-pki).
 
 ### `sa-keys` – die Signaturschlüssel
@@ -219,13 +219,15 @@ weder den API-Server noch den Upload-Listener.
 ### `service-r` – Dienst R
 
 - **`build.context: ./service-r`**; `environment`: `KC_REALM_ISSUER`, `SERVICE_R_AUDIENCE`,
-  `SERVICE_R_TRUST_CA=/trust/ca.crt`; `volumes`: nur `ca-trust:/trust:ro`; `mem_limit: 384m`;
-  läuft als `USER 10001`.
+  `SERVICE_R_TRUST_CA=/trust/ca.crt`, `SERVICE_R_TLS_DIR=/tls`; `volumes`: `ca-trust:/trust:ro`,
+  `service-r-tls:/tls:ro`; `mem_limit: 384m`; läuft als `USER 10001`.
 - **`networks`:** `relying-net` mit `172.31.8.40`, `workload-net` mit `172.31.9.40`;
-  **`ports: "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8080"`**.
-- Kein `depends_on`: Die Realm-Discovery läuft erst beim ersten Token, R startet unabhängig
-  von Keycloak.
-- **`healthcheck`:** `curl -fsS http://localhost:8080/healthz`.
+  **`ports: "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8443"`** – nur HTTPS (Port 8443), kein
+  HTTP-Listener.
+- **`depends_on: pki-init → service_completed_successfully`** (Serverzertifikat). Kein
+  `depends_on` auf Keycloak: Die Realm-Discovery läuft erst beim ersten Token, R startet
+  unabhängig von Keycloak.
+- **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`.
 - Details: [autorisierungsserver.md](autorisierungsserver.md#service-r--der-resource-server).
 
 ### `demo` – die Ende-zu-Ende-Prüfung
@@ -258,6 +260,7 @@ braucht.
 | `publisher-tls` | `pki-init` | `bootstrap` (→ Secret) | Client-Zertifikat `tls.crt` / `tls.key` (`CN=jwks-publisher`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `wrong-cn.*`, `foreign-ca.crt`, `foreign-publisher.*`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
+| `service-r-tls` | `pki-init` | `service-r` | Serverzertifikat `tls.crt` / `tls.key` (`CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
 | `sa-keys` | `sa-keys` | `server` (ro) | `signing.key`, `current.pub`, `previous.pub`, `verify.pub`. |
 | `k3s-data` | `server` | – | Interne k3s-Datenbank, Cluster-Zustand. |
 | `kubeconfig` | `server` | `bootstrap`, `demo` | `kubeconfig.yaml` – Adresse + Admin-Zugang für `kubectl`. |
@@ -340,13 +343,13 @@ keycloak     Realm-Import, healthy (/health/ready auf :9000)
               ▼
 keycloak-gateway  healthy (nc -z 127.0.0.1 8443)
 
-service-r    ohne Abhängigkeit: entrypoint.sh baut Truststore, healthy (curl /healthz)
+service-r    nach pki-init: entrypoint.sh baut Truststore, healthy (curl --cacert … https://localhost:8443/healthz)
 
 demo         nur bei "docker compose run --rm demo" (wartet auf validator, service-r, keycloak-gateway)
 ```
 
 `validator` und `keycloak` hängen beide nur an `issuer-web` und starten parallel;
-`service-r` startet sofort. `demo` wartet über `keycloak-gateway` indirekt auf Keycloaks Healthcheck;
+`service-r` wartet nur auf `pki-init`. `demo` wartet über `keycloak-gateway` indirekt auf Keycloaks Healthcheck;
 da `/health/ready` schon vor dem Abschluss des ersten Bootstraps UP meldet, wiederholt Prüfung 8
 die Realm-Discovery bis zu 60 s.
 

@@ -29,7 +29,8 @@ tools/run-all-checks.sh               # alles: Demos, Netztrennung, fremde CA, S
 docker compose down -v                # alles wieder entfernen
 ```
 
-Vom Host erreichbar: Validator `http://localhost:18080`, `service-r` `http://127.0.0.1:18081`.
+Vom Host erreichbar: Validator `http://localhost:18080`, `service-r` `https://127.0.0.1:18081`
+(Zertifikat der Lab-CA, z. B. `curl --cacert <lab-ca>`).
 Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy, weil ein
 veröffentlichter Docker-Port auch aus dem Workload-Netz erreichbar ist:
 
@@ -82,7 +83,7 @@ ist ein echtes Geheimnis.
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin`; geht in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer: Audienz des `kc-token`, erwarteter `iss` in `service-r` und in `demo`. |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die `service-r` im Access-Token verlangt. |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) von `service-r`. |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) des HTTPS-Ports von `service-r` (`https://127.0.0.1:18081`). |
 
 Weitere Laufzeitvariablen (`WIF_ISSUER_CA`, `SERVICE_R_TRUST_CA`, `JAVA_OPTS`, `DEMO_EXPIRY`,
 `VALIDATOR_URL`): [docs/technical/build-und-betrieb.md](docs/technical/build-und-betrieb.md#umgebungsvariablen-env--envexample).
@@ -126,7 +127,7 @@ Bewusst offene Punkte des Labs:
   Realm wird per JSON-Import nur einmal angelegt; real schreibt ihn ausschließlich
   keycloak-config-cli oder Terraform aus der CI, mit Drift-Erkennung und extern
   gespeicherten Admin-Events.
-- **HTTP zwischen Workloads und `service-r` / Validator.** Real TLS oder mTLS (z. B. Service
+- **HTTP zwischen Workloads und Validator** (`service-r` spricht nur HTTPS). Real TLS oder mTLS (z. B. Service
   Mesh), optional sender-gebundene Tokens (DPoP, mTLS).
 - **Cluster-RBAC ist Teil der Autorisierung.** Wer Tokens für einen ServiceAccount anfordern
   oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes.

@@ -15,5 +15,5 @@ COPY --from=build /build/target/service-r.jar app.jar
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 USER 10001
-EXPOSE 8080
+EXPOSE 8443
 ENTRYPOINT ["/entrypoint.sh"]

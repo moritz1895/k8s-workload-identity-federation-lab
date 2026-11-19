@@ -19,9 +19,9 @@ Entscheidung: [ADR 0004](../adr/0004-keycloak-als-autorisierungsserver-pro-fachb
    (keycloak = 172.31.9.30)              .9.30 / .8.31         Realm domain-rst
       │                                  nur /realms/domain-rst/        ▲
       │                                                                 │ Discovery + JWKS (beim ersten Token)
-      └── GET /orders (HTTP), Bearer <Access-Token> ──► service-r .9.40 / .8.40
+      └── GET /orders (HTTPS :8443), Bearer <Access-Token> ──► service-r .9.40 / .8.40
 
- Host: 127.0.0.1:18081 → service-r; 127.0.0.1:18443 → keycloak-admin (nur Profil admin)
+ Host: 127.0.0.1:18081 → service-r :8443 (HTTPS); 127.0.0.1:18443 → keycloak-admin (nur Profil admin)
 ```
 
 | Bauteil | Datei | Aufgabe |
@@ -263,13 +263,32 @@ oder mit ungültigem Token antwortet R `401` mit `WWW-Authenticate: Bearer
 error="invalid_token"`, bei fehlendem Scope `403` mit `error="insufficient_scope"`. Bei
 Erfolg liefert `OrdersController` `{"clientId": <azp>, "scopes": [...], "endpoint": "..."}`.
 
-### TLS-Vertrauen
+### HTTPS-Listener
+
+R spricht ausschließlich HTTPS auf Port 8443; einen HTTP-Listener gibt es nicht.
+`application.yaml` setzt `server.port: 8443` und `server.ssl.bundle: service-r`; das
+PEM-Bundle `spring.ssl.bundle.pem.service-r` liest `keystore.certificate` und
+`keystore.private-key` aus `${SERVICE_R_TLS_DIR:/tls}/tls.crt` bzw. `tls.key`, erlaubt sind
+`TLSv1.3` und `TLSv1.2`. Das Zertifikat stellt `pki-init` aus: `CN=service-r.wif.local`, SAN
+`DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`, Volume
+`service-r-tls` (in den Container nach `/tls`), Schlüssel gehört uid 10001 mit Modus `400`.
+Pods rufen `https://service-r.wif.local:8443` mit `--cacert /etc/internal-ca/ca.crt` auf;
+der Healthcheck nutzt `curl --cacert /trust/ca.crt https://localhost:8443/healthz`. Vom Host:
+`https://127.0.0.1:18081`. Die MockMvc-Slice-Tests laufen ohne TLS.
+
+Prüfung 14b in `demo.sh authz` zeigt Subject `CN=service-r.wif.local` und die Lab-Root-CA als
+Aussteller, prüft, dass auf 8080 kein Klartext-Listener antwortet, dass Klartext-HTTP auf 8443
+mit `400` abgewiesen wird, und dass curl nur mit dem öffentlichen CA-Bundle mit Exit-Code 60
+scheitert: R ist nur über die interne CA vertrauenswürdig.
+
+### TLS-Vertrauen (ausgehend)
 
 `service-r/entrypoint.sh` wartet auf `SERVICE_R_TRUST_CA` (Default `/trust/ca.crt`), baut mit
 `keytool` einen PKCS12-Truststore `/tmp/internal-ca.p12`, der nur die Lab-CA enthält, und
 setzt ihn per `-Djavax.net.ssl.trustStore*` als JVM-Default. Jede ausgehende TLS-Verbindung
 (Realm-Discovery, JWKS) vertraut damit nur der internen CA. Heap: `-XX:MaxRAMPercentage=75`
-bei `mem_limit: 384m`. Host-Port: `127.0.0.1:18081`.
+bei `mem_limit: 384m`. In `compose.yaml` hängt `service-r` nur von `pki-init`
+(`service_completed_successfully`) ab, nicht von Keycloak.
 
 ### Tests (offline)
 
@@ -330,7 +349,7 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 | `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (`keycloak` per `hostAliases`) |
 | `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole, Host `127.0.0.1:18443`, nur Profil `admin` |
 | `service-r` | `relying-net` | 172.31.8.40 | liest Discovery/JWKS von Keycloak |
-| `service-r` | `workload-net` | 172.31.9.40 | Pods rufen R auf (Host `127.0.0.1:18081`) |
+| `service-r` | `workload-net` | 172.31.9.40 | Pods rufen R über HTTPS auf (`:8443`; Host `127.0.0.1:18081`) |
 
 `tools/run-all-checks.sh` (Abschnitt 2) prüft per Bash-`/dev/tcp`, dass Keycloak weder den
 API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Upload-Listener
@@ -345,7 +364,7 @@ API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Upload-Listener
 
 | Im Lab | In Produktion |
 |---|---|
-| Workload → `service-r` und Workload → `validator` über HTTP | TLS oder mTLS, z. B. über ein Service Mesh; optional sender-gebundene Tokens (DPoP oder mTLS-gebunden), damit ein abgegriffenes Access-Token allein nicht reicht |
+| Workload → `validator` über HTTP (`service-r` spricht nur HTTPS mit einem Zertifikat der Lab-CA) | TLS oder mTLS, z. B. über ein Service Mesh; optional sender-gebundene Tokens (DPoP oder mTLS-gebunden), damit ein abgegriffenes Access-Token allein nicht reicht |
 | Realm per `--import-realm` (nur Anlage, `IGNORE_EXISTING`), Daten im Container | keycloak-config-cli oder Terraform in der CI als einziger Schreiber, Drift-Erkennung, Admin-Events an ein externes System; externe Datenbank, mehrere Knoten |
 | Cluster-RBAC ist Lab-Standard | Rechte auf `serviceaccounts/token` und auf das Anlegen von Pods mit fremdem `serviceAccountName` bewusst vergeben und überwachen – sie entscheiden mit, wer welche Scopes bekommt |
 | `KC_TRUSTSTORE_PATHS` ergänzt den Default-Truststore | Truststore auf die interne PKI beschränken, falls Keycloak keine öffentlichen Endpunkte braucht |

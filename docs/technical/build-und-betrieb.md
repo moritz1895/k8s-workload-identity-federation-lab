@@ -67,7 +67,9 @@ Wichtige Punkte:
   [validator.md](validator.md)), und startet dann mit `-XX:MaxRAMPercentage=75`.
 
 `service-r/Dockerfile` ist gleich aufgebaut (`finalName` `service-r`), startet aber als
-`USER 10001`; `OrdersEndpointSecurityTest`
+`USER 10001` und öffnet nur `EXPOSE 8443` (HTTPS). Der Healthcheck ist
+`curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`; das Serverzertifikat kommt
+aus dem Volume `service-r-tls` (`SERVICE_R_TLS_DIR=/tls`). `OrdersEndpointSecurityTest`
 und `ScopeAuthoritiesTest` laufen im Build. Ihr `pom.xml` nutzt
 `spring-boot-starter-security-oauth2-resource-server` und schließt Logback ebenso aus.
 
@@ -218,7 +220,7 @@ Nach einem Lauf ist der Signaturschlüssel rotiert. Für einen frischen Ausgangs
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin` (Profil `admin`); zugleich Port in `KC_HOSTNAME_ADMIN=https://localhost:<port>` von Keycloak. | Services `keycloak-admin`, `keycloak` |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer. Muss zur `audience` des `kc-token` in den Pod-Manifesten passen. | Services `service-r` (`service-r.issuer`), `demo` |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die `service-r` verlangt; muss zum Audience-Mapper im Realm passen. | Service `service-r` (`service-r.audience`) |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) von `service-r`. | Service `service-r` |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port (`127.0.0.1`) für den HTTPS-Port 8443 von `service-r`: `https://127.0.0.1:18081` (Lab-CA). | Service `service-r` |
 
 Nicht in `.env`, aber zur Laufzeit auswertbar:
 
@@ -226,6 +228,7 @@ Nicht in `.env`, aber zur Laufzeit auswertbar:
 |---|---|---|
 | `WIF_ISSUER_CA` | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, der der Validator für TLS zu `issuer-web` vertraut. Im Compose fest gesetzt (bei `validator-foreign-ca` `/pki-demo/foreign-ca.crt`), zusätzlich von `validator/entrypoint.sh` gelesen. |
 | `SERVICE_R_TRUST_CA` | `/trust/ca.crt` | PEM-Datei der internen CA, aus der `service-r/entrypoint.sh` den Truststore baut. Im Compose fest gesetzt. |
+| `SERVICE_R_TLS_DIR` | `/tls` | Verzeichnis mit `tls.crt` / `tls.key` des HTTPS-Listeners von `service-r` (PEM-Bundle `service-r`). Im Compose fest gesetzt. |
 | `JAVA_OPTS` | – | Zusätzliche JVM-Flags, von beiden `entrypoint.sh` an `java` durchgereicht. |
 | `DEMO_EXPIRY` | `0` | `1` hängt an `demo.sh all` und `demo.sh authz` die echten Ablauf-Tests an (Prüfungen 7 und 21). |
 | `VALIDATOR_URL` | `http://validator:8080` | Ziel-URL, die `demo.sh` direkt anspricht (Service `demo`). |

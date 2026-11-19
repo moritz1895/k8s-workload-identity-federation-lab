@@ -35,6 +35,7 @@ volumes:
   issuer-tls:
   publisher-tls:
   keycloak-tls:
+  service-r-tls:
   pki-demo:
   demo-state:
 
@@ -54,6 +55,7 @@ services:
       - issuer-tls:/pki/issuer
       - publisher-tls:/pki/publisher
       - keycloak-tls:/pki/keycloak
+      - service-r-tls:/pki/service-r
       - pki-demo:/pki/demo
       - ./tools:/work:ro
 
@@ -312,6 +314,7 @@ services:
       - admin
 
   # Resource server R of the domain: a plain Spring Security resource server.
+  # HTTPS only (8443) with a serving certificate from the internal PKI.
   # Trusts only access tokens of the domain realm addressed to service-r alone
   # and maps their scopes to authorities; it knows no workload names.
   service-r:
@@ -322,18 +325,23 @@ services:
       - KC_REALM_ISSUER=${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}
       - SERVICE_R_AUDIENCE=${SERVICE_R_AUDIENCE:-service-r}
       - SERVICE_R_TRUST_CA=/trust/ca.crt
+      - SERVICE_R_TLS_DIR=/tls
     volumes:
       - ca-trust:/trust:ro
+      - service-r-tls:/tls:ro
     networks:
       relying-net:
         ipv4_address: 172.31.8.40
       workload-net:
         ipv4_address: 172.31.9.40
     ports:
-      - "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8080"
+      - "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8443"
     mem_limit: 384m
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "--cacert", "/trust/ca.crt", "https://localhost:8443/healthz"]
       interval: 5s
       timeout: 3s
       retries: 30

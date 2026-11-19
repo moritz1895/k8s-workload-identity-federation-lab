@@ -3,8 +3,21 @@ service-r:
   audience: ${SERVICE_R_AUDIENCE:service-r}
 
 server:
-  port: 8080
+  port: 8443
   shutdown: graceful
+  ssl:
+    bundle: service-r
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        service-r:
+          keystore:
+            certificate: file:${SERVICE_R_TLS_DIR:/tls}/tls.crt
+            private-key: file:${SERVICE_R_TLS_DIR:/tls}/tls.key
+          options:
+            enabled-protocols: TLSv1.3,TLSv1.2
 
 logging:
   level:

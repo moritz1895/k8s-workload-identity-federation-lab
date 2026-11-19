@@ -18,7 +18,7 @@ CA=/trust/ca.crt
 STATE=/state
 REALM_ISSUER="${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}"
 TOKEN_ENDPOINT="$REALM_ISSUER/protocol/openid-connect/token"
-SERVICE_R=http://service-r.wif.local:8080
+SERVICE_R=https://service-r.wif.local:8443
 
 KCFG=/tmp/kubeconfig
 sed -E 's#server: https://[^/]+:6443#server: https://k3s-server:6443#' /kube/kubeconfig.yaml > "$KCFG"
@@ -195,7 +195,7 @@ pod_access_token() { kubectl -n "$NS" exec "$1" -- /opt/authz/access-token.sh "$
 # $1 = pod, $2 = bearer token, $3 = method, $4 = path -> echoes HTTP status, body in /tmp/r-body
 call_service_r() {
     printf 'Authorization: Bearer %s\n' "$2" | kubectl -n "$NS" exec -i "$1" -- sh -c \
-        'curl -s -D /tmp/r-headers -w "\n%{http_code}" -X "$1" -H @- "$0$2"; \
+        'curl -s --cacert /etc/internal-ca/ca.crt -D /tmp/r-headers -w "\n%{http_code}" -X "$1" -H @- "$0$2"; \
          grep -i "^www-authenticate" /tmp/r-headers >&2 || true' \
         "$SERVICE_R" "$3" "$4" > /tmp/r-response || true
     sed '$d' /tmp/r-response > /tmp/r-body
@@ -287,6 +287,26 @@ authz_checks() {
     [ "$(jq -r .clientId /tmp/r-body)" = "workload-a" ] && pass "R names the caller workload-a" \
         || fail "R did not name workload-a"
     expect_status 200 "$(call_service_r "$CONSUMER" "$CONSUMER_RW" POST /orders)" "POST /orders with r:orders:write"
+
+    section "14b. R speaks TLS only, with a certificate of the internal PKI"
+    echo "server certificate as seen by the consumer pod:"
+    kubectl -n "$NS" exec "$CONSUMER" -- sh -c \
+        'curl -sv --cacert /etc/internal-ca/ca.crt -o /dev/null https://service-r.wif.local:8443/healthz 2>&1' \
+        | grep -E "subject:|issuer:|SSL connection using" | sed 's/^\* */  /'
+    if kubectl -n "$NS" exec "$CONSUMER" -- curl -s -o /dev/null --max-time 4 http://service-r.wif.local:8080/healthz 2> /dev/null; then
+        fail "R answers plain HTTP on 8080"
+    fi
+    pass "no plain-HTTP listener on 8080"
+    PLAIN=$(kubectl -n "$NS" exec "$CONSUMER" -- curl -s -o /dev/null -w '%{http_code}' --max-time 4 \
+        http://service-r.wif.local:8443/healthz || true)
+    echo "plain HTTP to the TLS port: HTTP $PLAIN"
+    [ "$PLAIN" != "200" ] && pass "plain HTTP on the TLS port is not served" \
+        || fail "R served plain HTTP on its TLS port"
+    UNTRUSTED=$(kubectl -n "$NS" exec "$CONSUMER" -- sh -c \
+        'curl -s -o /dev/null --max-time 4 https://service-r.wif.local:8443/healthz; echo $?' 2> /dev/null || true)
+    echo "curl with the public CA bundle only: exit $UNTRUSTED (60 = certificate not trusted)"
+    [ "$UNTRUSTED" = "60" ] && pass "R's certificate is trusted only via the internal CA" \
+        || fail "expected curl exit 60 without the internal CA, got $UNTRUSTED"
 
     section "15. missing scope  ->  403"
     echo "reader: POST /orders with only r:orders:read"

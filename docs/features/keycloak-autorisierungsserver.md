@@ -270,7 +270,11 @@ Keycloak, `keycloak-gateway` und `keycloak-admin` zeigen es. Keycloak spricht nu
 (`KC_HTTP_ENABLED=false`) und vertraut `issuer-web` über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
 (zusätzlich zu seinem Default-Truststore). `bootstrap` legt die ConfigMap `internal-ca`
 zusätzlich im Namespace `wif-demo` an, damit die Pods Keycloak über TLS prüfen können.
-Workload → R läuft im Lab über HTTP (siehe Abschnitt 8).
+`pki-init` stellt außerdem ein Serverzertifikat `CN=service-r.wif.local` (SAN
+`DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`) aus (Volume
+`service-r-tls`, Schlüssel gehört uid 10001). `service-r` spricht nur HTTPS auf 8443 (TLS 1.3
+und 1.2, Spring-SSL-Bundle `service-r`); die Pods prüfen es über dieselbe ConfigMap
+`internal-ca`.
 
 ### Realm als Code
 
@@ -308,7 +312,7 @@ Einträge in `compose.yaml`, `.env.example` und der Konfigurationstabelle der RE
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port des Admin-Proxys `keycloak-admin` (`127.0.0.1`, HTTPS, Lab-CA, nur Profil `admin`); geht auch in `KC_HOSTNAME_ADMIN=https://localhost:<port>` ein. |
 | `KC_REALM_ISSUER` | `https://keycloak:8443/realms/domain-rst` | Realm-Issuer; Audienz des `kc-token` und `service-r.issuer`. |
 | `SERVICE_R_AUDIENCE` | `service-r` | Audienz, die R im Access-Token verlangt. |
-| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R (`127.0.0.1`). |
+| `SERVICE_R_HOST_PORT` | `18081` | Host-Port von R (`127.0.0.1`, HTTPS: `https://127.0.0.1:18081`). |
 
 Feste Keycloak-Einstellungen im Compose-Service (nicht in `.env`): `start --import-realm`,
 `KC_DB=dev-file`, `KC_HOSTNAME=https://keycloak:8443`,
@@ -324,7 +328,10 @@ Konfiguration von `service-r` (`application.yaml`, per Umgebung überschreibbar)
 `service-r.issuer=${KC_REALM_ISSUER}`, `service-r.audience=${SERVICE_R_AUDIENCE}`; RS256 ist
 im `JwtDecoder` fest eingestellt. `entrypoint.sh` baut aus `SERVICE_R_TRUST_CA`
 (`/trust/ca.crt`) einen PKCS12-Truststore nur mit der Lab-CA und setzt ihn als JVM-Default.
-Der Container läuft als `USER 10001`.
+Der Container läuft als `USER 10001`. R spricht nur HTTPS auf 8443: `server.ssl.bundle=service-r`,
+PEM-Bundle `spring.ssl.bundle.pem.service-r` mit `keystore.certificate` / `keystore.private-key`
+aus `${SERVICE_R_TLS_DIR:/tls}/tls.crt` bzw. `tls.key` (Volume `service-r-tls`), Protokolle
+`TLSv1.3`, `TLSv1.2`; kein HTTP-Listener.
 
 `keycloak-gateway` und `keycloak-admin` sind nginx-Container (`${NGINX_IMAGE}`,
 `mem_limit: 64m`) mit `tools/nginx-keycloak-gateway.conf` bzw.
@@ -357,7 +364,8 @@ Der Container läuft als `USER 10001`.
 - **Cluster-RBAC gehört zur Autorisierungsgrenze.** Wer Tokens für einen ServiceAccount
   anfordern (`serviceaccounts/token`) oder Pods mit dessen `serviceAccountName` anlegen
   darf, bekommt dessen Scopes. Diese Rechte sind entsprechend restriktiv zu vergeben.
-- **Transport zu den Diensten.** Im Lab rufen Workloads R und den Validator über HTTP auf.
+- **Transport zu den Diensten.** Im Lab spricht R nur HTTPS (Serverzertifikat der internen
+  CA); den Validator rufen Workloads über HTTP auf.
   In Produktion läuft das über TLS oder mTLS (z. B. Service Mesh); optional binden DPoP oder
   mTLS-gebundene Tokens das Access-Token an den Client.
 - **Admin-Zugang** nur aus einem getrennten Verwaltungsnetz. Im Lab startet der Proxy
@@ -461,6 +469,13 @@ antwortet das Gateway `404`. Ein Pfad `/realms/domain-rst/../master/…` erreich
 Master-Realm nicht. Keycloak selbst (`172.31.8.30:8443`, `:9000`) ist aus dem Pod nicht
 erreichbar; die Realm-Discovery über das Gateway liefert `200`.
 
+**AK16 – R nur über HTTPS mit Zertifikat der internen CA**
+Gegeben ein Pod mit der ConfigMap `internal-ca`, wenn er `https://service-r.wif.local:8443`
+aufruft, dann zeigt R ein Zertifikat mit Subject `CN=service-r.wif.local`, ausgestellt von
+der Lab-Root-CA. Auf 8080 antwortet kein Klartext-Listener, Klartext-HTTP auf 8443 wird mit
+`400` abgewiesen, und ein Aufruf nur mit dem öffentlichen CA-Bundle scheitert (curl
+Exit-Code 60).
+
 ## 12. Testfälle
 
 ### Unit- und Slice-Tests in `service-r` (offline, TDD)
@@ -503,7 +518,8 @@ Mit einem lokal erzeugten RSA-Schlüssel und einem `JwtDecoder` gegen diesen Sch
 | 11 | `stranger` fordert Token (AK3) | `401 invalid_client` |
 | 12 | `sa-token` als Client-Assertion (AK4) | `400 invalid_client` |
 | 13 | JWT fremder Cluster / fremder Schlüssel (AK5) | `401 invalid_client` |
-| 14 | `consumer` → R `GET`/`POST /orders` (AK6) | `200` |
+| 14 | `consumer` → R `GET`/`POST /orders` über HTTPS (AK6) | `200` |
+| 14b | TLS von R aus dem Pod: Zertifikat, Klartext auf 8080 und 8443, öffentliches CA-Bundle (AK16) | `CN=service-r.wif.local` von der Lab-Root-CA; kein Listener auf 8080; `400`; curl Exit-Code 60 |
 | 15 | `reader` → R `POST /orders`, `consumer` → `DELETE` (AK7) | `403` |
 | 16 | Token mit `aud=service-s` → R (AK8) | `401` |
 | 16b | Token für R und S zugleich → R (AK14) | `401` |

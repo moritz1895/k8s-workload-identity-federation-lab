@@ -3,7 +3,7 @@
 **Für wen / was lernst du hier:** Du kennst JWT/JWS/JWK, aber nicht die Feinheiten von TLS:
 Serverzertifikat vs. CA, SAN, Hostname-Verification, PKIX-Pfadbildung, Truststore, mTLS.
 Diese Seite erklärt diese Begriffe kurz, zeigt dann die TLS-Vertrauensbeziehungen im
-Lab (A–C für den Validator-Pfad, D–G für Keycloak und `service-r`) und wie `JwksTrustConfig`
+Lab (A–C für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
 im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidung dahinter:
 [ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md).
 
@@ -132,7 +132,7 @@ Validator mit fremder CA (`validator-foreign-ca`) startet nicht.
 
 ---
 
-## Beziehungen D–G – Keycloak und `service-r`
+## Beziehungen D–H – Keycloak und `service-r`
 
 Keycloak bekommt von `pki-init` ein eigenes Serverzertifikat der internen CA (Volume
 `keycloak-tls`, `CN=keycloak`, SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`).
@@ -146,15 +146,17 @@ gehört uid 1000 (`chmod 400`), weil Keycloak nicht als root läuft.
 | E | `service-r` → `https://keycloak:8443/realms/domain-rst` (Discovery + JWKS des Realms) | PKCS12-Truststore aus `service-r/entrypoint.sh`, enthält **nur** die Lab-CA und ist JVM-Default (`-Djavax.net.ssl.trustStore`) |
 | F | Pods `consumer`/`reader`/`stranger` → `https://keycloak:8443` (= `keycloak-gateway`), `demo` → Keycloak direkt | `--cacert /etc/internal-ca/ca.crt` aus der ConfigMap `internal-ca`, die `bootstrap` auch in `wif-demo` anlegt; im `demo`-Container `/trust/ca.crt` |
 | G | `keycloak-gateway` und `keycloak-admin` → Keycloak | `proxy_ssl_verify on` gegen `/trust/ca.crt`, `proxy_ssl_name keycloak` |
+| H | Pods `consumer`/`reader` → `https://service-r.wif.local:8443` | Serverzertifikat aus `pki-init` (Volume `service-r-tls`, `CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`, Schlüssel uid 10001); die Pods prüfen es mit `--cacert /etc/internal-ca/ca.crt` aus der ConfigMap `internal-ca`. R spricht nur HTTPS (TLS 1.3/1.2); mit dem öffentlichen CA-Bundle scheitert der Handshake (curl Exit-Code 60, Prüfung 14b) |
 
 `keycloak-gateway` und `keycloak-admin` zeigen den Clients dasselbe Keycloak-Zertifikat aus
 `keycloak-tls`. Für die Pods ist das Gateway deshalb unter `keycloak` nicht von Keycloak zu
 unterscheiden, und Issuer-URL und Hostname-Verification bleiben gleich.
 
 Anders als der Validator (eigene `SSLSocketFactory` nur für Nimbus) setzt `service-r` den
-Truststore prozessweit: Der Dienst baut außer zu Keycloak keine TLS-Verbindungen auf.
-Die Aufrufe Workload → `service-r` und Workload → Validator laufen im Lab über HTTP; in
-Produktion gehören sie hinter TLS oder mTLS (z. B. Service Mesh), optional mit
+Truststore prozessweit: Der Dienst baut ausgehend nur TLS-Verbindungen zu Keycloak auf. Sein
+eigenes Serverzertifikat (Beziehung H) ist davon unabhängig.
+Der Aufruf Workload → Validator läuft im Lab über HTTP; in
+Produktion gehört er hinter TLS oder mTLS (z. B. Service Mesh), optional mit
 sender-gebundenen Tokens (DPoP, mTLS).
 
 ---
