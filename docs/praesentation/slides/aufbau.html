@@ -1,40 +1,40 @@
 <section id="aufbau">
-<h2>Aufbau: Startreihenfolge mit docker compose up</h2>
+<h2>Anhang: Startreihenfolge mit docker compose up</h2>
 <div class="flow">
 <div class="card">
 <p class="num">1</p>
-<h3>server (k3s)</h3>
-<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li><li>davor: Lab-CA und Signaturschlüssel erzeugt</li></ul>
+<h3>pki-init, sa-keys</h3>
+<ul class="cl"><li>Lab-CA und Zertifikate aller Dienste</li><li>Signaturschlüssel des Clusters</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">2</p>
-<h3>bootstrap</h3>
-<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an</li><li>übergibt dem jwks-publisher sein Client-Zertifikat</li></ul>
+<h3>server (k3s)</h3>
+<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">3</p>
-<h3>issuer-web</h3>
-<ul class="cl"><li>jwks-publisher lädt Discovery + JWKS per mTLS hoch</li><li>nginx liefert sie öffentlich per HTTPS aus</li></ul>
+<h3>bootstrap</h3>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an</li><li>gibt dem Publisher sein Client-Zertifikat</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">4</p>
-<h3>validator</h3>
-<ul class="cl"><li>lädt Discovery + JWKS</li><li>startet nur, wenn der Issuer passt</li></ul>
+<h3>issuer-web</h3>
+<ul class="cl"><li>Publisher lädt Discovery + JWKS per mTLS hoch</li><li>nginx liefert sie per HTTPS aus</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">5</p>
-<h3>demo</h3>
-<ul class="cl"><li>auf Abruf gestartet</li><li>End-to-End-Test: Gut- und Fehlerfälle</li></ul>
+<h3>Dienste</h3>
+<ul class="cl"><li>keycloak + gateway</li><li>service-r (Dienst R)</li><li>validator (Variante)</li></ul>
 </div>
 </div>
 <ul class="pts">
-<li>Auf dem Host nur Docker + Compose v2 – alles andere läuft in Containern</li>
-<li>Reihenfolge über Compose-Abhängigkeiten: Der nächste Dienst startet erst, wenn der vorige bereit bzw. erfolgreich beendet ist</li>
-<li>Weil der Cluster schon mit externem Issuer startet, trägt jedes Token iss = https://issuer-web</li>
+<li>Auf dem Host nur Docker + Compose v2 – alles andere läuft in Containern, in drei getrennten Netzen</li>
+<li>Reihenfolge über Compose-Abhängigkeiten: Ein Dienst startet erst, wenn seine Vorgänger bereit bzw. erfolgreich beendet sind</li>
+<li>Keycloak startet erst, wenn issuer-web bereit ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
 </ul>
-<aside>Ein docker compose up baut das komplette Lab. Der bootstrap-Container läuft einmal durch und beendet sich. Danach hält der jwks-publisher im Cluster issuer-web aktuell, auch bei einer Schlüsselrotation.</aside>
+<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach hält der Publisher im Cluster issuer-web aktuell, auch bei einer Schlüsselrotation. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
 </section>

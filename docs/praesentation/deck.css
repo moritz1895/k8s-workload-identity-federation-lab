@@ -70,3 +70,8 @@ section.cover { justify-content: center; gap: 28px; }
 .term .cmd { font-family: 'JetBrains Mono', monospace; font-size: 26px; line-height: 1.3; color: #f2f2ef; }
 .term .cmt { font-family: 'JetBrains Mono', monospace; font-size: 24px; line-height: 1.3; color: #9fb0c2; }
 .term .gap { height: 12px; }
+
+/* Klickschritte */
+.fragment { opacity: 0; transition: opacity 300ms ease-out; }
+.fragment.visible { opacity: 1; }
+.tbl.small { font-size: 24px; }

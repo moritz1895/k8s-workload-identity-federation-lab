@@ -5,27 +5,28 @@
 <p class="cmt"># einmalig</p>
 <p class="cmd">cp .env.example .env</p>
 <div class="gap"></div>
-<p class="cmt"># PKI, k3s, Publisher, issuer-web, Validator starten</p>
+<p class="cmt"># Lab starten</p>
 <p class="cmd">docker compose up -d --build</p>
 <div class="gap"></div>
-<p class="cmt"># Ende-zu-Ende-Prüfung</p>
+<p class="cmt"># Token-Austausch und Zugriff auf Dienst R</p>
+<p class="cmd">docker compose run --rm demo authz</p>
+<div class="gap"></div>
+<p class="cmt"># Veröffentlichung und Upload-Schutz</p>
 <p class="cmd">docker compose run --rm demo</p>
 <div class="gap"></div>
-<p class="cmt"># alles wieder entfernen</p>
-<p class="cmd">docker compose down -v</p>
+<p class="cmt"># alles, inkl. Netztrennung und Rotation</p>
+<p class="cmd">tools/run-all-checks.sh</p>
 </div>
 <div class="col">
 <p class="colh">Was die Demo zeigt</p>
 <ol class="pts">
-<li>Discovery-Dokument von issuer-web</li>
-<li>JWKS über die jwks_uri</li>
-<li>Token ausstellen und Claims dekodieren</li>
-<li>Pod → Validator: 200</li>
-<li>Falsche Audience: 401</li>
-<li>Manipulierte Signatur: 401</li>
-<li>optional: echtes Ablaufen nach ~10 min: 401</li>
+<li>consumer tauscht sein ServiceAccount-Token gegen ein Access-Token</li>
+<li>consumer → Dienst R: 200</li>
+<li>Recht fehlt: 403; unbekannte Workload: abgelehnt</li>
+<li>Keycloak-Administration über das Gateway nicht erreichbar</li>
+<li>Upload ohne gültiges Publisher-Zertifikat: abgelehnt</li>
 </ol>
 </div>
 </div>
-<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2. Das Ablaufen (DEMO_EXPIRY=1) nur zeigen, wenn Zeit ist.</aside>
+<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2; aufräumen mit docker compose down -v. Dienst R ist vom Host nur per HTTPS erreichbar (Port 18081, Zertifikat der Lab-CA). Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. run-all-checks.sh dauert länger, weil es den API-Server für die Schlüsselrotation neu startet. Zum Nachvollziehen Schritt für Schritt gibt es die animierte Seite „WIF-Ablauf Schritt für Schritt“.</aside>
 </section>

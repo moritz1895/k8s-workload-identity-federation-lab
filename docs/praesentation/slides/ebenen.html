@@ -1,0 +1,27 @@
+<section id="ebenen">
+<h2>Zwei Ebenen: Wer bin ich? – Was darf ich?</h2>
+<!-- host 1664x200: W 0,40,400,130 ; K 632,40,400,130 ; R 1264,40,400,130 ; arrows y 105 -->
+<div class="host" style="height:170px">
+<div class="box" style="left:0px; top:20px; width:400px; height:130px"><p class="t">Workload (Pod)</p><p class="d">Identität vom Cluster</p></div>
+<div class="box accent" style="left:632px; top:20px; width:400px; height:130px"><p class="t">Keycloak-Realm</p><p class="d">des Fachbereichs</p></div>
+<div class="box ok" style="left:1264px; top:20px; width:400px; height:130px"><p class="t">Dienst R</p><p class="d">service-r, prüft Scopes</p></div>
+<x-connector class="ln" x1="400" y1="85" x2="632" y2="85"></x-connector>
+<x-connector class="ln" x1="1032" y1="85" x2="1264" y2="85"></x-connector>
+<p class="lbl" style="left:416px; top:15px; width:200px; text-align:center">Token vom Cluster: wer ich bin</p>
+<p class="lbl" style="left:1048px; top:15px; width:200px; text-align:center">Access-Token: was ich darf</p>
+</div>
+<table class="tbl small">
+<tr class="head"><th style="width:34%">Frage</th><th style="width:18%">Wer entscheidet</th><th style="width:48%">Wo liegt die Regel</th></tr>
+<tr><td>Wer ist die Workload?</td><td>Cluster</td><td>ServiceAccount-Token (iss + sub)</td></tr>
+<tr><td>Welcher Client im Realm ist das?</td><td>Fachbereich</td><td>Realm: Client ist an iss + sub der Workload gebunden</td></tr>
+<tr><td>Was darf die Workload?</td><td>Fachbereich</td><td>Realm: Client-Scope-Zuordnung</td></tr>
+<tr><td>Welcher Scope schützt welchen Endpunkt?</td><td>Team von R (im Fachbereich)</td><td>Code von R (SecurityFilterChain)</td></tr>
+</table>
+<ul class="pts">
+<li>Pod = laufende Anwendung im Cluster; ServiceAccount = ihre Identität im Cluster</li>
+<li>Realm = abgegrenzter Bereich in Keycloak, einer pro Fachbereich; Client = Eintrag für eine aufrufende Workload</li>
+<li>Scope = benanntes Recht wie r:orders:read; Dienst R macht daraus die Authority SCOPE_r:orders:read</li>
+<li>Im Token: iss = Aussteller · sub = wer · aud = für wen bestimmt · exp = Ablauf</li>
+</ul>
+<aside>Keycloak ist hier der Autorisierungsserver: Er stellt Access-Tokens mit Rechten aus. Das ServiceAccount-Token beweist nur die Identität und wird ausschließlich bei Keycloak vorgelegt. Was die Workload darf, entscheidet der Fachbereich, dem der Dienst gehört, über die Client-Scope-Zuordnung in seinem Realm. Dienst R kennt keine Workload-Namen: Eine neue Workload zu berechtigen ändert nur den Realm, einen neuen Endpunkt zu schützen nur den Code von R.</aside>
+</section>

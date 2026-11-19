@@ -1,0 +1,18 @@
+<section id="tokens">
+<h2>Zwei Tokens, zwei Aufgaben</h2>
+<table class="tbl">
+<tr class="head"><th style="width:16%">Merkmal</th><th style="width:42%">ServiceAccount-Token („Pass“)</th><th style="width:42%">Access-Token („Visum“)</th></tr>
+<tr><td>Ausgestellt von</td><td>Cluster (API-Server)</td><td>Keycloak, Realm domain-rst</td></tr>
+<tr><td>iss</td><td>https://issuer-web</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
+<tr><td>aud</td><td>Issuer-URL des Realms</td><td>service-r (Dienst R)</td></tr>
+<tr><td>Wer</td><td>sub = system:serviceaccount:wif-demo:consumer</td><td>azp = workload-a (Client für consumer)</td></tr>
+<tr><td>Rechte</td><td>keine</td><td>scope = r:orders:read r:orders:write</td></tr>
+<tr><td>Laufzeit</td><td>600 s, der Cluster erneuert es</td><td>300 s, die Workload cacht und erneuert es</td></tr>
+<tr><td>Geprüft von</td><td>Keycloak: Signatur, iss, aud, exp; iss + sub → Client</td><td>Dienst R: Signatur, iss, aud, exp; Scope → Authority</td></tr>
+</table>
+<ul class="pts">
+<li>Gestohlenes ServiceAccount-Token: höchstens 10 min lang Access-Tokens holen – nur mit den Rechten dieser Workload</li>
+<li>Dienst R akzeptiert nur Tokens, deren einzige Audienz R ist – ein Token für einen anderen Dienst nützt bei R nichts</li>
+</ul>
+<aside>Beide Tokens sind ganz normale JWTs, signiert mit RS256. Das ServiceAccount-Token geht nur an Keycloak; Dienst R lehnt es ab. workload-a ist nur der Name des Clients im Realm; verbunden mit der Workload ist er ausschließlich über iss und sub. ServiceAccount-Tokens haben keinen Replay-Schutz; das begrenzen die kurze Laufzeit und die Bindung an den Realm.</aside>
+</section>
