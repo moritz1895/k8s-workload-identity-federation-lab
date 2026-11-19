@@ -203,7 +203,7 @@ def animation_slide(original: str) -> str:
         f"<h2>{heading}</h2>\n"
         '<div class="anim-box"><iframe class="anim" src="animation.html?embed" title="Animierter Gesamtablauf, Schritt für Schritt"></iframe></div>\n'
         "<aside>Weiterklicken wie bei den übrigen Folien: Jeder Klick ist ein Schritt der Animation, "
-        "nach Schritt 21 geht es zur nächsten Folie. "
+        "nach dem letzten Schritt geht es zur nächsten Folie. "
         + (notes.group(1) if notes else "")
         + "</aside>\n</section>"
     )

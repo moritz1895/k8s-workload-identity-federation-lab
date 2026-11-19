@@ -9,8 +9,9 @@ Einsatz. Der Anhang enthält die Variante ohne Keycloak (Pod → Validator), Net
 Startreihenfolge und die Prüfungen.
 
 Dazu kommt `animation/index.html`: eine eigenständige Seite (p5.js), die den Ende-zu-Ende-Ablauf
-in 21 Schritten animiert – von der PKI über Publisher, ServiceAccount-Token und Keycloak bis zum
-Aufruf von Dienst R und zur Schlüsselrotation.
+in 16 Schritten animiert, jeder Schritt per Klick – vom Überblick über PKI, Publisher, „Pass“
+(ServiceAccount-Token) und „Visum“ (Access-Token) bis zum Aufruf von Dienst R und zum
+Schlüsselwechsel.
 
 Die Inhalte sind als Vorlage gedacht: Grafiken und Stichpunkte werden in das Corporate Design
 einer PowerPoint-Vorlage übernommen. Die Gestaltung hier ist bewusst neutral.
@@ -23,7 +24,7 @@ einer PowerPoint-Vorlage übernommen. Die Gestaltung hier ist bewusst neutral.
 | `deck.css` | gemeinsame Styles aller Folien |
 | `slides/<id>.html` | eine Folie je Datei: ein `<section>`-Element, Sprechernotizen im `<aside>` |
 | `animation/index.html` | animierter Ablauf, im Browser direkt öffnen (lädt p5.js und Schriften aus dem Netz) |
-| `animation/standbild-schritt12.png` | Standbild der Animation, auf der Folie `gesamtablauf` als Vorschau mit Link |
+| `animation/standbild-schritt09.png` | Standbild der Animation, auf der Folie `gesamtablauf` als Vorschau mit Link |
 
 Die Folien sind HTML für das Slides-Format von Claude. Elemente wie `<x-connector>` (Pfeile in
 den Diagrammen) sind dort definiert und werden von einem normalen Browser nicht gezeichnet.
@@ -52,7 +53,7 @@ Anhang: `anhang` → `ablauf` → `fehlerfaelle` → `netze` → `aufbau` → `f
 | N | Sprechernotizen ein/aus |
 
 Die Folie `gesamtablauf` enthält dort die Animation selbst: Jeder Klick ist ein Schritt, nach
-Schritt 21 geht es zur nächsten Folie.
+dem letzten Schritt geht es zur nächsten Folie.
 
 `offline/` wird erzeugt, nicht von Hand bearbeitet:
 

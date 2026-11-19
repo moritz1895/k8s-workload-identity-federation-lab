@@ -46,7 +46,7 @@ h1 { font-size: 22px; font-weight: 700; margin: 0; text-wrap: balance; }
 header p { margin: 0; color: var(--muted); font-size: 14px; }
 .stage { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; padding: 12px 24px 24px; align-items: start; }
 @media (max-width: 960px) { .stage { grid-template-columns: 1fr; } }
-#canvas-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; line-height: 0; }
+#canvas-wrap { cursor: pointer; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; line-height: 0; }
 #canvas-wrap canvas { display: block; width: 100% !important; height: auto !important; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -57,7 +57,7 @@ header p { margin: 0; color: var(--muted); font-size: 14px; }
 .count { font-variant-numeric: tabular-nums; }
 .panel h2 { font-size: 20px; line-height: 1.3; margin: 0; text-wrap: balance; }
 .panel .text { margin: 0; }
-.inspect { margin: 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inspect { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre; overflow-x: auto; }
 .inspect:empty { display: none; }
 .inspect-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
 .inspect-label:empty { display: none; }
@@ -67,9 +67,7 @@ button:hover { border-color: var(--accent); }
 button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
 button:disabled { opacity: 0.45; cursor: default; }
-.speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-.speed select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
-.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 10px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); padding-top: 10px; }
 .steps .ph { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 0 2px; }
 .steps .ph:first-child { margin-top: 0; }
 .steps button { width: 100%; text-align: left; border: none; padding: 4px 8px; font-size: 13.5px; font-weight: 400; border-radius: 5px; display: flex; gap: 8px; }
@@ -79,7 +77,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .hint { font-size: 12.5px; color: var(--muted); margin: 0; }
 /* Einbettung in eine Präsentation (?embed): nur Bühne und Erklärung, Steuerung über postMessage */
 body.embed { background: transparent; }
-body.embed header, body.embed .controls, body.embed .speed, body.embed .hint, body.embed .steps { display: none; }
+body.embed header, body.embed .controls, body.embed .hint, body.embed .steps { display: none; }
 body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; }
 body.embed .panel { max-height: 100vh; overflow-y: auto; }
 </style>
@@ -87,17 +85,18 @@ body.embed .panel { max-height: 100vh; overflow-y: auto; }
 <body>
 <header>
   <h1>Workload Identity Federation: Ablauf Schritt für Schritt</h1>
-  <p>PoC k8s-workload-identity-federation-lab · von der PKI bis zum Aufruf von Dienst R</p>
+  <p>PoC k8s-workload-identity-federation-lab · vom „Pass“ zum „Visum“ bis zum Aufruf von Dienst R · jeder Schritt per Klick</p>
 </header>
 <div class="stage">
   <div>
     <div id="canvas-wrap" role="img" aria-label="Animierte Darstellung des aktuellen Schritts: Komponenten des Labs und die Nachrichten zwischen ihnen."></div>
     <div class="legend" aria-hidden="true">
-      <span><i style="background:var(--trust)"></i>Zertifikate und Vertrauensanker</span>
-      <span><i style="background:var(--accent)"></i>Schlüssel und Metadaten</span>
-      <span><i style="background:var(--token)"></i>Tokens und Anfragen</span>
+      <span><i style="background:var(--trust)"></i>Zertifikate der PKI</span>
+      <span><i style="background:var(--accent)"></i>Schlüssel zum Prüfen</span>
+      <span><i style="background:var(--token)"></i>„Pass“, „Visum“ und Anfragen</span>
       <span><i style="background:var(--ok)"></i>erfolgreich</span>
       <span><i style="background:var(--bad)"></i>abgelehnt</span>
+      <span><i style="background:transparent; border:1.5px dashed var(--line)"></i>mögliche Verbindung</span>
     </div>
   </div>
   <aside class="panel" aria-live="polite">
@@ -108,18 +107,10 @@ body.embed .panel { max-height: 100vh; overflow-y: auto; }
     <pre class="inspect" id="inspect"></pre>
     <div class="controls">
       <button id="btn-prev" type="button">◀ Zurück</button>
-      <button id="btn-play" type="button" class="primary">▶ Abspielen</button>
-      <button id="btn-next" type="button">Weiter ▶</button>
+      <button id="btn-next" type="button" class="primary">Weiter ▶</button>
       <button id="btn-replay" type="button">Schritt wiederholen</button>
     </div>
-    <label class="speed" for="speed">Tempo
-      <select id="speed">
-        <option value="0.6">langsam</option>
-        <option value="1" selected>normal</option>
-        <option value="1.6">schnell</option>
-      </select>
-    </label>
-    <p class="hint">Tastatur: ← und → wechseln den Schritt, Leertaste startet oder pausiert.</p>
+    <p class="hint">Weiter mit Klick auf das Bild, → oder Leertaste; zurück mit ←.</p>
     <ol class="steps" id="steps"></ol>
   </aside>
 </div>
@@ -131,128 +122,106 @@ const W = 1280, H = 720;
 
 // Knoten im Entwurfsraster 1280 x 720
 const N = {
-  pki: { x: 40,  y: 20,  w: 250, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
-  api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt Tokens aus" },
-  pub: { x: 280, y: 284, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
-  pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "Workload A" },
-  iss: { x: 540, y: 146, w: 210, h: 96, t: "issuer-web", s: "nginx · :8443 / :443" },
+  pki: { x: 300, y: 20,  w: 230, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
+  api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt „Pässe“ aus" },
+  pub: { x: 290, y: 330, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
+  pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "ServiceAccount consumer" },
+  iss: { x: 540, y: 146, w: 210, h: 110, t: "issuer-web", s: "Upload 8443 · Lesen 443" },
   gw:  { x: 600, y: 396, w: 200, h: 86, t: "keycloak-gateway", s: "nur Realm-Pfade" },
-  kc:  { x: 900, y: 156, w: 230, h: 92, t: "Keycloak", s: "Realm domain-rst" },
-  r:   { x: 1000, y: 452, w: 220, h: 92, t: "Dienst R", s: "service-r" },
-  val: { x: 870, y: 600, w: 220, h: 86, t: "Validator", s: "direkte Föderation" }
+  kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", s: "Realm des Fachbereichs" },
+  r:   { x: 960, y: 500, w: 220, h: 92, t: "Dienst R", s: "service-r" }
 };
 const ZONES = [
-  { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster · cluster-net", tone: "zone-a" },
-  { x: 846, y: 118, w: 410, h: 586, label: "Prüfende Dienste · relying-net", tone: "zone-b" }
+  { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster", tone: "zone-a" },
+  { x: 846, y: 118, w: 410, h: 586, label: "Fachbereich", tone: "zone-b" }
 ];
 
-const PH = ["Vorbereitung", "Identität", "Autorisierung", "Aufruf von Dienst R", "Gegenproben und Betrieb"];
+const PH = ["Überblick", "Vorbereitung", "Identität: der „Pass“", "Rechte: das „Visum“", "Aufruf von Dienst R", "Gegenproben und Betrieb"];
 
 // Schritt-Bausteine
-const mv = (a, b, label, tone, net) => ({ k: "move", a, b, label, tone, net });
+const mv = (a, b, label, tone, net, flip) => ({ k: "move", a, b, label, tone, net, flip });
 const par = (...moves) => ({ k: "par", moves });
 const chk = (at, items, side) => ({ k: "check", at, items, side: side || "right" });
-const blk = (a, b) => ({ k: "block", a, b });
+const blkTo = (a, x, y, lbl) => ({ k: "block", a, x, y, lbl });
 
 const STEPS = [
-  { ph: 0, title: "Die interne PKI stellt Zertifikate aus",
-    text: "Im Lab spielt pki-init die interne PKI. Es erzeugt Serverzertifikate für issuer-web, Keycloak (auch für das Gateway), Dienst R und den Validator – und genau ein Client-Zertifikat: CN=jwks-publisher. Den CA-Schlüssel sieht nur pki-init.",
-    il: "Zertifikat des Publishers", inspect: "Subject: CN=jwks-publisher, O=WIF Lab\nAussteller: Lab-CA (interne PKI)\nZweck: TLS-Client-Authentisierung\nÜbergabe: bootstrap legt es als Secret im Cluster ab",
-    segs: [par(mv("pki", "iss", "Server-Zert.", "trust"), mv("pki", "kc", "Server-Zert.", "trust"), mv("pki", "r", "Server-Zert.", "trust"), mv("pki", "val", "Server-Zert.", "trust"), mv("pki", "pub", "Client-Zert.", "trust"))],
-    fx: s => { ["iss", "kc", "gw", "r", "val"].forEach(n => s.cert.add(n)); s.clientCert = true; } },
-  { ph: 0, title: "Das Root-Zertifikat wird an alle Prüfer verteilt",
-    text: "Wer ein Zertifikat prüfen muss, bekommt das Root-Zertifikat der internen CA – auf einem anderen Weg als die Daten (im Lab: schreibgeschütztes Volume, für Pods die ConfigMap internal-ca). Dienst R und der Validator vertrauen nur dieser CA, Keycloak ergänzt seinen Truststore um sie.",
+  { ph: 0, title: "Überblick: „Pass“, „Visum“, Aufruf",
+    text: "Der Pod bekommt vom Cluster einen „Pass“, tauscht ihn bei Keycloak seines Fachbereichs gegen ein „Visum“ und ruft damit Dienst R auf. Im Pod liegt dafür weder ein Passwort noch ein Client-Zertifikat. Die folgenden Schritte zeigen, was im Hintergrund nötig ist, damit das sicher funktioniert.",
     il: "", inspect: "",
-    segs: [par(mv("pki", "pub", "Root-CA", "trust"), mv("pki", "pod", "Root-CA", "trust"), mv("pki", "kc", "Root-CA", "trust"), mv("pki", "r", "Root-CA", "trust"), mv("pki", "val", "Root-CA", "trust"))],
-    fx: s => { ["pub", "pod", "kc", "r", "val"].forEach(n => s.ca.add(n)); } },
-  { ph: 0, title: "Der Cluster startet mit eigenem Signaturschlüssel",
-    text: "sa-keys erzeugt das Schlüsselpaar für ServiceAccount-Tokens. Der API-Server signiert damit alle Tokens und trägt als Aussteller eine Adresse außerhalb des Clusters ein.",
-    il: "Startparameter des API-Servers", inspect: "--service-account-issuer=https://issuer-web\n--service-account-jwks-uri=https://issuer-web/openid/v1/jwks\n--service-account-signing-key-file=…  (privat)\n--service-account-key-file=…          (öffentlich)",
-    segs: [chk("api", ["privater Schlüssel geladen", "iss = https://issuer-web", "jwks_uri zeigt auf issuer-web"])],
+    segs: [par(mv("api", "pod", "„Pass“", "token"), mv("pod", "gw", "„Pass“ zeigen", "token"), mv("gw", "kc", "", "token"), mv("kc", "gw", "", "token"), mv("gw", "pod", "„Visum“", "token"), mv("pod", "r", "„Visum“ zeigen", "token"))],
+    fx: null },
+
+  { ph: 1, title: "Die interne PKI sichert die Verbindungen",
+    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für issuer-web, das Gateway, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Das einzige Client-Zertifikat erhält der Publisher – eine Infrastruktur-Komponente, nicht jede Workload. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "issuer-web  Server-Zert. + Root-CA\nGateway     Server-Zert. + Root-CA\nKeycloak    Server-Zert. + Root-CA\nDienst R    Server-Zert. + Root-CA\nPublisher   Client-Zert. + Root-CA\nPod         nur Root-CA\n(Pfeile im Bild vereinfacht)",
+    segs: [par(mv("pki", "iss", "", "trust"), mv("pki", "gw", "", "trust"), mv("pki", "kc", "", "trust"), mv("pki", "pub", "Client-Zert.", "trust", undefined, true))],
+    fx: s => { ["iss", "kc", "gw", "r"].forEach(n => s.cert.add(n)); ["iss", "pub", "pod", "gw", "kc", "r"].forEach(n => s.ca.add(n)); s.clientCert = true; } },
+  { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
+    text: "Der API-Server bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine Adresse außerhalb des Clusters ein: issuer-web. Dort sollen Prüfer die öffentlichen Schlüssel finden.",
+    il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer-web\nservice-account-jwks-uri\n  = https://issuer-web/openid/v1/jwks",
+    segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer-web"], "right")],
     fx: s => { s.apiKey = 1; } },
-  { ph: 0, title: "Der Publisher liest Discovery-Dokument und JWKS",
-    text: "Der Pod jwks-publisher fragt mit seinem eigenen ServiceAccount den API-Server. Er hat nur die eingebaute Rolle system:service-account-issuer-discovery: GET auf genau zwei Pfade. Es verlassen nur öffentliche Schlüssel den API-Server.",
-    il: "JWKS (gekürzt)", inspect: "{\n  \"keys\": [{\n    \"kty\": \"RSA\", \"alg\": \"RS256\", \"use\": \"sig\",\n    \"kid\": \"<Key-ID>\", \"n\": \"…\", \"e\": \"AQAB\"\n  }]\n}",
-    segs: [mv("pub", "api", "GET JWKS", "token"), mv("api", "pub", "JWKS", "key")],
-    fx: s => { s.pubHas = true; } },
-  { ph: 0, title: "Upload per mTLS zu issuer-web",
-    text: "Der Publisher lädt beide Dokumente per PUT auf Port 8443 hoch. Dieser Port lauscht nur im Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau diesem DN – sonst 400 bzw. 403. Danach vergleicht der Publisher alle 15 s, ob issuer-web noch den Stand des Clusters ausliefert.",
-    il: "Anfrage", inspect: "PUT https://issuer-web:8443/openid/v1/jwks\nPUT https://issuer-web:8443/.well-known/openid-configuration\nClient-Zertifikat: CN=jwks-publisher, O=WIF Lab",
-    segs: [mv("pub", "iss", "PUT JWKS", "key", "cluster-net · mTLS"), chk("iss", ["Zertifikat von der internen CA", "DN exakt CN=jwks-publisher", "Upload protokolliert"], "below")],
+  { ph: 1, title: "Der Publisher bringt die Schlüssel nach außen",
+    text: "Keycloak darf den Cluster nicht erreichen. Deshalb liest ein Pod im Cluster, der Publisher, die öffentlichen Schlüssel beim API-Server und lädt sie zu issuer-web hoch. Schreiben darf dort nur, wer das Client-Zertifikat des Publishers vorweist. Der private Schlüssel verlässt den Cluster nie.",
+    il: "Details", inspect: "Hochgeladen werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen\nissuer-web:\n  Port 8443: Upload, nur Client-Zert.\n  Port 443:  Lesen für alle Prüfer\nAbgleich alle 15 s",
+    segs: [mv("api", "pub", "Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), chk("iss", ["Zertifikat von der internen CA", "DN exakt CN=jwks-publisher"], "above")],
     fx: s => { s.issJwks = 1; } },
-  { ph: 0, title: "Der Validator lädt die öffentlichen Schlüssel",
-    text: "Beim Start holt der Validator über Port 443 das Discovery-Dokument, daraus die jwks_uri, dann das JWKS. Die Verbindung zählt nur, wenn issuer-web ein Zertifikat der internen CA vorweist. Passt der Issuer im Discovery-Dokument nicht, startet der Validator nicht.",
-    il: "", inspect: "",
-    segs: [mv("val", "iss", "GET Discovery", "token", "relying-net · TLS"), mv("iss", "val", "Discovery + JWKS", "key", "relying-net · TLS")],
-    fx: s => { s.jwks.add("val"); } },
 
-  { ph: 1, title: "Das kubelet holt Tokens für den Pod",
-    text: "Für den Pod fordert das kubelet zwei Tokens an, eines pro Empfänger: sa-token für den Validator und kc-token für Keycloak. Beide gelten 600 s und werden vor Ablauf automatisch erneuert. Der Pod besitzt kein Secret.",
-    il: "Claims des kc-token", inspect: "{\n  \"iss\": \"https://issuer-web\",\n  \"aud\": [\"https://keycloak:8443/realms/domain-rst\"],\n  \"sub\": \"system:serviceaccount:wif-demo:consumer\",\n  \"exp\": iat + 600,\n  \"kubernetes.io\": { \"namespace\": \"wif-demo\", … }\n}\nDatei: /var/run/secrets/tokens/kc-token",
-    segs: [mv("api", "pod", "sa-token", "token"), mv("api", "pod", "kc-token", "token")],
-    fx: s => { s.files.push("sa-token", "kc-token"); } },
+  { ph: 2, title: "Der Pod bekommt seinen „Pass“",
+    text: "Kubernetes legt dem Pod ein ServiceAccount-Token als Datei ab: den „Pass“. Er nennt, wer die Workload ist, gilt nur für Keycloak und nur 600 Sekunden. Vor Ablauf wird er automatisch erneuert. Der Pod muss dafür nichts besitzen und nichts tun.",
+    il: "Inhalt des „Passes“", inspect: "iss (Aussteller): https://issuer-web\nsub (wer):\n  system:serviceaccount:\n    wif-demo:consumer\naud (für wen): Keycloak-Realm\nexp (Ablauf): Ausstellung + 600 s",
+    segs: [mv("api", "pod", "„Pass“", "token")],
+    fx: s => { s.files.push("„Pass“"); } },
 
-  { ph: 2, title: "Token-Anfrage an Keycloak",
-    text: "Der Pod ruft den Token-Endpunkt seines Fachbereichs auf: client_credentials, ohne Client-Secret, mit dem kc-token als Client-Assertion. Der Name keycloak zeigt im Pod auf das Gateway; die Verbindung ist TLS mit Zertifikat der internen CA.",
-    il: "Anfrage", inspect: "POST https://keycloak:8443/realms/domain-rst/\n     protocol/openid-connect/token\ngrant_type=client_credentials\nclient_assertion_type=…:jwt-bearer\nclient_assertion=<kc-token>\nscope=r:orders:read r:orders:write",
-    segs: [mv("pod", "gw", "POST /token", "token", "workload-net · TLS")], fx: null },
-  { ph: 2, title: "Das Gateway lässt nur den Realm durch",
-    text: "keycloak-gateway leitet nur GET und POST unter /realms/domain-rst/ an Keycloak weiter. Admin-API und Master-Realm sind aus den Pods nicht erreichbar (404). Keycloak selbst hängt nur im Netz der prüfenden Dienste.",
-    il: "", inspect: "",
-    segs: [chk("gw", ["Pfad /realms/domain-rst/…", "Methode POST"], "below"), mv("gw", "kc", "POST /token", "token", "relying-net · TLS")], fx: null },
-  { ph: 2, title: "Keycloak holt die Schlüssel des Clusters",
-    text: "Keycloak liest iss = https://issuer-web und findet den Identity-Provider lab-cluster. Dessen Schlüssel lädt es über Discovery und JWKS von issuer-web – über TLS mit der internen CA – und hält sie im Cache.",
-    il: "", inspect: "",
-    segs: [mv("kc", "iss", "GET Discovery", "token", "relying-net · TLS"), mv("iss", "kc", "Discovery + JWKS", "key", "relying-net · TLS")],
+  { ph: 3, title: "Der Pod fragt bei Keycloak nach Rechten",
+    text: "Der Pod ruft Keycloak seines Fachbereichs auf. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Der Name keycloak zeigt im Pod auf ein Gateway: Es lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
+    il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
+    segs: [mv("pod", "gw", "POST /token · TLS", "token"), chk("gw", ["nur Realm des Fachbereichs"], "below"), mv("gw", "kc", "POST /token · TLS", "token")], fx: null },
+  { ph: 3, title: "Keycloak holt die Schlüssel des Clusters",
+    text: "Im „Pass“ steht als Aussteller https://issuer-web. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die öffentlichen Schlüssel bei issuer-web und merkt sie sich. Beim Cluster fragt Keycloak nie nach.",
+    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer-web\n  Schlüssel:\n    https://issuer-web/openid/v1/jwks",
+    segs: [mv("kc", "iss", "GET Schlüssel · TLS", "token"), mv("iss", "kc", "Cluster-JWKS · TLS", "key")],
     fx: s => { s.jwks.add("kc"); } },
-  { ph: 2, title: "Keycloak prüft die Identität",
-    text: "Geprüft werden Signatur (Schlüssel zur kid), Audienz und Laufzeit des kc-token. Dann sucht Keycloak den Client, der an lab-cluster gebunden ist und genau diesen sub trägt. Gibt es keinen, antwortet Keycloak mit 401 invalid_client.",
-    il: "Client im Realm", inspect: "clientId: workload-a\nclientAuthenticatorType: federated-jwt\njwt.credential.issuer: lab-cluster\njwt.credential.sub:\n  system:serviceaccount:wif-demo:consumer\noptionale Scopes: r:orders:read, r:orders:write,\n                  s:inventory:read",
-    segs: [chk("kc", ["Signatur (kid im JWKS)", "aud = Realm-Issuer", "exp / nbf", "sub → Client workload-a"], "below")], fx: null },
-  { ph: 2, title: "Keycloak stellt das Access-Token aus",
-    text: "Ins Token kommen nur Scopes, die dem Client im Realm zugeordnet sind; fordert er mehr, lehnt Keycloak mit invalid_scope ab. Die Audienz kommt aus dem Scope: service-r. Das Token gilt 300 s und ist mit dem Schlüssel des Realms signiert.",
-    il: "Claims des Access-Tokens", inspect: "{\n  \"iss\": \"https://keycloak:8443/realms/domain-rst\",\n  \"aud\": \"service-r\",\n  \"typ\": \"Bearer\",\n  \"azp\": \"workload-a\",\n  \"scope\": \"r:orders:read r:orders:write\",\n  \"sub\": \"<UUID des Service-Account-Benutzers>\",\n  \"exp\": iat + 300\n}",
-    segs: [mv("kc", "gw", "Access-Token", "token", "relying-net · TLS"), mv("gw", "pod", "Access-Token", "token", "workload-net · TLS")],
-    fx: s => { s.files.push("Access-Token"); } },
-  { ph: 2, title: "Die Workload cacht das Access-Token",
-    text: "Die Workload fragt nicht bei jedem Aufruf neu an. Sie hält das Token im Speicher und erneuert es, sobald die Restlaufzeit unter 60 s fällt; dafür liest sie das kc-token jedes Mal neu. Im Lab macht das access-token.sh, in Spring ein OAuth2AuthorizedClientManager.",
-    il: "", inspect: "",
-    segs: [chk("pod", ["im Speicher bis exp − 60 s", "dann neues Token anfordern"], "right")], fx: null },
+  { ph: 3, title: "Keycloak prüft den „Pass“",
+    text: "Keycloak prüft die Signatur mit dem passenden Schlüssel, ob der Pass für Keycloak ausgestellt wurde und ob er noch gilt. Dann sucht es den Eintrag (Client), der zu genau diesem Aussteller und diesem „wer“ gehört. Vergleich zu heute: Statt Merkmalen im Subject-DN ordnet Keycloak über Aussteller + sub zu. Gibt es keinen Eintrag, ist hier Schluss.",
+    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer-web)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
+    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "Client workload-a gefunden"], "below")], fx: null },
+  { ph: 3, title: "Keycloak stellt das „Visum“ aus",
+    text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
+    il: "Inhalt des „Visums“", inspect: "iss (Aussteller): Keycloak-Realm\naud (für wen): service-r = Dienst R\nazp (Client): workload-a\nscope (Rechte):\n  r:orders:read r:orders:write\nexp (Ablauf): Ausstellung + 300 s",
+    segs: [mv("kc", "gw", "„Visum“ · TLS", "token"), mv("gw", "pod", "„Visum“ · TLS", "token")],
+    fx: s => { s.files.push("„Visum“"); } },
 
-  { ph: 3, title: "Aufruf von Dienst R",
-    text: "GET /orders mit dem Access-Token als Bearer, über TLS mit Zertifikat der internen CA. Das ServiceAccount-Token geht nie an R – R würde es mit 401 ablehnen.",
-    il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <Access-Token>",
-    segs: [mv("pod", "r", "GET /orders", "token", "workload-net · TLS")], fx: null },
-  { ph: 3, title: "R lädt die Schlüssel des Realms",
-    text: "Beim ersten Token macht Dienst R die Discovery bei Keycloak und cacht das JWKS des Realms. Darum startet R unabhängig davon, ob Keycloak schon läuft.",
+  { ph: 4, title: "Aufruf von Dienst R",
+    text: "Der Pod ruft Dienst R auf und legt das „Visum“ vor – über normales TLS, ohne Client-Zertifikat: Die Identität steckt im Visum. Den „Pass“ bekommt Dienst R nie zu sehen; er würde ihn ablehnen, weil Aussteller und Empfänger nicht passen.",
+    il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <„Visum“>",
+    segs: [mv("pod", "r", "GET /orders · TLS", "token")], fx: null },
+  { ph: 4, title: "Dienst R holt die Schlüssel des Realms",
+    text: "Beim ersten „Visum“ lädt Dienst R die öffentlichen Schlüssel des Realms bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne Gateway. issuer-web braucht Dienst R nicht.",
     il: "", inspect: "",
-    segs: [mv("r", "kc", "GET Discovery", "token", "relying-net · TLS"), mv("kc", "r", "Realm-JWKS", "key", "relying-net · TLS")],
+    segs: [mv("r", "kc", "GET Schlüssel · TLS", "token"), mv("kc", "r", "Realm-JWKS · TLS", "key")],
     fx: s => { s.jwks.add("r"); } },
-  { ph: 3, title: "R prüft das Token und bildet Authorities",
-    text: "Dienst R (service-r) ist ein Standard-Spring-Resource-Server ohne eigene Prüfkette. Jeder Scope im Token wird zur Authority SCOPE_<scope>. R kennt keine Workload-Namen.",
-    il: "Ergebnis", inspect: "Principal:   workload-a (aus azp)\nAuthorities: SCOPE_r:orders:read\n             SCOPE_r:orders:write",
-    segs: [chk("r", ["Signatur, nur RS256", "iss = Realm-Issuer", "aud genau [service-r]", "typ = Bearer, azp vorhanden", "exp"], "left")], fx: null },
-  { ph: 3, title: "Die Endpunkt-Regel greift: 200",
-    text: "GET /orders verlangt SCOPE_r:orders:read. Die Authority ist vorhanden, also antwortet R mit 200. Neue Workloads zu berechtigen ändert nur den Realm, neue Endpunkte zu schützen nur den Code von R.",
-    il: "Regeln in R", inspect: "GET    /orders       → SCOPE_r:orders:read\nPOST   /orders       → SCOPE_r:orders:write\nDELETE /orders/{id}  → SCOPE_r:orders:admin\nalles andere         → abgelehnt",
-    segs: [mv("r", "pod", "200", "ok", "workload-net · TLS")], fx: null },
+  { ph: 4, title: "Dienst R prüft das „Visum“",
+    text: "Dienst R ist ein Standard-Spring-Resource-Server. Er prüft Signatur, Aussteller, Empfänger und Ablauf und macht aus jedem Scope eine Authority. Den Namen der Workload (azp) sieht er, entscheidet aber nur nach Scopes.",
+    il: "In Spring Security", inspect: "http.oauth2ResourceServer(\n    o -> o.jwt(…))\n\nPrincipal: workload-a (aus azp)\nAuthorities:\n  SCOPE_r:orders:read\n  SCOPE_r:orders:write",
+    segs: [chk("r", ["Signatur passt", "Aussteller = Realm", "nur für Dienst R", "noch gültig"], "left")], fx: null },
+  { ph: 4, title: "Die Regel im Dienst greift: 200",
+    text: "GET /orders verlangt SCOPE_r:orders:read – vorhanden, also 200. Vergleich zu heute: Statt „DN → Rolle“ im Dienst gilt „Scope → Authority“. Welche Workload welche Rechte bekommt, steht im Realm; welcher Scope welchen Endpunkt schützt, steht im Code von Dienst R.",
+    il: "Regeln in Dienst R", inspect: "GET /orders\n  → SCOPE_r:orders:read\nPOST /orders\n  → SCOPE_r:orders:write\nDELETE /orders/{id}\n  → SCOPE_r:orders:admin",
+    segs: [mv("r", "pod", "200 · TLS", "ok")], fx: null },
 
-  { ph: 4, title: "Fehlender Scope: 403",
-    text: "DELETE /orders/{id} verlangt SCOPE_r:orders:admin. Dieser Scope ist keinem Client zugeordnet, also antwortet R mit 403 insufficient_scope – das Token selbst ist gültig.",
+  { ph: 5, title: "Gegenprobe: fehlendes Recht gibt 403",
+    text: "Löschen verlangt SCOPE_r:orders:admin. Dieses Recht hat der Fachbereich der Workload nicht gegeben, also antwortet Dienst R mit 403. Das „Visum“ ist gültig, es reicht nur nicht für diese Aktion.",
     il: "", inspect: "",
-    segs: [mv("pod", "r", "DELETE /orders/7", "token", "workload-net · TLS"), mv("r", "pod", "403", "bad", "workload-net · TLS")], fx: null },
-  { ph: 4, title: "Variante: Pod → Validator, ohne Autorisierungsserver",
-    text: "Der zweite Weg im Lab: Der Pod legt sein sa-token direkt beim Validator vor. Der Validator beantwortet nur „wer bist du?“, Rechte gibt es dort nicht. Der Validator prüft offline gegen das gecachte JWKS – ohne Keycloak und ohne Rückfrage beim Cluster.",
-    il: "Antwort", inspect: "HTTP 200\n{ \"sub\": \"system:serviceaccount:wif-demo:consumer\",\n  \"aud\": [\"wif-demo-validator\"], … }",
-    segs: [mv("pod", "val", "GET /whoami", "token", "workload-net · TLS"), chk("val", ["Signatur gegen JWKS", "iss = https://issuer-web", "aud = wif-demo-validator", "exp, 60 s Toleranz"], "left"), mv("val", "pod", "200 + Claims", "ok", "workload-net · TLS")], fx: null },
-  { ph: 4, title: "Kein Weg zum API-Server",
-    text: "Keycloak, Dienst R und Validator haben keinen Netzweg zum API-Server und kein Cluster-Credential. run-all-checks.sh prüft das aus Sicht jedes dieser Dienste.",
+    segs: [mv("pod", "r", "DELETE /orders/7", "token"), mv("r", "pod", "403", "bad")], fx: null },
+  { ph: 5, title: "Gegenprobe: kein Weg in den Cluster",
+    text: "Keycloak holt die Cluster-Schlüssel bei issuer-web, Dienst R braucht nur Keycloak. Keiner von beiden hat einen Netzweg in den Cluster oder Zugangsdaten dafür – und keiner braucht sie.",
     il: "", inspect: "",
-    segs: [par(blk("val", "api"), blk("kc", "api"), blk("r", "api"))], fx: null },
-  { ph: 4, title: "Schlüsselrotation",
-    text: "sa-keys erzeugt einen neuen Signaturschlüssel, den der API-Server beim Neustart liest. Der Publisher bemerkt die Änderung beim nächsten Vergleich und lädt das neue JWKS hoch. Der alte Schlüssel bleibt als Prüfschlüssel drin: Tokens von vor der Rotation gelten weiter, neue werden mit dem neuen Schlüssel signiert.",
-    il: "JWKS nach der Rotation", inspect: "{ \"keys\": [\n  { \"kid\": \"<neu>\", … },   ← signiert neue Tokens\n  { \"kid\": \"<alt>\", … }    ← nur noch zum Prüfen\n] }",
-    segs: [chk("api", ["neuer Schlüssel signiert", "alter bleibt zum Prüfen"], "right"), mv("api", "pub", "JWKS (2 Schlüssel)", "key"), mv("pub", "iss", "PUT JWKS", "key", "cluster-net · mTLS")],
+    segs: [par(blkTo("kc", 478, 300, "left"), blkTo("r", 478, 520, "right"))], fx: null },
+  { ph: 5, title: "Betrieb: Schlüsselwechsel im Cluster",
+    text: "Der Cluster bekommt einen neuen Signaturschlüssel. Der Publisher bemerkt die Änderung und lädt die neuen Schlüssel hoch; der alte bleibt zum Prüfen drin. Taucht ein „Pass“ mit unbekannter Key-ID auf, lädt Keycloak die Schlüssel bei issuer-web neu. Der alte Schlüssel kann weg, wenn alle alten Pässe abgelaufen und die Caches erneuert sind – frühestens nach 600 s plus der Zeit, die Prüfer Schlüssel zwischenspeichern.",
+    il: "Schlüssel nach dem Wechsel", inspect: "<neu>  signiert neue „Pässe“\n<alt>  nur noch zum Prüfen",
+    segs: [mv("api", "pub", "neue Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), mv("kc", "iss", "GET (neue Key-ID)", "token"), mv("iss", "kc", "Cluster-JWKS", "key")],
     fx: s => { s.apiKey = 2; s.issJwks = 2; } }
 ];
 
@@ -261,7 +230,7 @@ function freshState() {
 }
 function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
 
-const DUR = { move: 1500, item: 520, block: 1500, gap: 260 };
+const DUR = { move: 1900, item: 650, block: 1600, gap: 350 };
 function segDur(seg) {
   if (seg.k === "move") return DUR.move;
   if (seg.k === "check") return seg.items.length * DUR.item + 300;
@@ -273,8 +242,7 @@ function stepDur(i) { return STEPS[i].segs.reduce((a, s) => a + segDur(s) + DUR.
 
 // ---------- Zustand der Seite ----------
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-let cur = 0, t0 = 0, playing = false, speed = 1, pausedAt = null, doneSince = null;
-const DWELL = 3200;
+let cur = 0, t0 = 0;
 
 const el = id => document.getElementById(id);
 function buildList() {
@@ -301,36 +269,28 @@ function renderPanel() {
   el("inspect").textContent = st.inspect || "";
   el("btn-prev").disabled = cur === 0;
   el("btn-next").disabled = cur === STEPS.length - 1;
-  el("btn-play").textContent = playing ? "❚❚ Pause" : "▶ Abspielen";
   document.querySelectorAll(".steps button").forEach((b, i) => {
+    b.parentElement.hidden = STEPS[i].ph !== STEPS[cur].ph;
     if (i === cur) { b.setAttribute("aria-current", "step"); if (!EMBED) b.scrollIntoView({ block: "nearest" }); }
     else b.removeAttribute("aria-current");
   });
 }
 function now() { return performance.now(); }
-function elapsed() { const base = pausedAt !== null ? pausedAt : now(); return reduceMotion ? Infinity : (base - t0) * speed; }
+function elapsed() { return reduceMotion ? Infinity : now() - t0; }
 function go(i) {
   cur = Math.max(0, Math.min(STEPS.length - 1, i));
-  t0 = now(); doneSince = null;
-  if (pausedAt !== null) pausedAt = now();
+  t0 = now();
   renderPanel();
   if (typeof postState === "function") postState();
-}
-function togglePlay() {
-  playing = !playing;
-  if (playing && cur === STEPS.length - 1 && elapsed() >= stepDur(cur)) go(0);
-  renderPanel();
 }
 el("btn-prev").addEventListener("click", () => go(cur - 1));
 el("btn-next").addEventListener("click", () => go(cur + 1));
 el("btn-replay").addEventListener("click", () => go(cur));
-el("btn-play").addEventListener("click", togglePlay);
-el("speed").addEventListener("change", e => { const e0 = elapsed(); speed = parseFloat(e.target.value); t0 = now() - (isFinite(e0) ? e0 / speed : 0); });
+el("canvas-wrap").addEventListener("click", () => go(cur + 1));
 document.addEventListener("keydown", e => {
-  if (e.target.closest && e.target.closest("select")) return;
   if (e.key === "ArrowRight") { go(cur + 1); e.preventDefault(); }
   else if (e.key === "ArrowLeft") { go(cur - 1); e.preventDefault(); }
-  else if (e.key === " " && !(e.target instanceof HTMLButtonElement)) { togglePlay(); e.preventDefault(); }
+  else if (e.key === " " && !(e.target instanceof HTMLButtonElement)) { go(cur + 1); e.preventDefault(); }
 });
 
 // ---------- Zeichnen (p5) ----------
@@ -374,7 +334,7 @@ const sketch = p => {
   };
   p.windowResized = () => { const [w, h] = size(); p.resizeCanvas(w, h); };
 
-  const col = (k, a) => { const c = p.color(C[k] || "#888"); if (a !== undefined) c.setAlpha(a); return c; };
+  const col = (k, a) => { const c = p.color(C[k === "key" ? "accent" : k] || "#888"); if (a !== undefined) c.setAlpha(a); return c; };
 
   function pill(x, y, label, tone, filled) {
     p.textSize(14.5); p.textStyle(p.BOLD);
@@ -402,18 +362,27 @@ const sketch = p => {
     p.noStroke(); p.fill(col("ink")); p.textAlign(p.LEFT, p.TOP);
     p.textSize(18); p.textStyle(p.BOLD); p.text(b.t, b.x + 12, b.y + 8);
     p.textStyle(p.NORMAL); p.textSize(14); p.fill(col("muted")); p.text(b.s, b.x + 12, b.y + 30);
-    // Merkmale
-    let bx = b.x + 12; const by = b.y + b.h - 28;
-    if (st.cert.has(n)) bx += badge(bx, by, "Zert.", "trust");
-    if (n === "pub" && st.clientCert) bx += badge(bx, by, "mTLS-Zert.", "trust");
-    if (st.ca.has(n)) bx += badge(bx, by, "CA", "trust");
-    if (n === "api" && st.apiKey) bx += badge(bx, by, st.apiKey === 2 ? "Schlüssel neu + alt" : "Signaturschlüssel", "accent");
-    if (n === "iss" && st.issJwks) bx += badge(bx, by, st.issJwks === 2 ? "JWKS (2)" : "JWKS", "accent");
-    if (st.jwks.has(n)) bx += badge(bx, by, n === "r" ? "Realm-JWKS" : "JWKS-Cache", "accent");
-    if (n === "pki") badge(bx, by, "CA-Schlüssel", "trust");
+    // Merkmale, bei Platzmangel in einer zweiten Zeile
+    const bl = [];
+    if (st.cert.has(n)) bl.push(["Zert.", "trust"]);
+    if (n === "pub" && st.clientCert) bl.push(["Client-Zert.", "trust"]);
+    if (st.ca.has(n)) bl.push(["CA", "trust"]);
+    if (n === "api" && st.apiKey) bl.push([st.apiKey === 2 ? "Schlüssel neu + alt" : "Signaturschlüssel", "accent"]);
+    if (n === "iss" && st.issJwks) bl.push([st.issJwks === 2 ? "Cluster-JWKS (2)" : "Cluster-JWKS", "accent"]);
+    if (n === "kc" && st.jwks.has("kc")) bl.push(["Cluster-JWKS", "accent"]);
+    if (n === "kc" && st.files.includes("„Visum“")) bl.push(["Realm-Schlüssel", "accent"]);
+    if (n === "r" && st.jwks.has("r")) bl.push(["Realm-JWKS", "accent"]);
+    if (n === "pki") bl.push(["CA-Schlüssel", "trust"]);
+    let bx = b.x + 12, by = b.y + 54;
+    p.textSize(13); p.textStyle(p.BOLD);
+    bl.forEach(([label, tone]) => {
+      const w = p.textWidth(label) + 16;
+      if (bx + w > b.x + b.w - 8) { bx = b.x + 12; by += 24; }
+      bx += badge(bx, by, label, tone);
+    });
     if (n === "pod" && st.files.length) {
       let fx = b.x; const fy = b.y + b.h + 8;
-      st.files.forEach(f => { fx += badge(fx, fy, f, f === "Access-Token" ? "ok" : "token"); });
+      st.files.forEach(f => { fx += badge(fx, fy, f, "token"); });
     }
   }
   function zones() {
@@ -422,10 +391,8 @@ const sketch = p => {
       p.fill(col("muted")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.LEFT, p.TOP);
       p.text(z.label, z.x + 14, z.y + 10); p.textStyle(p.NORMAL);
     });
-    p.fill(col("muted")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.LEFT, p.TOP);
-    p.text("workload-net", 500, 640); p.textStyle(p.NORMAL);
   }
-  const LINKS = [["pki", "iss"], ["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["iss", "val"], ["pod", "gw"], ["gw", "kc"], ["pod", "r"], ["r", "kc"], ["pod", "val"]];
+  const LINKS = [["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["pod", "gw"], ["gw", "kc"], ["pod", "r"], ["r", "kc"]];
   function staticLinks() {
     p.stroke(col("line")); p.strokeWeight(1.2);
     p.drawingContext.setLineDash([4, 5]);
@@ -436,38 +403,41 @@ const sketch = p => {
     p.push(); p.translate(x, y); p.rotate(ang); p.noStroke(); p.fill(c);
     p.triangle(0, 0, -11, -5.5, -11, 5.5); p.pop();
   }
-  function drawMove(seg, t) {
-    const [u, v] = ends(seg.a, seg.b);
+  function drawMove(seg, t, k) {
+    let [u, v] = ends(seg.a, seg.b);
+    // Hin- und Rückweg auf versetzten Linien, Beschriftung jeweils außen
+    const [lo, hi] = seg.a < seg.b ? [u, v] : [v, u];
+    const len = Math.hypot(hi.x - lo.x, hi.y - lo.y) || 1;
+    const sign = (seg.a < seg.b ? 1 : -1) * (seg.flip ? -1 : 1);
+    const nx = -(hi.y - lo.y) / len * sign, ny = (hi.x - lo.x) / len * sign;
+    u = { x: u.x + nx * 7, y: u.y + ny * 7 }; v = { x: v.x + nx * 7, y: v.y + ny * 7 };
     const c = col(seg.tone);
     const e = ease(clamp01(t));
-    // Linie wächst mit
     p.stroke(c); p.strokeWeight(2.5);
     const hx = u.x + (v.x - u.x) * Math.max(e, 0.02), hy = u.y + (v.y - u.y) * Math.max(e, 0.02);
     p.line(u.x, u.y, hx, hy);
     if (e >= 0.98) arrowHead(v.x, v.y, Math.atan2(v.y - u.y, v.x - u.x), c);
-    if (seg.net) {
-      const mx = (u.x + v.x) / 2, my = (u.y + v.y) / 2;
-      p.noStroke(); p.textSize(13); p.textStyle(p.BOLD);
-      const tw = p.textWidth(seg.net) + 12;
-      const ox = Math.abs(v.y - u.y) > Math.abs(v.x - u.x) ? tw / 2 + 14 : 0;
-      const oy = ox ? 0 : -22;
-      p.fill(col("surface", 235)); p.rectMode(p.CENTER); p.rect(mx + ox, my + oy, tw, 21, 4); p.rectMode(p.CORNER);
-      p.fill(col("muted")); p.textAlign(p.CENTER, p.CENTER); p.text(seg.net, mx + ox, my + oy + 1);
-      p.textStyle(p.NORMAL);
-    }
-    if (t < 1.15) pill(hx, hy, seg.label, seg.tone, true);
+    if (!seg.label) { if (t < 1) { p.noStroke(); p.fill(c); p.circle(hx, hy, 14); } return; }
+    if (t < 1) { pill(hx, hy, seg.label, seg.tone, true); return; }
+    p.textSize(14.5); p.textStyle(p.BOLD);
+    const off = 12 + Math.abs(nx) * (p.textWidth(seg.label) / 2 + 10) + Math.abs(ny) * 13;
+    p.textStyle(p.NORMAL);
+    pill((u.x + v.x) / 2 + nx * off, (u.y + v.y) / 2 + ny * off, seg.label, seg.tone, false);
   }
   function drawBlock(seg, t) {
-    const [u, v] = ends(seg.a, seg.b);
-    const reach = 0.22, e = ease(clamp01(t / 0.6)) * reach;
-    const hx = u.x + (v.x - u.x) * e, hy = u.y + (v.y - u.y) * e;
-    p.stroke(col("bad")); p.strokeWeight(2.2); p.drawingContext.setLineDash([7, 6]);
+    const target = { x: seg.x, y: seg.y };
+    const u = edgePoint(seg.a, target);
+    const e = ease(clamp01(t / 0.6));
+    const hx = u.x + (target.x - u.x) * e, hy = u.y + (target.y - u.y) * e;
+    p.stroke(col("bad")); p.strokeWeight(2.5); p.drawingContext.setLineDash([8, 6]);
     p.line(u.x, u.y, hx, hy); p.drawingContext.setLineDash([]);
     if (t > 0.6) {
-      p.strokeWeight(4); const s = 10;
+      p.strokeWeight(4); const s = 11;
       p.line(hx - s, hy - s, hx + s, hy + s); p.line(hx - s, hy + s, hx + s, hy - s);
-      p.noStroke(); p.fill(col("bad")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.CENTER, p.BOTTOM);
-      p.text("kein Netzweg", hx, hy - 14); p.textStyle(p.NORMAL);
+      p.noStroke(); p.fill(col("bad")); p.textSize(14); p.textStyle(p.BOLD);
+      if (seg.lbl === "left") { p.textAlign(p.RIGHT, p.CENTER); p.text("kein Netzweg in den Cluster", hx - 16, hy - 18); }
+      else { p.textAlign(p.LEFT, p.CENTER); p.text("kein Netzweg in den Cluster", hx + 18, hy - 18); }
+      p.textStyle(p.NORMAL);
     }
   }
   function drawCheck(seg, tms) {
@@ -479,6 +449,7 @@ const sketch = p => {
     let x, y;
     if (seg.side === "right") { x = b.x + b.w + 14; y = b.y; }
     else if (seg.side === "left") { x = b.x - w - 14; y = b.y; }
+    else if (seg.side === "above") { x = b.x + b.w / 2 - w / 2; y = b.y - h - 12; }
     else { x = b.x + b.w / 2 - w / 2; y = b.y + b.h + 12; }
     x = Math.max(8, Math.min(W - w - 8, x)); y = Math.max(8, Math.min(H - h - 8, y));
     p.stroke(col("accent")); p.strokeWeight(1.5); p.fill(col("surface")); p.rect(x, y, w, h, 8);
@@ -495,10 +466,6 @@ const sketch = p => {
     const total = stepDur(cur);
     const e = elapsed();
     const done = e >= total;
-    if (done && doneSince === null) doneSince = now();
-    if (playing && done && doneSince !== null && now() - doneSince > DWELL / speed) {
-      if (cur < STEPS.length - 1) go(cur + 1); else { playing = false; renderPanel(); }
-    }
     const st = stateBefore(cur);
     if (done && STEPS[cur].fx) STEPS[cur].fx(st);
 
@@ -512,7 +479,7 @@ const sketch = p => {
     Object.keys(N).forEach(n => node(n, st, act.has(n)));
 
     // Segmente abspielen
-    let acc = 0;
+    let acc = 0, moveNo = 0;
     const overlays = [];
     for (const seg of STEPS[cur].segs) {
       const d = segDur(seg), local = e - acc;
@@ -520,7 +487,7 @@ const sketch = p => {
         const list = seg.k === "par" ? seg.moves : [seg];
         for (const m of list) {
           const md = segDur(m), tt = local / md;
-          if (m.k === "move" && (tt < 1.15 || !isFinite(e) || done)) drawMove(m, isFinite(tt) ? tt : 2);
+          if (m.k === "move") drawMove(m, isFinite(tt) ? tt : 2, moveNo++);
           if (m.k === "block") drawBlock(m, isFinite(tt) ? Math.min(tt, 1) : 1);
           if (m.k === "check") overlays.push([m, isFinite(local) ? local : Infinity]);
         }
