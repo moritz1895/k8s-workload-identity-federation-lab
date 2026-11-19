@@ -1,6 +1,6 @@
 # Präsentation: Kurzvorstellung des PoC
 
-Quelldateien eines Foliensatzes (12 Folien Hauptteil, 7 Folien Anhang), der den PoC für
+Quelldateien eines Foliensatzes (13 Folien Hauptteil, 7 Folien Anhang), der den PoC für
 Kolleginnen und Kollegen ohne tieferes Kubernetes-Wissen vorstellt. Der Hauptteil folgt dem Weg
 über Keycloak: Ausgangssituation mit mTLS-Client-Zertifikaten, Idee als „Pass und Visum“,
 zwei Ebenen (Identität und Rechte), Ablauf Pod → Keycloak → Dienst R, die zwei Tokens,
@@ -23,6 +23,7 @@ einer PowerPoint-Vorlage übernommen. Die Gestaltung hier ist bewusst neutral.
 | `deck.css` | gemeinsame Styles aller Folien |
 | `slides/<id>.html` | eine Folie je Datei: ein `<section>`-Element, Sprechernotizen im `<aside>` |
 | `animation/index.html` | animierter Ablauf, im Browser direkt öffnen (lädt p5.js und Schriften aus dem Netz) |
+| `animation/standbild-schritt12.png` | Standbild der Animation, auf der Folie `gesamtablauf` als Vorschau mit Link |
 
 Die Folien sind HTML für das Slides-Format von Claude. Elemente wie `<x-connector>` (Pfeile in
 den Diagrammen) sind dort definiert und werden von einem normalen Browser nicht gezeichnet.
@@ -32,7 +33,7 @@ anzeigbare Seite. Die Ablauf-Folien zeigen ihre Schritte beim Präsentieren per 
 
 ## Reihenfolge
 
-Hauptteil: `cover` → `problem` → `idee` → `ebenen` → `motivation` → `ablauf-authz` → `tokens` →
+Hauptteil: `cover` → `problem` → `idee` → `ebenen` → `motivation` → `ablauf-authz` → `gesamtablauf` → `tokens` →
 `architektur` → `vertrauen` → `offline-online` → `demo` → `lab-vs-prod`
 
 Anhang: `anhang` → `ablauf` → `fehlerfaelle` → `netze` → `aufbau` → `fehlerfaelle-authz` →

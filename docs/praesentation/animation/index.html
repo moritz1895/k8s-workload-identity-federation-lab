@@ -126,15 +126,15 @@ const W = 1280, H = 720;
 
 // Knoten im Entwurfsraster 1280 x 720
 const N = {
-  pki: { x: 40,  y: 24,  w: 250, h: 66, t: "Interne PKI", s: "Lab-CA (pki-init)" },
-  api: { x: 60,  y: 162, w: 210, h: 70, t: "API-Server", s: "stellt Tokens aus" },
-  pub: { x: 290, y: 288, w: 160, h: 70, t: "Publisher", s: "Pod jwks-publisher" },
-  pod: { x: 60,  y: 520, w: 250, h: 82, t: "Pod „consumer“", s: "Workload A" },
-  iss: { x: 540, y: 150, w: 200, h: 90, t: "issuer-web", s: "nginx · :8443 / :443" },
-  gw:  { x: 610, y: 400, w: 180, h: 70, t: "keycloak-gateway", s: "nur Realm-Pfade" },
-  kc:  { x: 900, y: 160, w: 230, h: 82, t: "Keycloak", s: "Realm domain-rst" },
-  r:   { x: 1000, y: 456, w: 210, h: 78, t: "Dienst R", s: "service-r" },
-  val: { x: 870, y: 604, w: 210, h: 70, t: "Validator", s: "direkte Föderation" }
+  pki: { x: 40,  y: 20,  w: 250, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
+  api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt Tokens aus" },
+  pub: { x: 280, y: 284, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
+  pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "Workload A" },
+  iss: { x: 540, y: 146, w: 210, h: 96, t: "issuer-web", s: "nginx · :8443 / :443" },
+  gw:  { x: 600, y: 396, w: 200, h: 86, t: "keycloak-gateway", s: "nur Realm-Pfade" },
+  kc:  { x: 900, y: 156, w: 230, h: 92, t: "Keycloak", s: "Realm domain-rst" },
+  r:   { x: 1000, y: 452, w: 220, h: 92, t: "Dienst R", s: "service-r" },
+  val: { x: 870, y: 600, w: 220, h: 86, t: "Validator", s: "direkte Föderation" }
 };
 const ZONES = [
   { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster · cluster-net", tone: "zone-a" },
