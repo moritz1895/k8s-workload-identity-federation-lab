@@ -90,7 +90,9 @@ class TokenValidatorTest {
     @Test
     void validate_givenTamperedSignature_thenRejected() throws Exception {
         String good = mint(clusterSigningKey, validClaims().build());
-        String tampered = good.substring(0, good.length() - 1) + (good.endsWith("A") ? "B" : "A");
+        int signatureStart = good.lastIndexOf('.') + 1;
+        char replacement = good.charAt(signatureStart) == 'A' ? 'B' : 'A';
+        String tampered = good.substring(0, signatureStart) + replacement + good.substring(signatureStart + 1);
 
         ValidationResult result = validator.validate(tampered);
 

@@ -1,0 +1,154 @@
+{
+  "realm": "domain-rst",
+  "displayName": "Fachbereich R/S/T",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "eventsEnabled": true,
+  "enabledEventTypes": ["CLIENT_LOGIN", "CLIENT_LOGIN_ERROR"],
+  "defaultDefaultClientScopes": [],
+  "defaultOptionalClientScopes": [],
+  "identityProviders": [
+    {
+      "alias": "lab-cluster",
+      "displayName": "Lab cluster (k3s)",
+      "providerId": "kubernetes",
+      "enabled": true,
+      "hideOnLogin": true,
+      "config": {
+        "issuer": "https://issuer-web"
+      }
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "r:orders:read",
+      "description": "Read orders at service R",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience service-r",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "service-r",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "r:orders:write",
+      "description": "Create orders at service R",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience service-r",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "service-r",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "r:orders:admin",
+      "description": "Delete orders at service R",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience service-r",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "service-r",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "s:inventory:read",
+      "description": "Read inventory at service S",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience service-s",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "service-s",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "workload-a",
+      "name": "Workload A (wif-demo:consumer)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": false,
+      "clientAuthenticatorType": "federated-jwt",
+      "attributes": {
+        "jwt.credential.issuer": "lab-cluster",
+        "jwt.credential.sub": "system:serviceaccount:wif-demo:consumer"
+      },
+      "defaultClientScopes": [],
+      "optionalClientScopes": ["r:orders:read", "r:orders:write", "s:inventory:read"]
+    },
+    {
+      "clientId": "workload-b",
+      "name": "Workload B, read only (wif-demo:reader)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": false,
+      "clientAuthenticatorType": "federated-jwt",
+      "attributes": {
+        "jwt.credential.issuer": "lab-cluster",
+        "jwt.credential.sub": "system:serviceaccount:wif-demo:reader"
+      },
+      "defaultClientScopes": [],
+      "optionalClientScopes": ["r:orders:read"]
+    }
+  ]
+}

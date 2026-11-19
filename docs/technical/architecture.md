@@ -28,7 +28,7 @@ Ein paar Begriffe vorweg:
 | **API-Server** | Die zentrale Kubernetes-Komponente, mit der man redet (`kubectl` spricht mit ihr). Stellt auch die ServiceAccount-Tokens aus. |
 | **Pod** | Kleinste Ausführungseinheit in Kubernetes: ein oder mehrere Container, die zusammen laufen. |
 | **ServiceAccount** | Eine Maschinen-Identität innerhalb des Clusters. Ein Pod läuft "als" ein ServiceAccount und kann sich dafür ein Token ausstellen lassen. |
-| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `manifests/10-publisher.yaml`, `manifests/20-consumer.yaml`). Wird mit `kubectl apply` angewendet. |
+| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `manifests/10-publisher.yaml`, `manifests/20-consumer.yaml`, `manifests/30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
 | **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-publisher`. |
 | **OIDC-Discovery** | Konvention, unter der ein Token-Aussteller seine Metadaten unter `<issuer>/.well-known/openid-configuration` als JSON veröffentlicht – darin steht u. a. die `jwks_uri`. |
 | **JWKS** | JSON Web Key Set: die Liste der öffentlichen Schlüssel, gegen die man Token-Signaturen prüft. |
@@ -42,14 +42,18 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 
 | Service | Image | Zweck | Läuft wie lange |
 |---|---|---|---|
-| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikat für `issuer-web`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
+| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für `issuer-web`, `keycloak`, `validator` und `service-r`, Client-Zertifikat für den Publisher, Material für Negativtests. Ohne Netz (`network_mode: none`). | einmalig |
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`) oder rotieren (`rotate`). Ohne Netz. | einmalig / auf Anforderung |
-| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s). Stellt die Pod-Tokens aus. Im Cluster laufen `consumer` und `jwks-publisher`. | dauerhaft |
-| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret + ConfigMap für den Publisher, Manifeste anwenden. Veröffentlicht nichts. | einmalig, Exit 0 |
+| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s). Stellt die Pod-Tokens aus. Im Cluster laufen `jwks-publisher`, `consumer`, `reader` und `stranger`. | dauerhaft |
+| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret für den Publisher, ConfigMap `internal-ca` in `wif-publisher` und `wif-demo`, Manifeste anwenden. Veröffentlicht nichts. | einmalig, Exit 0 |
 | `issuer-web` | `nginx:1.29-alpine` | Issuer-Endpoint: `:443` liefert Discovery-Dokument + JWKS aus, `:8443` nimmt Uploads des Publishers per mTLS an. | dauerhaft |
 | `validator` | `wif-lab/validator` (aus `validator/`) | Der Dienst *außerhalb* des Clusters. Spring Boot 4 / Java 25. Prüft die Tokens offline. | dauerhaft |
 | `validator-foreign-ca` | `wif-lab/validator` | Negativtest: Validator mit fremder CA, muss beim Start scheitern. Profil `negative`. | auf Anforderung |
-| `demo` | `wif-lab/tools` | Der Ende-zu-Ende-Test (`all`, `pre-rotation`, `post-rotation`). Profil `demo`. | auf Anforderung |
+| `keycloak` | `quay.io/keycloak/keycloak:26.8.2` | Autorisierungsserver des Fachbereichs (Realm `domain-rst`): tauscht ServiceAccount-Tokens gegen Access-Tokens. Siehe [autorisierungsserver.md](autorisierungsserver.md). | dauerhaft |
+| `keycloak-gateway` | `nginx:1.29-alpine` | Einziger Weg der Pods zu Keycloak; leitet nur `/realms/domain-rst/` weiter. | dauerhaft |
+| `keycloak-admin` | `nginx:1.29-alpine` | Admin-Konsole vom Host (`127.0.0.1:18443`). Profil `admin`. | auf Anforderung |
+| `service-r` | `wif-lab/service-r` (aus `service-r/`) | Dienst R: Spring-Security-Resource-Server, prüft Access-Tokens und Scopes. | dauerhaft |
+| `demo` | `wif-lab/tools` | Der Ende-zu-Ende-Test (`all`, `authz`, `pre-rotation`, `post-rotation`). Profil `demo`. | auf Anforderung |
 
 Der Host braucht nur **Docker + Compose v2**. Kein `kubectl`, kein `k3d`, kein Java auf dem
 Host – alles steckt in den Containern.
@@ -68,11 +72,21 @@ Host – alles steckt in den Containern.
  │                               │   │ .8.20:443 ◄─┼───┼──────────────────────────┘    │
  │ bootstrap, demo               │   │   Lesen     │   │ demo, validator-foreign-ca    │
  └───────────────┬───────────────┘   └─────────────┘   └──────────────▲────────────────┘
-                 │ server .2                                          │ validator .10 :8080
-                 │                workload-net 172.31.9.0/24          │ (Host :18080)
-                 └──── Pod consumer: GET /whoami, Bearer-Token ───────┘
+                 │ server .2                                          │ validator .10 :8443
+                 │                workload-net 172.31.9.0/24          │ (Host 127.0.0.1:18080)
+                 └──── Pod consumer: HTTPS GET /whoami, Bearer ───────┘
 
  pki-init, sa-keys: ohne Netz (network_mode: none)
+```
+
+Autorisierungs-Pfad (Details in [autorisierungsserver.md](autorisierungsserver.md)):
+
+```
+ workload-net                               relying-net
+ Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► issuer-web .8.20:443
+      │                          nur /realms/domain-rst/                ▲
+      └── HTTPS :8443 ─────────► service-r .9.40 │ .8.40 ───────────────┘ Discovery + JWKS
+                                                     keycloak-admin .8.32 (Profil admin, Host 127.0.0.1:18443)
 ```
 
 `issuer-web` ist das einzige Bauteil, das in beiden Bereichen hängt: Der Upload-Listener
@@ -86,16 +100,12 @@ weder den API-Server noch den Upload-Listener.
 
 ### `pki-init` – die Lab-PKI
 
-`compose.yaml:41`
-
 - **`entrypoint: ["bash", "/work/pki-init.sh"]`**, `restart: "no"`, **`network_mode: none`**.
 - **`volumes`:** `pki-ca` (CA-Schlüssel, nur hier eingehängt), `ca-trust` (Root-Zertifikat),
-  `issuer-tls`, `publisher-tls`, `pki-demo`.
+  `issuer-tls`, `keycloak-tls`, `validator-tls`, `service-r-tls`, `publisher-tls`, `pki-demo`.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolspki-initsh--die-lab-pki).
 
 ### `sa-keys` – die Signaturschlüssel
-
-`compose.yaml:57`
 
 - **`entrypoint: ["bash", "/work/sa-keys.sh"]`**, `command: ["init"]`, ohne Netz.
 - **`volumes`:** `sa-keys:/sa-keys` (rw).
@@ -103,8 +113,6 @@ weder den API-Server noch den Upload-Listener.
   starten. Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolssa-keyssh--signaturschlüssel-und-rotation).
 
 ### `server` – der Kubernetes-Cluster
-
-`compose.yaml:71`
 
 - **Image:** `rancher/k3s` (über `${K3S_IMAGE}` austauschbar).
 - **`privileged: true`** – k3s startet intern selbst Container und braucht dafür erweiterte
@@ -135,8 +143,6 @@ weder den API-Server noch den Upload-Listener.
 
 ### `bootstrap` – der Einmal-Job
 
-`compose.yaml:118`
-
 - **`entrypoint: ["bash", "/work/bootstrap.sh"]`**, `restart: "no"`.
 - **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`,
   `publisher-tls:/publisher-tls:ro`, `./manifests:/manifests:ro`, `./tools:/work:ro`.
@@ -145,8 +151,6 @@ weder den API-Server noch den Upload-Listener.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md).
 
 ### `issuer-web` – der Issuer-Endpoint
-
-`compose.yaml:142`
 
 - **Image:** `nginx:1.29-alpine` (über `${NGINX_IMAGE}` austauschbar).
 - **`entrypoint`:** legt `/oidc/.tmp` an, übergibt `/oidc` an den Benutzer `nginx` (damit
@@ -162,42 +166,83 @@ weder den API-Server noch den Upload-Listener.
 
 ### `validator` – der Dienst außerhalb des Clusters
 
-`compose.yaml:169`
-
 - **`build.context: ./validator`** – Multi-Stage-Build, siehe
   [build-und-betrieb.md](build-und-betrieb.md).
 - **`environment`:** `WIF_ISSUER` (Default `https://issuer-web`), `WIF_AUDIENCE` (Default
-  `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`.
-- **`volumes`:** nur `ca-trust:/trust:ro` – das Root-Zertifikat der internen CA. Kein Volume
-  der Cluster-Seite.
+  `wif-demo-validator`), `WIF_ISSUER_CA=/trust/ca.crt`, `VALIDATOR_TLS_DIR=/tls`.
+- **`volumes`:** `ca-trust:/trust:ro` – das Root-Zertifikat der internen CA – und
+  `validator-tls:/tls:ro` – das eigene Serverzertifikat. Kein Volume der Cluster-Seite.
 - **`networks`:** `relying-net` mit `172.31.8.10`, `workload-net` mit `172.31.9.10`.
-- **`ports: "${VALIDATOR_HOST_PORT:-18080}:8080"`** – zusätzlich auf dem Host veröffentlicht,
-  damit man vom Host aus mit `curl` prüfen kann.
+- **`ports: "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"`** – nur HTTPS, kein
+  HTTP-Listener; vom Host unter `https://localhost:18080` (Lab-CA). Läuft als `USER 10001`.
 - **`depends_on: issuer-web → service_healthy`**.
-- **`healthcheck`:** `curl -fsS http://localhost:8080/healthz`, `start_period: 40s`.
+- **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`,
+  `start_period: 40s`.
 
 ### `validator-foreign-ca` – der Negativtest
 
-`compose.yaml:198`
-
 - Gleiches Image wie `validator`, aber `WIF_ISSUER_CA=/pki-demo/foreign-ca.crt` aus dem
-  Volume `pki-demo`, nur in `relying-net`, Profil `negative`.
+  Volume `pki-demo`, nur in `relying-net`, Profil `negative`. Es hängt auch `validator-tls` ein,
+  damit der Start allein an der fremden Issuer-CA (PKIX) scheitert.
 - `docker compose run --rm validator-foreign-ca` muss mit einem Fehlercode enden
   (`PKIX path building failed`).
 
+### `keycloak` – der Autorisierungsserver
+
+- **`command: ["start", "--import-realm"]`**, HTTPS nur auf 8443, Health auf Port 9000;
+  `mem_limit: 1g`.
+- **`networks`:** nur `relying-net` mit `172.31.8.30` und Alias `keycloak`. **Kein**
+  veröffentlichter Port: Docker macht einen veröffentlichten Container-Port auch aus den
+  anderen Bridge-Netzen erreichbar, unabhängig von der Host-Adresse (im Lab gemessen).
+- **`volumes`:** `keycloak-tls:/tls:ro`, `ca-trust:/trust:ro`,
+  `./keycloak/realm-domain-rst.json` (Realm-Import, ro).
+- **`depends_on`:** `pki-init → service_completed_successfully`, `issuer-web → service_healthy`.
+- **`healthcheck`:** `GET /health/ready` auf `localhost:9000` per Bash-`/dev/tcp` (kein `curl`
+  im Image).
+- Konfiguration im Detail: [autorisierungsserver.md](autorisierungsserver.md#keycloak).
+
+### `keycloak-gateway` – der Weg der Workloads zu Keycloak
+
+- nginx mit `tools/nginx-keycloak-gateway.conf`; `volumes`: `keycloak-tls:/tls:ro`,
+  `ca-trust:/trust:ro`; `mem_limit: 64m`.
+- **`networks`:** `relying-net` mit `172.31.8.31`, `workload-net` mit `172.31.9.30`.
+- TLS auf 8443 mit dem Keycloak-Zertifikat; leitet nur `GET`/`POST` unter
+  `/realms/domain-rst/` weiter, sonst `404`.
+- **`depends_on: keycloak → service_healthy`**; **`healthcheck`:** `nc -z 127.0.0.1 8443`.
+
+### `keycloak-admin` – Admin-Konsole auf Zuruf
+
+- nginx mit `tools/nginx-keycloak-admin.conf`, Profil `admin`; nur `relying-net`
+  (`172.31.8.32`); **`ports: "127.0.0.1:${KEYCLOAK_HOST_PORT:-18443}:8443"`**; `mem_limit: 64m`.
+- `docker compose --profile admin up -d keycloak-admin`, danach
+  `docker compose stop keycloak-admin`. Solange er läuft, ist sein Port auch aus
+  `workload-net` erreichbar.
+
+### `service-r` – Dienst R
+
+- **`build.context: ./service-r`**; `environment`: `KC_REALM_ISSUER`, `SERVICE_R_AUDIENCE`,
+  `SERVICE_R_TRUST_CA=/trust/ca.crt`, `SERVICE_R_TLS_DIR=/tls`; `volumes`: `ca-trust:/trust:ro`,
+  `service-r-tls:/tls:ro`; `mem_limit: 384m`; läuft als `USER 10001`.
+- **`networks`:** `relying-net` mit `172.31.8.40`, `workload-net` mit `172.31.9.40`;
+  **`ports: "127.0.0.1:${SERVICE_R_HOST_PORT:-18081}:8443"`** – nur HTTPS (Port 8443), kein
+  HTTP-Listener.
+- **`depends_on: pki-init → service_completed_successfully`** (Serverzertifikat). Kein
+  `depends_on` auf Keycloak: Die Realm-Discovery läuft erst beim ersten Token, R startet
+  unabhängig von Keycloak.
+- **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`.
+- Details: [autorisierungsserver.md](autorisierungsserver.md#service-r--der-resource-server).
+
 ### `demo` – die Ende-zu-Ende-Prüfung
 
-`compose.yaml:213`
-
 - Gleiches Image wie `bootstrap` (`wif-lab/tools`), Profil `demo`.
-- **`command: ["all"]`** – Phase; außerdem `pre-rotation` und `post-rotation`.
-- **`environment`:** `WIF_AUDIENCE`, `VALIDATOR_URL=http://validator:8080`.
+- **`command: ["all"]`** – Phase; außerdem `authz`, `pre-rotation` und `post-rotation`.
+- **`environment`:** `WIF_AUDIENCE`, `VALIDATOR_URL=https://validator:8443`, `KC_REALM_ISSUER`.
 - **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `pki-demo:/pki-demo:ro`
   (Negativtest-Zertifikate), `demo-state:/state` (Token und `kid`s zwischen den
   Rotationsphasen).
 - **`networks`:** `cluster-net` (für `kubectl` und den Upload-Listener) und `relying-net`
   (für `issuer-web :443` und den Validator).
-- **`depends_on: validator → service_healthy`**.
+- **`depends_on`:** `validator`, `service-r` und `keycloak-gateway` → `service_healthy`.
 - Die Schritte: [../use-cases.md](../use-cases.md#verifikation-auf-einen-blick).
 
 ---
@@ -205,17 +250,20 @@ weder den API-Server noch den Upload-Listener.
 ## Die Named Volumes
 
 Ein **Named Volume** ist ein von Docker verwalteter, benannter Speicherbereich, der
-unabhängig von den Containern lebt. Deklariert in `compose.yaml:26`. Jedes Stück
+unabhängig von den Containern lebt. Deklariert in `compose.yaml`. Jedes Stück
 Vertrauensmaterial liegt in einem eigenen Volume, damit jeder Container nur sieht, was er
 braucht.
 
 | Volume | Beschrieben von | Gelesen von | Inhalt |
 |---|---|---|---|
 | `pki-ca` | `pki-init` | – | Root-CA: `ca.crt`, `ca.key`. |
-| `ca-trust` | `pki-init` | `issuer-web`, `bootstrap`, `validator`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
+| `ca-trust` | `pki-init` | `issuer-web`, `bootstrap`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
 | `issuer-tls` | `pki-init` | `issuer-web` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:issuer-web`). |
 | `publisher-tls` | `pki-init` | `bootstrap` (→ Secret) | Client-Zertifikat `tls.crt` / `tls.key` (`CN=jwks-publisher`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `wrong-cn.*`, `foreign-ca.crt`, `foreign-publisher.*`. |
+| `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
+| `validator-tls` | `pki-init` | `validator`, `validator-foreign-ca` | Serverzertifikat `tls.crt` / `tls.key` (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
+| `service-r-tls` | `pki-init` | `service-r` | Serverzertifikat `tls.crt` / `tls.key` (`CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
 | `sa-keys` | `sa-keys` | `server` (ro) | `signing.key`, `current.pub`, `previous.pub`, `verify.pub`. |
 | `k3s-data` | `server` | – | Interne k3s-Datenbank, Cluster-Zustand. |
 | `kubeconfig` | `server` | `bootstrap`, `demo` | `kubeconfig.yaml` – Adresse + Admin-Zugang für `kubectl`. |
@@ -233,13 +281,11 @@ Vertrauensanker (`ca.crt`) über `ca-trust`.
 
 ## Die drei Netze
 
-`compose.yaml:9`
-
 | Netz | Subnetz | Mitglieder | Zweck |
 |---|---|---|---|
 | `cluster-net` | `172.31.7.0/24` | `server` (.2, Alias `k3s-server`), `issuer-web` (.20), `bootstrap`, `demo` | Der Cluster und sein einziger Weg nach außen: der Upload-Listener. |
-| `relying-net` | `172.31.8.0/24` | `issuer-web` (.20, Alias `issuer-web`), `validator` (.10), `demo`, `validator-foreign-ca` | Öffentlicher Lese-Listener und Relying Party. |
-| `workload-net` | `172.31.9.0/24` | `server` (.2), `validator` (.10) | Pods rufen den Validator auf. |
+| `relying-net` | `172.31.8.0/24` | `issuer-web` (.20, Alias `issuer-web`), `validator` (.10), `keycloak` (.30, Alias `keycloak`), `keycloak-gateway` (.31), `keycloak-admin` (.32), `service-r` (.40), `demo`, `validator-foreign-ca` | Öffentlicher Lese-Listener, Relying Parties und Autorisierungsserver. |
+| `workload-net` | `172.31.9.0/24` | `server` (.2), `validator` (.10), `keycloak-gateway` (.30), `service-r` (.40) | Pods rufen Validator, Keycloak (über das Gateway) und `service-r` auf. |
 
 - **`driver: bridge`** – der Standard-Netzwerktyp von Docker: ein privates virtuelles LAN.
   Container im selben Netz erreichen sich über Service-Namen und Aliase.
@@ -247,8 +293,14 @@ Vertrauensanker (`ca.crt`) über `ca-trust`.
 - Pod-Verkehr verlässt den k3s-Container mit dessen Adresse im jeweiligen Netz. Ein Pod
   erreicht deshalb den Validator über `workload-net` und `issuer-web` über `cluster-net`.
 
-`tools/run-all-checks.sh` prüft die Trennung vom Validator aus: `172.31.9.2:6443`,
-`172.31.7.2:6443` und `172.31.8.20:8443` sind nicht erreichbar.
+Keycloak selbst hängt nicht in `workload-net`. Weil Docker veröffentlichte Ports auch aus
+anderen Bridge-Netzen erreichbar macht, veröffentlicht er keinen Port; nicht veröffentlichte
+Ports wie `issuer-web :443` oder Keycloak `:9000` bleiben auf ihre Netze beschränkt.
+
+`tools/run-all-checks.sh` prüft die Trennung von Validator und `service-r` aus
+(`172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.8.20:8443` nicht erreichbar) und von Keycloak
+aus (zusätzlich `172.31.7.20:8443`). `demo.sh authz` (Prüfung 20) prüft aus einem Pod, dass
+Keycloak nur über das Gateway und nur mit dem Realm `domain-rst` erreichbar ist.
 
 ### Warum feste IPs – und warum brauchen die Pods `hostAliases`?
 
@@ -259,6 +311,8 @@ auf, die statische Zeilen in `/etc/hosts` schreiben:
 | Pod | Name | IP |
 |---|---|---|
 | `consumer` (`manifests/20-consumer.yaml`) | `validator.wif.local` | `172.31.9.10` (Validator in `workload-net`) |
+| `consumer`, `reader`, `stranger` | `keycloak` | `172.31.9.30` (`keycloak-gateway` in `workload-net`) |
+| `consumer`, `reader` | `service-r.wif.local` | `172.31.9.40` (`service-r` in `workload-net`) |
 | `jwks-publisher` (`manifests/10-publisher.yaml:116`) | `issuer-web` | `172.31.7.20` (`issuer-web` in `cluster-net`) |
 
 Damit diese Einträge stimmen, **müssen** die Adressen fest sein. `172.31.7.20` steht
@@ -279,17 +333,28 @@ sa-keys      ─┼─ completed                                │
 server       healthy (kubectl get --raw /readyz)     issuer-web  startet, liefert noch nichts
               │                                           │
               ▼   (+ pki-init completed)                  │
-bootstrap    Namespaces, Secret, ConfigMap, Manifeste,    │
-             Rollout jwks-publisher + consumer, Exit 0    │
+bootstrap    Namespaces, Secret, ConfigMaps, Manifeste,   │
+             Rollouts jwks-publisher, consumer,           │
+             reader, stranger, Exit 0                     │
               │                                           │
               ▼                                           │
 jwks-publisher (Pod) ── PUT mTLS ────────────────────────►│ healthy (JWKS-Datei vorhanden)
                                                           ▼
 validator    entrypoint.sh wartet auf /trust/ca.crt, OIDC-Discovery, JWKSource
-             healthy (curl /healthz)
+             healthy (curl --cacert … https://localhost:8443/healthz)
+keycloak     Realm-Import, healthy (/health/ready auf :9000)
               ▼
-demo         nur bei "docker compose run --rm demo"
+keycloak-gateway  healthy (nc -z 127.0.0.1 8443)
+
+service-r    nach pki-init: entrypoint.sh baut Truststore, healthy (curl --cacert … https://localhost:8443/healthz)
+
+demo         nur bei "docker compose run --rm demo" (wartet auf validator, service-r, keycloak-gateway)
 ```
+
+`validator` und `keycloak` hängen beide nur an `issuer-web` und starten parallel;
+`service-r` wartet nur auf `pki-init`. `demo` wartet über `keycloak-gateway` indirekt auf Keycloaks Healthcheck;
+da `/health/ready` schon vor dem Abschluss des ersten Bootstraps UP meldet, wiederholt Prüfung 8
+die Realm-Discovery bis zu 60 s.
 
 `pki-init`, `sa-keys` und `bootstrap` laufen bei **jedem** `up` erneut und sind idempotent:
 Vorhandene CA, Zertifikate und Signaturschlüssel bleiben erhalten.
@@ -301,6 +366,7 @@ Vorhandene CA, Zertifikate und Signaturschlüssel bleiben erhalten.
 - [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap,
   Publisher und nginx-Config im Detail
 - [validator.md](validator.md) – der Java-Service innen
+- [autorisierungsserver.md](autorisierungsserver.md) – Keycloak, Realm und `service-r`
 - [trust-und-tls.md](trust-und-tls.md) – die TLS-Vertrauensbeziehungen
 - [build-und-betrieb.md](build-und-betrieb.md) – Images bauen, betreiben, Fehler beheben
 - [../kubernetes-primer.md](../kubernetes-primer.md) – Kubernetes-Grundbegriffe

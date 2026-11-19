@@ -12,7 +12,7 @@
 </table>
 <ul class="pts">
 <li>Der Server prüft weiter Identität und mappt auf Rechte – nur die Quelle wechselt vom Zertifikat zum signierten Token</li>
-<li>Ein Bearer-Token braucht weiterhin TLS zum Server (einseitig, ohne Client-Zertifikat) – im Lab vereinfacht über HTTP</li>
+<li>Ein Bearer-Token braucht weiterhin TLS zum Server (einseitig, ohne Client-Zertifikat) – im Lab mit einem Zertifikat der Lab-CA</li>
 </ul>
 <aside>Ehrliche Gegenüberstellung: Beim Widerruf ist das Zertifikat formal im Vorteil, weil es gesperrt werden kann. Das Token kann nicht zurückgezogen werden, gilt aber nur 10 Minuten und nur für einen Dienst. Das Mapping von Claims auf Authorities ist im PoC nicht umgesetzt; der Validator gibt die Claims nur zurück.</aside>
 </section>

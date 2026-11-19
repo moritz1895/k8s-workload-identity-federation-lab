@@ -1,0 +1,185 @@
+# Workloads of the authorization-server demo besides `consumer` (workload A):
+#   reader   — registered in the realm as workload-b, read scope only
+#   stranger — valid cluster identity, but no client in the realm
+# plus the shared client script that fetches and caches access tokens.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authz-client
+  namespace: wif-demo
+data:
+  access-token.sh: |
+    #!/bin/sh
+    # Prints an access token of the domain realm for the requested scopes.
+    # The token is cached per scope set and only requested again once less than
+    # MIN_REMAINING_SECONDS of its lifetime are left. Every request to the token
+    # endpoint is logged to stderr and to $LOG. Tokens never appear in process
+    # arguments: curl reads the client assertion from its file.
+    #   access-token.sh "r:orders:read r:orders:write"
+    set -eu
+    umask 077
+
+    SCOPE="${1:?usage: access-token.sh \"<scope> [<scope> ...]\"}"
+    TOKEN_ENDPOINT="${TOKEN_ENDPOINT:-https://keycloak:8443/realms/domain-rst/protocol/openid-connect/token}"
+    CLIENT_ASSERTION_FILE="${CLIENT_ASSERTION_FILE:-/var/run/secrets/tokens/kc-token}"
+    CA=/etc/internal-ca/ca.crt
+    MIN_REMAINING_SECONDS=60
+    CACHE_DIR=/tmp/access-tokens
+    LOG=/tmp/access-token.log
+
+    mkdir -p "$CACHE_DIR"
+    scope_key=$(printf '%s' "$SCOPE" | tr -s ' \t\n' '\n' | sed '/^$/d' | sort -u | sha256sum | cut -d ' ' -f 1)
+    cache="$CACHE_DIR/$scope_key"
+    now=$(date +%s)
+
+    if [ -s "$cache" ]; then
+        expires_at=$(head -n 1 "$cache")
+        if [ $((expires_at - now)) -gt "$MIN_REMAINING_SECONDS" ]; then
+            tail -n 1 "$cache"
+            exit 0
+        fi
+    fi
+
+    response=$(curl -sS --cacert "$CA" -w '\n%{http_code}' "$TOKEN_ENDPOINT" \
+        --data-urlencode grant_type=client_credentials \
+        --data-urlencode client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer \
+        --data-urlencode "client_assertion@$CLIENT_ASSERTION_FILE" \
+        --data-urlencode "scope=$SCOPE")
+    status=$(printf '%s\n' "$response" | tail -n 1)
+    body=$(printf '%s\n' "$response" | sed '$d')
+    if [ "$status" != "200" ]; then
+        echo "access-token: token request failed with HTTP $status: $body" >&2
+        exit 1
+    fi
+
+    token=$(printf '%s' "$body" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+    expires_in=$(printf '%s' "$body" | sed -n 's/.*"expires_in":\([0-9]*\).*/\1/p')
+    if [ -z "$token" ] || [ -z "$expires_in" ]; then
+        echo "access-token: token response without access_token or expires_in" >&2
+        exit 1
+    fi
+    printf '%s\n%s\n' "$((now + expires_in))" "$token" > "$cache.$$"
+    mv "$cache.$$" "$cache"
+    echo "access-token: requested new access token (scope: $SCOPE, expires in ${expires_in}s)" | tee -a "$LOG" >&2
+    printf '%s\n' "$token"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reader
+  namespace: wif-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reader
+  namespace: wif-demo
+  labels:
+    app: reader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reader
+  template:
+    metadata:
+      labels:
+        app: reader
+    spec:
+      serviceAccountName: reader
+      automountServiceAccountToken: false
+      hostAliases:
+        - ip: "172.31.9.30"
+          hostnames:
+            - keycloak
+        - ip: "172.31.9.40"
+          hostnames:
+            - service-r.wif.local
+      containers:
+        - name: reader
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          volumeMounts:
+            - name: tokens
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            - name: internal-ca
+              mountPath: /etc/internal-ca
+              readOnly: true
+            - name: authz-client
+              mountPath: /opt/authz
+              readOnly: true
+      volumes:
+        - name: tokens
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: https://keycloak:8443/realms/domain-rst
+                  expirationSeconds: 600
+                  path: kc-token
+        - name: internal-ca
+          configMap:
+            name: internal-ca
+        - name: authz-client
+          configMap:
+            name: authz-client
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stranger
+  namespace: wif-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stranger
+  namespace: wif-demo
+  labels:
+    app: stranger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stranger
+  template:
+    metadata:
+      labels:
+        app: stranger
+    spec:
+      serviceAccountName: stranger
+      automountServiceAccountToken: false
+      hostAliases:
+        - ip: "172.31.9.30"
+          hostnames:
+            - keycloak
+      containers:
+        - name: stranger
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          volumeMounts:
+            - name: tokens
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+            - name: internal-ca
+              mountPath: /etc/internal-ca
+              readOnly: true
+            - name: authz-client
+              mountPath: /opt/authz
+              readOnly: true
+      volumes:
+        - name: tokens
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: https://keycloak:8443/realms/domain-rst
+                  expirationSeconds: 600
+                  path: kc-token
+        - name: internal-ca
+          configMap:
+            name: internal-ca
+        - name: authz-client
+          configMap:
+            name: authz-client
+            defaultMode: 0555

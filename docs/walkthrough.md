@@ -28,16 +28,22 @@ Systems, weil es dessen Signaturschlüssel kennt.
 
 | Container | Was es ist | Rolle im PoC |
 |---|---|---|
-| `pki-init` | Ein Wegwerf-Container mit `openssl` | Läuft **einmal**: spielt die interne PKI, erzeugt eine Lab-CA und die Zertifikate für `issuer-web` und den Publisher. |
+| `pki-init` | Ein Wegwerf-Container mit `openssl` | Läuft **einmal**: spielt die interne PKI, erzeugt eine Lab-CA und die Zertifikate für `issuer-web`, Keycloak und den Publisher. |
 | `sa-keys` | Dasselbe Wegwerf-Image | Erzeugt den Schlüssel, mit dem der Cluster Tokens signiert; rotiert ihn auf Zuruf. |
 | `server` | k3s — ein vollständiges, aber leichtgewichtiges Kubernetes, das komplett in **einem** Container läuft | Der Cluster. Stellt die signierten Tokens aus. |
 | `bootstrap` | Ein Wegwerf-Container mit `kubectl` | Läuft **einmal** beim Start: richtet den Cluster ein (Namespaces, Publisher-Zertifikat, Manifeste). Danach beendet er sich. |
 | `issuer-web` | Ein nginx-Webserver | Liefert das OIDC-Discovery-Dokument und die öffentlichen Schlüssel (JWKS) unter `https://issuer-web` aus. Diese URL steht im `iss`-Feld jedes Tokens. Nimmt Uploads nur vom Publisher an. |
 | `validator` | Ein kleiner Spring-Boot-Dienst (Java) | Der externe Dienst, der die Tokens prüft. **Spricht nur mit `issuer-web`, nie mit dem Cluster.** |
+| `keycloak` | Keycloak (Autorisierungsserver) | Tauscht ServiceAccount-Tokens gegen Access-Tokens mit Scopes; Teil der Autorisierungs-Demo (`demo authz`). |
+| `keycloak-gateway` | Ein nginx-Webserver | Einziger Weg der Pods zu Keycloak; lässt nur die Endpunkte des Realms `domain-rst` durch. |
+| `service-r` | Ein Spring-Boot-Resource-Server (Java) | Dienst R: prüft Access-Tokens von Keycloak und schützt seine Endpunkte nach Scope. |
 | `demo` | Nochmal das Wegwerf-Image mit `kubectl` | Wird nur auf Zuruf gestartet und fährt die Ende-zu-Ende-Prüfung. |
 
-Dazu im Cluster zwei **Pods**: `consumer` — das ist unsere Workload — und `jwks-publisher`,
-der die öffentlichen Schlüssel des Clusters zu `issuer-web` bringt.
+Dazu im Cluster die **Pods** `consumer` — das ist unsere Workload — und `jwks-publisher`,
+der die öffentlichen Schlüssel des Clusters zu `issuer-web` bringt. Für die
+Autorisierungs-Demo kommen `reader` und `stranger` dazu. Diese Tour folgt dem
+Validator-Pfad; den Pfad über Keycloak zu `service-r` beschreibt
+[features/keycloak-autorisierungsserver.md](features/keycloak-autorisierungsserver.md).
 
 ```
  cluster-net (172.31.7.0/24)
@@ -192,7 +198,7 @@ Config anfassen; unsere Config braucht die Änderung nicht.
 validator: waiting for the internal CA certificate at /trust/ca.crt ...
 validator: internal CA certificate present after 0s, starting
 
- :: Spring Boot ::                (v4.1.1)
+ :: Spring Boot ::                (v4.1.2)
 
 INFO  m.r.w.JwksTrustConfig : OIDC discovery for https://issuer-web resolved JWKS at https://issuer-web/openid/v1/jwks
 INFO  m.r.w.WifPocApplication : Started WifPocApplication in 1.721 seconds
@@ -293,7 +299,7 @@ wie in Schritt 1. So weiß der Validator, welchen Schlüssel aus dem JWKS er zum
 Das ist der Kern. Das Skript führt **im `consumer`-Pod** ein `curl` aus:
 
 ```
-pod consumer-7599bd45b8-skn4j  ->  http://validator.wif.local:8080/whoami
+pod consumer-7599bd45b8-skn4j  ->  https://validator.wif.local:8443/whoami   (token from projected volume)
 HTTP 200
 PASS: pod token accepted (200)
 ```
@@ -318,7 +324,10 @@ Was hier passiert ist:
    im Pod-Manifest (`manifests/20-consumer.yaml`) mit `audience: wif-demo-validator` und
    `expirationSeconds: 600` konfiguriert ist. Das kubelet erneuert das Token automatisch vor
    Ablauf.
-2. Der Pod schickt es als `Authorization: Bearer <token>` an `http://validator.wif.local:8080`.
+2. Der Pod schickt es als `Authorization: Bearer <token>` per HTTPS an
+   `https://validator.wif.local:8443` und prüft dessen Serverzertifikat mit der internen CA
+   (`--cacert /etc/internal-ca/ca.crt`). Das Token geht über stdin an curl (`-H @-`), nicht als
+   Argument.
    Diesen Namen kennt der Cluster-DNS nicht (der Validator ist ja außerhalb) — deshalb steht im
    Pod-Manifest ein `hostAliases`-Eintrag, der `validator.wif.local` fest auf die IP
    `172.31.9.10` zeigt. Genau diese IP hat der Validator-Container im Netz `workload-net`.
@@ -326,6 +335,11 @@ Was hier passiert ist:
    gecachten JWKS, prüft die **Signatur**, prüft `iss == https://issuer-web`, prüft
    `aud` enthält `wif-demo-validator`, prüft `exp`/`nbf` (mit 60 s Toleranz). Alles grün →
    **HTTP 200** plus die Claims.
+
+Direkt danach prüft `demo.sh` aus dem Pod, dass der Validator **nur** über HTTPS mit einem
+Zertifikat der internen CA erreichbar ist: Es zeigt Subject `CN=validator.wif.local` und die
+Lab-Root-CA als Aussteller, auf 8080 antwortet nichts, Klartext-HTTP auf 8443 wird mit `400`
+abgewiesen, und curl nur mit den öffentlichen CAs scheitert (Exit-Code 60).
 
 ### Schritte 4 & 5 — Absichtlich kaputte Fälle
 
@@ -344,7 +358,7 @@ PASS
 - **Falsche Audience:** Ein Token, das für `not-this-service` ausgestellt wurde. Signatur ok,
   aber `aud` passt nicht → abgelehnt. Das ist der Schutz gegen den „confused deputy": ein Token,
   das die Workload einem *anderen* Dienst gegeben hat, taugt hier nicht.
-- **Manipulierte Signatur:** Das letzte Zeichen eines gültigen Tokens wird verändert. Die
+- **Manipulierte Signatur:** Das erste Zeichen der Signatur eines gültigen Tokens wird verändert. Die
   Signatur passt nicht mehr zum Inhalt → abgelehnt.
 
 ### Schritt 6 — Fremde Uploads werden abgewiesen
@@ -388,14 +402,15 @@ PASS: phase 'all': all checks passed
 Auf dem Host (braucht nur `docker compose`) fährt `tools/run-all-checks.sh` den Stack hoch und
 prüft nacheinander:
 
-1. die Demo von oben,
-2. die **Netztrennung**: Der Validator erreicht weder den API-Server (`172.31.9.2:6443`,
-   `172.31.7.2:6443`) noch den Upload-Listener über sein Netz (`172.31.8.20:8443`),
+1. die Demo von oben und die Autorisierungs-Demo (`demo authz`),
+2. die **Netztrennung**: Validator, `service-r` und Keycloak erreichen weder den API-Server
+   (`172.31.9.2:6443`, `172.31.7.2:6443`) noch den Upload-Listener (`172.31.8.20:8443`,
+   bei Keycloak zusätzlich `172.31.7.20:8443`),
 3. dass ein Validator mit **fremder CA** (`validator-foreign-ca`) nicht startet,
 4. eine **Schlüsselrotation**: Token vor der Rotation prägen (`demo pre-rotation`),
    `sa-keys rotate`, API-Server neu starten, warten, bis der Publisher die neue `kid`
-   veröffentlicht hat, dann prüfen, dass neue und alte Tokens angenommen werden
-   (`demo post-rotation`).
+   veröffentlicht hat, dann prüfen, dass neue und alte Tokens angenommen werden und
+   Keycloak eine Client-Assertion mit der neuen `kid` annimmt (`demo post-rotation`).
 
 ```
 PASS: all lab checks passed
@@ -421,10 +436,15 @@ docker compose exec server kubectl -n wif-publisher logs deploy/jwks-publisher
 POD=$(docker compose exec server kubectl -n wif-demo get pod -l app=consumer -o jsonpath='{.items[0].metadata.name}')
 docker compose exec server kubectl -n wif-demo exec "$POD" -- cat /var/run/secrets/tokens/sa-token
 
-# Validator direkt vom Host anfragen (ohne Token -> 401)
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18080/whoami
-curl -s http://localhost:18080/healthz
+# Validator direkt vom Host anfragen (nur HTTPS, Lab-CA; ohne Token -> 401)
+docker compose cp validator:/trust/ca.crt lab-ca.crt
+curl -s --cacert lab-ca.crt -o /dev/null -w '%{http_code}\n' https://localhost:18080/whoami
+curl -s --cacert lab-ca.crt https://localhost:18080/healthz
 ```
+
+Unter Windows (curl mit Schannel) zusätzlich `--ssl-no-revoke` angeben – die Lab-CA
+veröffentlicht keine Sperrliste. Schannel prüft bei einer IP-Adresse den Zertifikatsnamen
+gegen den CN statt gegen den IP-SAN, deshalb `localhost` statt `127.0.0.1` verwenden.
 
 Im nginx-Log siehst du, wer mit `issuer-web` spricht: der Validator von `172.31.8.10` aus
 (nur `GET`), der Publisher aus dem Cluster-Netz (`PUT` auf `:8443`, im Log mit

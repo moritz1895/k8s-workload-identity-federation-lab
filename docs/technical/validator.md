@@ -60,11 +60,24 @@ wif:
 | `WIF_ISSUER` | `wif.issuer` | `issuer` (String) | `https://issuer-web` | Exakter Sollwert des `iss`-Claims. Zugleich die Basis-URL für die OIDC-Discovery (`issuer + "/.well-known/openid-configuration"`). |
 | `WIF_AUDIENCE` | `wif.audience` | `audience` (String) | `wif-demo-validator` | Wert, der in `aud` enthalten sein muss. |
 | `WIF_ISSUER_CA` | `wif.issuer-ca` | `issuerCa` (`java.nio.file.Path`) | `/trust/ca.crt` | PEM-Datei mit dem Root-Zertifikat der internen CA, dem der Validator für die HTTPS-Verbindung zu `issuer-web` – und *nur* dafür – vertraut. |
-| `SERVER_PORT` / `server.port` | – | – | `8080` | HTTP-Port des Dienstes (`application.yaml:7`). |
+| `SERVER_PORT` / `server.port` | – | – | `8443` | HTTPS-Port des Dienstes (`application.yaml:7`); einen HTTP-Listener gibt es nicht. |
+| `VALIDATOR_TLS_DIR` | `spring.ssl.bundle.pem.validator.keystore.*` | – | `/tls` | Verzeichnis mit `tls.crt` / `tls.key` des HTTPS-Listeners (`application.yaml:18`). |
 
-Im Compose-Stack werden `WIF_ISSUER`, `WIF_AUDIENCE`, `WIF_ISSUER_CA` gesetzt
-(`compose.yaml:174`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/trust/ca.crt`)
+Im Compose-Stack werden `WIF_ISSUER`, `WIF_AUDIENCE`, `WIF_ISSUER_CA`, `VALIDATOR_TLS_DIR` gesetzt
+(`compose.yaml`, Dienst `validator`). `entrypoint.sh` liest zusätzlich `WIF_ISSUER_CA` (Default `/trust/ca.crt`)
 direkt (`entrypoint.sh:4`).
+
+**HTTPS-Listener.** `server.ssl.bundle: validator` mit dem PEM-Bundle
+`spring.ssl.bundle.pem.validator` (`keystore.certificate` / `keystore.private-key` aus
+`${VALIDATOR_TLS_DIR:/tls}/tls.crt` bzw. `tls.key`, Protokolle `TLSv1.3`, `TLSv1.2`). Das
+Zertifikat stellt `pki-init` aus (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`,
+`DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`, Volume `validator-tls`, Schlüssel uid 10001,
+Modus 400). Der Container läuft als `USER 10001`, `EXPOSE 8443`; in Compose
+`127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443`, Healthcheck
+`curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`. Pods rufen
+`https://validator.wif.local:8443` mit `--cacert /etc/internal-ca/ca.crt` auf, `demo`
+`https://validator:8443` mit `--cacert /trust/ca.crt`. Dieses Serverzertifikat ist unabhängig
+vom ausgehenden Vertrauen zu `issuer-web` (`WIF_ISSUER_CA`).
 
 Feste Werte im Code (keine Konfiguration):
 
@@ -119,7 +132,7 @@ JwksTrustConfig.tokenValidator(jwkSource, props)   (@Bean, JwksTrustConfig.java:
 TokenController wird mit dem TokenValidator injiziert   (TokenController.java:18)
         │
         ▼
-HTTP-Server lauscht auf :8080   ->  Healthcheck wird "healthy"
+HTTPS-Server lauscht auf :8443   ->  Healthcheck wird "healthy"
 ```
 
 Scheitert die Discovery beim Start (z. B. falscher `WIF_ISSUER`, kein Netz, Zertifikat passt
@@ -268,14 +281,15 @@ Nimbus-Fehlermeldung als `reason`.
 
 ---
 
-## HTTP-Endpunkte
+## Endpunkte (HTTPS)
 
-Kein Spring Security, kein Kontextpfad, keine Versionierung – flache Pfade auf Port 8080.
+Kein Spring Security, kein Kontextpfad, keine Versionierung – flache Pfade auf Port 8443 (nur HTTPS).
 
 ### `GET /healthz`
 
 `TokenController.java:22` – gibt `200` mit `{"status":"UP"}` zurück. Vom Docker-Healthcheck
-und für manuelle Checks vom Host (`curl localhost:18080/healthz`) genutzt. Keine
+und für manuelle Checks vom Host (`curl --cacert <lab-ca> https://localhost:18080/healthz`)
+genutzt. Keine
 Authentifizierung.
 
 ### `GET /whoami`
@@ -290,7 +304,7 @@ Authentifizierung.
 **Beispiel – gültiges Token (200):**
 
 ```
-$ curl -s -H "Authorization: Bearer $GOOD_TOKEN" http://localhost:18080/whoami
+$ curl -s --cacert <lab-ca> -H "Authorization: Bearer $GOOD_TOKEN" https://localhost:18080/whoami
 ```
 
 ```json
@@ -315,7 +329,7 @@ eingesetzt (`""` bzw. `{}`).
 **Beispiel – falsche audience (401):**
 
 ```
-$ curl -s -H "Authorization: Bearer $WRONG_AUD_TOKEN" http://localhost:18080/whoami
+$ curl -s --cacert <lab-ca> -H "Authorization: Bearer $WRONG_AUD_TOKEN" https://localhost:18080/whoami
 ```
 
 ```json
@@ -354,8 +368,8 @@ statischen `JWKSource` und signiert Test-Tokens selbst. Kein Netz, kein Docker, 
 | `validate_givenExpiredToken_thenRejected` (`:58`) | `iat` und `exp` liegen ~1 h in der Vergangenheit. | `valid() == false`, `reason` enthält `expired`. |
 | `validate_givenWrongIssuer_thenRejected` (`:72`) | `issuer("https://evil.example")`. | `valid() == false`, `reason` enthält `iss`. |
 | `validate_givenUnknownSigningKey_thenRejected` (`:82`) | Signiert mit `unknownKey` (`kid=rogue-kid`), der nicht im JWKS steht. | `valid() == false`. |
-| `validate_givenTamperedSignature_thenRejected` (`:91`) | Letztes Zeichen eines gültigen Tokens umgedreht. | `valid() == false`. |
-| `validate_givenMalformedToken_thenRejected` (`:100`) | Eingabe `"this.is.not-a-jwt"`. | `valid() == false` (`ParseException` gefangen). |
+| `validate_givenTamperedSignature_thenRejected` (`:91`) | Erstes Zeichen der Signatur ersetzt (das letzte base64url-Zeichen einer RS256/2048-Signatur trägt nur 2 Datenbits; eine Änderung dort kann die Signatur gültig lassen). | `valid() == false`. |
+| `validate_givenMalformedToken_thenRejected` (`:103`) | Eingabe `"this.is.not-a-jwt"`. | `valid() == false` (`ParseException` gefangen). |
 
 Diese Tests laufen im Docker-Build mit (`mvn clean package`), siehe
 [build-und-betrieb.md](build-und-betrieb.md). Die Ende-zu-Ende-Prüfung mit echten

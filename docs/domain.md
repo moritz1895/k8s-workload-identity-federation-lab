@@ -98,12 +98,12 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
   │                                                                                        │     │
   │   ServiceAccount "consumer"  ── die Identität, auf die das Token ausgestellt wird       │     │
   │                                                                                        ▼     │
-  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTP raus   │     │
+  │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTPS raus  │     │
   │        │                                                                                     │
   │   Pod "jwks-publisher"  ── liest Discovery-Doc + JWKS vom API-Server, lädt sie hoch ──┐      │
   └────────┼──────────────────────────────────────────────────────────────────────────────┼──────┘
            │                                                    PUT, mTLS (CN=jwks-publisher)
-           │  HTTP  GET /whoami        Authorization: Bearer <JWT>                         ▼
+           │  HTTPS GET /whoami        Authorization: Bearer <JWT>                         ▼
            ▼                                                             ┌──────────────────────────┐
    ┌─────────────────────────────┐         OIDC-Discovery + JWKS         │  Issuer-Endpoint         │
    │  Validator (Relying Party)  │ ──────────  nur HTTPS  ─────────────► │  "issuer-web" (nginx)    │
@@ -211,7 +211,7 @@ Serverzertifikat von `issuer-web` und das Client-Zertifikat des Publishers
 Spring-Boot-Service (Java), der **nicht** im Cluster läuft. Er ist der externe Dienst, gegen
 den sich der Pod ausweist.
 
-Der Validator bietet zwei HTTP-Endpunkte:
+Der Validator bietet zwei Endpunkte, nur über HTTPS (Port 8443, Zertifikat der internen PKI):
 
 | Pfad | Zweck |
 |---|---|
@@ -220,6 +220,18 @@ Der Validator bietet zwei HTTP-Endpunkte:
 
 Was genau er prüft, steht in [use-cases.md](use-cases.md). Quellcode:
 `validator/src/main/java/ms/rohde/wifpoc/`.
+
+### Der Autorisierungsserver und Dienst R
+
+Der Validator beantwortet nur, **wer** eine Workload ist. **Was** sie darf, entscheidet der
+Fachbereich, dem ein Dienst gehört, über einen eigenen Autorisierungsserver – im Lab ein
+Keycloak mit dem Realm `domain-rst`, den Pods nur über ein Gateway erreichen. Die Workload legt dort ihr ServiceAccount-Token als
+Client-Nachweis vor und bekommt ein Access-Token mit **Scopes** (z. B. `r:orders:read`).
+Der Ressourcendienst `service-r` prüft dieses Access-Token und schützt seine Endpunkte nach
+Scope; Workload-Namen kennt er nicht. Im Lab gibt es dafür zwei weitere Pods: `reader`
+(nur Leserecht) und `stranger` (gültige Identität, aber im Realm nicht registriert).
+Details: [ADR 0004](adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md) und
+[features/keycloak-autorisierungsserver.md](features/keycloak-autorisierungsserver.md).
 
 ---
 
@@ -391,3 +403,4 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 - [ADR 0001](adr/0001-offline-jwks-statt-tokenreview.md) - warum offline statt TokenReview.
 - [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - warum ein eigener Issuer-Endpoint.
 - [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - Publisher, mTLS-Upload, interne PKI, getrennte Netze.
+- [ADR 0004](adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md) - Keycloak als Autorisierungsserver pro Fachbereich.

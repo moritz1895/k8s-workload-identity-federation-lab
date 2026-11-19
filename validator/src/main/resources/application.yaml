@@ -4,8 +4,21 @@ wif:
   issuer-ca: ${WIF_ISSUER_CA:/trust/ca.crt}
 
 server:
-  port: 8080
+  port: 8443
   shutdown: graceful
+  ssl:
+    bundle: validator
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        validator:
+          keystore:
+            certificate: file:${VALIDATOR_TLS_DIR:/tls}/tls.crt
+            private-key: file:${VALIDATOR_TLS_DIR:/tls}/tls.key
+          options:
+            enabled-protocols: TLSv1.3,TLSv1.2
 
 logging:
   level:

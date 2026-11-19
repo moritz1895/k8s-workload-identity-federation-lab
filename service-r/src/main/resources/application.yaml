@@ -1,0 +1,26 @@
+service-r:
+  issuer: ${KC_REALM_ISSUER:https://keycloak:8443/realms/domain-rst}
+  audience: ${SERVICE_R_AUDIENCE:service-r}
+
+server:
+  port: 8443
+  shutdown: graceful
+  ssl:
+    bundle: service-r
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        service-r:
+          keystore:
+            certificate: file:${SERVICE_R_TLS_DIR:/tls}/tls.crt
+            private-key: file:${SERVICE_R_TLS_DIR:/tls}/tls.key
+          options:
+            enabled-protocols: TLSv1.3,TLSv1.2
+
+logging:
+  level:
+    root: INFO
+    org.springframework.security: INFO
+    ms.rohde.wifpoc.servicer: DEBUG

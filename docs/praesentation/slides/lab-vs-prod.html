@@ -7,7 +7,7 @@
 <tr><td>JWKS veröffentlichen</td><td>Publisher im Cluster pusht per mTLS bei Änderung</td><td>gleiches Muster, Upload zusätzlich inhaltlich prüfen und überwachen</td></tr>
 <tr><td>Schlüsselrotation</td><td>vorheriger Schlüssel bleibt bis zur nächsten Rotation im JWKS</td><td>alter Schlüssel bleibt mindestens Token-Laufzeit + Cache-Dauer im JWKS</td></tr>
 <tr><td>Widerruf</td><td>vor exp nicht möglich (10 min)</td><td>kurze Laufzeit, ggf. jti-Sperrliste oder hybride Online-Prüfung</td></tr>
-<tr><td>Transport zum Dienst</td><td>HTTP im Docker-Netz</td><td>TLS (einseitig), sonst ist das Bearer-Token mitlesbar</td></tr>
+<tr><td>Transport zum Dienst</td><td>TLS (einseitig) mit Zertifikat der Lab-CA</td><td>TLS mit Zertifikat der internen PKI; optional mTLS oder sender-gebundene Tokens (DPoP)</td></tr>
 <tr><td>Validator-Code</td><td>bewusst flach: ein Paket, wenige Klassen</td><td>Architekturstandards des Zielsystems</td></tr>
 </table>
 <ul class="pts">
