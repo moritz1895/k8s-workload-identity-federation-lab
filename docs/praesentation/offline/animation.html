@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIF-Ablauf Schritt für Schritt</title>
+<style>
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+</style>
+<style>
+/* Layout: Bühne (Canvas) links, Erklärung + Steuerung rechts; unter 960px untereinander. */
+:root {
+  --bg: #f4f5f2;
+  --surface: #ffffff;
+  --ink: #1b232c;
+  --muted: #5b6672;
+  --line: #c9cfd5;
+  --accent: #1f62b0;
+  --trust: #b8650f;
+  --token: #6b4bb8;
+  --ok: #23774a;
+  --bad: #b3261e;
+  --zone-a: #e9eef5;
+  --zone-b: #eef3ec;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161b; --surface: #1b2128; --ink: #e6eaee; --muted: #9aa5b1; --line: #3a444f;
+    --accent: #6ea8ec; --trust: #e3a04f; --token: #a98ef0; --ok: #5fbf88; --bad: #f07a72;
+    --zone-a: #19222d; --zone-b: #1a241d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161b; --surface: #1b2128; --ink: #e6eaee; --muted: #9aa5b1; --line: #3a444f;
+  --accent: #6ea8ec; --trust: #e3a04f; --token: #a98ef0; --ok: #5fbf88; --bad: #f07a72;
+  --zone-a: #19222d; --zone-b: #1a241d; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
+header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+h1 { font-size: 22px; font-weight: 700; margin: 0; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); font-size: 14px; }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px; padding: 12px 24px 24px; align-items: start; }
+@media (max-width: 960px) { .stage { grid-template-columns: 1fr; } }
+#canvas-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; line-height: 0; }
+#canvas-wrap canvas { display: block; width: 100% !important; height: auto !important; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.phase { font-weight: 600; color: var(--accent); }
+.count { font-variant-numeric: tabular-nums; }
+.panel h2 { font-size: 20px; line-height: 1.3; margin: 0; text-wrap: balance; }
+.panel .text { margin: 0; }
+.inspect { margin: 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inspect:empty { display: none; }
+.inspect-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
+.inspect-label:empty { display: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; }
+button { font: inherit; font-size: 14px; font-weight: 500; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:disabled { opacity: 0.45; cursor: default; }
+.speed { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.speed select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 10px; }
+.steps .ph { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 0 2px; }
+.steps .ph:first-child { margin-top: 0; }
+.steps button { width: 100%; text-align: left; border: none; padding: 4px 8px; font-size: 13.5px; font-weight: 400; border-radius: 5px; display: flex; gap: 8px; }
+.steps button .n { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.6em; }
+.steps button[aria-current="step"] { background: var(--zone-a); font-weight: 600; }
+.steps button[aria-current="step"] .n { color: var(--accent); }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+/* Einbettung in eine Präsentation (?embed): nur Bühne und Erklärung, Steuerung über postMessage */
+body.embed { background: transparent; }
+body.embed header, body.embed .controls, body.embed .speed, body.embed .hint, body.embed .steps { display: none; }
+body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; }
+body.embed .panel { max-height: 100vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Workload Identity Federation: Ablauf Schritt für Schritt</h1>
+  <p>PoC k8s-workload-identity-federation-lab · von der PKI bis zum Aufruf von Dienst R</p>
+</header>
+<div class="stage">
+  <div>
+    <div id="canvas-wrap" role="img" aria-label="Animierte Darstellung des aktuellen Schritts: Komponenten des Labs und die Nachrichten zwischen ihnen."></div>
+    <div class="legend" aria-hidden="true">
+      <span><i style="background:var(--trust)"></i>Zertifikate und Vertrauensanker</span>
+      <span><i style="background:var(--accent)"></i>Schlüssel und Metadaten</span>
+      <span><i style="background:var(--token)"></i>Tokens und Anfragen</span>
+      <span><i style="background:var(--ok)"></i>erfolgreich</span>
+      <span><i style="background:var(--bad)"></i>abgelehnt</span>
+    </div>
+  </div>
+  <aside class="panel" aria-live="polite">
+    <div class="meta"><span class="phase" id="phase"></span><span class="count" id="count"></span></div>
+    <h2 id="title"></h2>
+    <p class="text" id="text"></p>
+    <div class="inspect-label" id="inspect-label"></div>
+    <pre class="inspect" id="inspect"></pre>
+    <div class="controls">
+      <button id="btn-prev" type="button">◀ Zurück</button>
+      <button id="btn-play" type="button" class="primary">▶ Abspielen</button>
+      <button id="btn-next" type="button">Weiter ▶</button>
+      <button id="btn-replay" type="button">Schritt wiederholen</button>
+    </div>
+    <label class="speed" for="speed">Tempo
+      <select id="speed">
+        <option value="0.6">langsam</option>
+        <option value="1" selected>normal</option>
+        <option value="1.6">schnell</option>
+      </select>
+    </label>
+    <p class="hint">Tastatur: ← und → wechseln den Schritt, Leertaste startet oder pausiert.</p>
+    <ol class="steps" id="steps"></ol>
+  </aside>
+</div>
+
+<script src="lib/p5.min.js"></script>
+<script>
+"use strict";
+const W = 1280, H = 720;
+
+// Knoten im Entwurfsraster 1280 x 720
+const N = {
+  pki: { x: 40,  y: 20,  w: 250, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
+  api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt Tokens aus" },
+  pub: { x: 280, y: 284, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
+  pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "Workload A" },
+  iss: { x: 540, y: 146, w: 210, h: 96, t: "issuer-web", s: "nginx · :8443 / :443" },
+  gw:  { x: 600, y: 396, w: 200, h: 86, t: "keycloak-gateway", s: "nur Realm-Pfade" },
+  kc:  { x: 900, y: 156, w: 230, h: 92, t: "Keycloak", s: "Realm domain-rst" },
+  r:   { x: 1000, y: 452, w: 220, h: 92, t: "Dienst R", s: "service-r" },
+  val: { x: 870, y: 600, w: 220, h: 86, t: "Validator", s: "direkte Föderation" }
+};
+const ZONES = [
+  { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster · cluster-net", tone: "zone-a" },
+  { x: 846, y: 118, w: 410, h: 586, label: "Prüfende Dienste · relying-net", tone: "zone-b" }
+];
+
+const PH = ["Vorbereitung", "Identität", "Autorisierung", "Aufruf von Dienst R", "Gegenproben und Betrieb"];
+
+// Schritt-Bausteine
+const mv = (a, b, label, tone, net) => ({ k: "move", a, b, label, tone, net });
+const par = (...moves) => ({ k: "par", moves });
+const chk = (at, items, side) => ({ k: "check", at, items, side: side || "right" });
+const blk = (a, b) => ({ k: "block", a, b });
+
+const STEPS = [
+  { ph: 0, title: "Die interne PKI stellt Zertifikate aus",
+    text: "Im Lab spielt pki-init die interne PKI. Es erzeugt Serverzertifikate für issuer-web, Keycloak (auch für das Gateway), Dienst R und den Validator – und genau ein Client-Zertifikat: CN=jwks-publisher. Den CA-Schlüssel sieht nur pki-init.",
+    il: "Zertifikat des Publishers", inspect: "Subject: CN=jwks-publisher, O=WIF Lab\nAussteller: Lab-CA (interne PKI)\nZweck: TLS-Client-Authentisierung\nÜbergabe: bootstrap legt es als Secret im Cluster ab",
+    segs: [par(mv("pki", "iss", "Server-Zert.", "trust"), mv("pki", "kc", "Server-Zert.", "trust"), mv("pki", "r", "Server-Zert.", "trust"), mv("pki", "val", "Server-Zert.", "trust"), mv("pki", "pub", "Client-Zert.", "trust"))],
+    fx: s => { ["iss", "kc", "gw", "r", "val"].forEach(n => s.cert.add(n)); s.clientCert = true; } },
+  { ph: 0, title: "Das Root-Zertifikat wird an alle Prüfer verteilt",
+    text: "Wer ein Zertifikat prüfen muss, bekommt das Root-Zertifikat der internen CA – auf einem anderen Weg als die Daten (im Lab: schreibgeschütztes Volume, für Pods die ConfigMap internal-ca). Dienst R und der Validator vertrauen nur dieser CA, Keycloak ergänzt seinen Truststore um sie.",
+    il: "", inspect: "",
+    segs: [par(mv("pki", "pub", "Root-CA", "trust"), mv("pki", "pod", "Root-CA", "trust"), mv("pki", "kc", "Root-CA", "trust"), mv("pki", "r", "Root-CA", "trust"), mv("pki", "val", "Root-CA", "trust"))],
+    fx: s => { ["pub", "pod", "kc", "r", "val"].forEach(n => s.ca.add(n)); } },
+  { ph: 0, title: "Der Cluster startet mit eigenem Signaturschlüssel",
+    text: "sa-keys erzeugt das Schlüsselpaar für ServiceAccount-Tokens. Der API-Server signiert damit alle Tokens und trägt als Aussteller eine Adresse außerhalb des Clusters ein.",
+    il: "Startparameter des API-Servers", inspect: "--service-account-issuer=https://issuer-web\n--service-account-jwks-uri=https://issuer-web/openid/v1/jwks\n--service-account-signing-key-file=…  (privat)\n--service-account-key-file=…          (öffentlich)",
+    segs: [chk("api", ["privater Schlüssel geladen", "iss = https://issuer-web", "jwks_uri zeigt auf issuer-web"])],
+    fx: s => { s.apiKey = 1; } },
+  { ph: 0, title: "Der Publisher liest Discovery-Dokument und JWKS",
+    text: "Der Pod jwks-publisher fragt mit seinem eigenen ServiceAccount den API-Server. Er hat nur die eingebaute Rolle system:service-account-issuer-discovery: GET auf genau zwei Pfade. Es verlassen nur öffentliche Schlüssel den API-Server.",
+    il: "JWKS (gekürzt)", inspect: "{\n  \"keys\": [{\n    \"kty\": \"RSA\", \"alg\": \"RS256\", \"use\": \"sig\",\n    \"kid\": \"<Key-ID>\", \"n\": \"…\", \"e\": \"AQAB\"\n  }]\n}",
+    segs: [mv("pub", "api", "GET JWKS", "token"), mv("api", "pub", "JWKS", "key")],
+    fx: s => { s.pubHas = true; } },
+  { ph: 0, title: "Upload per mTLS zu issuer-web",
+    text: "Der Publisher lädt beide Dokumente per PUT auf Port 8443 hoch. Dieser Port lauscht nur im Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau diesem DN – sonst 400 bzw. 403. Danach vergleicht der Publisher alle 15 s, ob issuer-web noch den Stand des Clusters ausliefert.",
+    il: "Anfrage", inspect: "PUT https://issuer-web:8443/openid/v1/jwks\nPUT https://issuer-web:8443/.well-known/openid-configuration\nClient-Zertifikat: CN=jwks-publisher, O=WIF Lab",
+    segs: [mv("pub", "iss", "PUT JWKS", "key", "cluster-net · mTLS"), chk("iss", ["Zertifikat von der internen CA", "DN exakt CN=jwks-publisher", "Upload protokolliert"], "below")],
+    fx: s => { s.issJwks = 1; } },
+  { ph: 0, title: "Der Validator lädt die öffentlichen Schlüssel",
+    text: "Beim Start holt der Validator über Port 443 das Discovery-Dokument, daraus die jwks_uri, dann das JWKS. Die Verbindung zählt nur, wenn issuer-web ein Zertifikat der internen CA vorweist. Passt der Issuer im Discovery-Dokument nicht, startet der Validator nicht.",
+    il: "", inspect: "",
+    segs: [mv("val", "iss", "GET Discovery", "token", "relying-net · TLS"), mv("iss", "val", "Discovery + JWKS", "key", "relying-net · TLS")],
+    fx: s => { s.jwks.add("val"); } },
+
+  { ph: 1, title: "Das kubelet holt Tokens für den Pod",
+    text: "Für den Pod fordert das kubelet zwei Tokens an, eines pro Empfänger: sa-token für den Validator und kc-token für Keycloak. Beide gelten 600 s und werden vor Ablauf automatisch erneuert. Der Pod besitzt kein Secret.",
+    il: "Claims des kc-token", inspect: "{\n  \"iss\": \"https://issuer-web\",\n  \"aud\": [\"https://keycloak:8443/realms/domain-rst\"],\n  \"sub\": \"system:serviceaccount:wif-demo:consumer\",\n  \"exp\": iat + 600,\n  \"kubernetes.io\": { \"namespace\": \"wif-demo\", … }\n}\nDatei: /var/run/secrets/tokens/kc-token",
+    segs: [mv("api", "pod", "sa-token", "token"), mv("api", "pod", "kc-token", "token")],
+    fx: s => { s.files.push("sa-token", "kc-token"); } },
+
+  { ph: 2, title: "Token-Anfrage an Keycloak",
+    text: "Der Pod ruft den Token-Endpunkt seines Fachbereichs auf: client_credentials, ohne Client-Secret, mit dem kc-token als Client-Assertion. Der Name keycloak zeigt im Pod auf das Gateway; die Verbindung ist TLS mit Zertifikat der internen CA.",
+    il: "Anfrage", inspect: "POST https://keycloak:8443/realms/domain-rst/\n     protocol/openid-connect/token\ngrant_type=client_credentials\nclient_assertion_type=…:jwt-bearer\nclient_assertion=<kc-token>\nscope=r:orders:read r:orders:write",
+    segs: [mv("pod", "gw", "POST /token", "token", "workload-net · TLS")], fx: null },
+  { ph: 2, title: "Das Gateway lässt nur den Realm durch",
+    text: "keycloak-gateway leitet nur GET und POST unter /realms/domain-rst/ an Keycloak weiter. Admin-API und Master-Realm sind aus den Pods nicht erreichbar (404). Keycloak selbst hängt nur im Netz der prüfenden Dienste.",
+    il: "", inspect: "",
+    segs: [chk("gw", ["Pfad /realms/domain-rst/…", "Methode POST"], "below"), mv("gw", "kc", "POST /token", "token", "relying-net · TLS")], fx: null },
+  { ph: 2, title: "Keycloak holt die Schlüssel des Clusters",
+    text: "Keycloak liest iss = https://issuer-web und findet den Identity-Provider lab-cluster. Dessen Schlüssel lädt es über Discovery und JWKS von issuer-web – über TLS mit der internen CA – und hält sie im Cache.",
+    il: "", inspect: "",
+    segs: [mv("kc", "iss", "GET Discovery", "token", "relying-net · TLS"), mv("iss", "kc", "Discovery + JWKS", "key", "relying-net · TLS")],
+    fx: s => { s.jwks.add("kc"); } },
+  { ph: 2, title: "Keycloak prüft die Identität",
+    text: "Geprüft werden Signatur (Schlüssel zur kid), Audienz und Laufzeit des kc-token. Dann sucht Keycloak den Client, der an lab-cluster gebunden ist und genau diesen sub trägt. Gibt es keinen, antwortet Keycloak mit 401 invalid_client.",
+    il: "Client im Realm", inspect: "clientId: workload-a\nclientAuthenticatorType: federated-jwt\njwt.credential.issuer: lab-cluster\njwt.credential.sub:\n  system:serviceaccount:wif-demo:consumer\noptionale Scopes: r:orders:read, r:orders:write,\n                  s:inventory:read",
+    segs: [chk("kc", ["Signatur (kid im JWKS)", "aud = Realm-Issuer", "exp / nbf", "sub → Client workload-a"], "below")], fx: null },
+  { ph: 2, title: "Keycloak stellt das Access-Token aus",
+    text: "Ins Token kommen nur Scopes, die dem Client im Realm zugeordnet sind; fordert er mehr, lehnt Keycloak mit invalid_scope ab. Die Audienz kommt aus dem Scope: service-r. Das Token gilt 300 s und ist mit dem Schlüssel des Realms signiert.",
+    il: "Claims des Access-Tokens", inspect: "{\n  \"iss\": \"https://keycloak:8443/realms/domain-rst\",\n  \"aud\": \"service-r\",\n  \"typ\": \"Bearer\",\n  \"azp\": \"workload-a\",\n  \"scope\": \"r:orders:read r:orders:write\",\n  \"sub\": \"<UUID des Service-Account-Benutzers>\",\n  \"exp\": iat + 300\n}",
+    segs: [mv("kc", "gw", "Access-Token", "token", "relying-net · TLS"), mv("gw", "pod", "Access-Token", "token", "workload-net · TLS")],
+    fx: s => { s.files.push("Access-Token"); } },
+  { ph: 2, title: "Die Workload cacht das Access-Token",
+    text: "Die Workload fragt nicht bei jedem Aufruf neu an. Sie hält das Token im Speicher und erneuert es, sobald die Restlaufzeit unter 60 s fällt; dafür liest sie das kc-token jedes Mal neu. Im Lab macht das access-token.sh, in Spring ein OAuth2AuthorizedClientManager.",
+    il: "", inspect: "",
+    segs: [chk("pod", ["im Speicher bis exp − 60 s", "dann neues Token anfordern"], "right")], fx: null },
+
+  { ph: 3, title: "Aufruf von Dienst R",
+    text: "GET /orders mit dem Access-Token als Bearer, über TLS mit Zertifikat der internen CA. Das ServiceAccount-Token geht nie an R – R würde es mit 401 ablehnen.",
+    il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <Access-Token>",
+    segs: [mv("pod", "r", "GET /orders", "token", "workload-net · TLS")], fx: null },
+  { ph: 3, title: "R lädt die Schlüssel des Realms",
+    text: "Beim ersten Token macht Dienst R die Discovery bei Keycloak und cacht das JWKS des Realms. Darum startet R unabhängig davon, ob Keycloak schon läuft.",
+    il: "", inspect: "",
+    segs: [mv("r", "kc", "GET Discovery", "token", "relying-net · TLS"), mv("kc", "r", "Realm-JWKS", "key", "relying-net · TLS")],
+    fx: s => { s.jwks.add("r"); } },
+  { ph: 3, title: "R prüft das Token und bildet Authorities",
+    text: "Dienst R (service-r) ist ein Standard-Spring-Resource-Server ohne eigene Prüfkette. Jeder Scope im Token wird zur Authority SCOPE_<scope>. R kennt keine Workload-Namen.",
+    il: "Ergebnis", inspect: "Principal:   workload-a (aus azp)\nAuthorities: SCOPE_r:orders:read\n             SCOPE_r:orders:write",
+    segs: [chk("r", ["Signatur, nur RS256", "iss = Realm-Issuer", "aud genau [service-r]", "typ = Bearer, azp vorhanden", "exp"], "left")], fx: null },
+  { ph: 3, title: "Die Endpunkt-Regel greift: 200",
+    text: "GET /orders verlangt SCOPE_r:orders:read. Die Authority ist vorhanden, also antwortet R mit 200. Neue Workloads zu berechtigen ändert nur den Realm, neue Endpunkte zu schützen nur den Code von R.",
+    il: "Regeln in R", inspect: "GET    /orders       → SCOPE_r:orders:read\nPOST   /orders       → SCOPE_r:orders:write\nDELETE /orders/{id}  → SCOPE_r:orders:admin\nalles andere         → abgelehnt",
+    segs: [mv("r", "pod", "200", "ok", "workload-net · TLS")], fx: null },
+
+  { ph: 4, title: "Fehlender Scope: 403",
+    text: "DELETE /orders/{id} verlangt SCOPE_r:orders:admin. Dieser Scope ist keinem Client zugeordnet, also antwortet R mit 403 insufficient_scope – das Token selbst ist gültig.",
+    il: "", inspect: "",
+    segs: [mv("pod", "r", "DELETE /orders/7", "token", "workload-net · TLS"), mv("r", "pod", "403", "bad", "workload-net · TLS")], fx: null },
+  { ph: 4, title: "Variante: Pod → Validator, ohne Autorisierungsserver",
+    text: "Der zweite Weg im Lab: Der Pod legt sein sa-token direkt beim Validator vor. Der Validator beantwortet nur „wer bist du?“, Rechte gibt es dort nicht. Der Validator prüft offline gegen das gecachte JWKS – ohne Keycloak und ohne Rückfrage beim Cluster.",
+    il: "Antwort", inspect: "HTTP 200\n{ \"sub\": \"system:serviceaccount:wif-demo:consumer\",\n  \"aud\": [\"wif-demo-validator\"], … }",
+    segs: [mv("pod", "val", "GET /whoami", "token", "workload-net · TLS"), chk("val", ["Signatur gegen JWKS", "iss = https://issuer-web", "aud = wif-demo-validator", "exp, 60 s Toleranz"], "left"), mv("val", "pod", "200 + Claims", "ok", "workload-net · TLS")], fx: null },
+  { ph: 4, title: "Kein Weg zum API-Server",
+    text: "Keycloak, Dienst R und Validator haben keinen Netzweg zum API-Server und kein Cluster-Credential. run-all-checks.sh prüft das aus Sicht jedes dieser Dienste.",
+    il: "", inspect: "",
+    segs: [par(blk("val", "api"), blk("kc", "api"), blk("r", "api"))], fx: null },
+  { ph: 4, title: "Schlüsselrotation",
+    text: "sa-keys erzeugt einen neuen Signaturschlüssel, den der API-Server beim Neustart liest. Der Publisher bemerkt die Änderung beim nächsten Vergleich und lädt das neue JWKS hoch. Der alte Schlüssel bleibt als Prüfschlüssel drin: Tokens von vor der Rotation gelten weiter, neue werden mit dem neuen Schlüssel signiert.",
+    il: "JWKS nach der Rotation", inspect: "{ \"keys\": [\n  { \"kid\": \"<neu>\", … },   ← signiert neue Tokens\n  { \"kid\": \"<alt>\", … }    ← nur noch zum Prüfen\n] }",
+    segs: [chk("api", ["neuer Schlüssel signiert", "alter bleibt zum Prüfen"], "right"), mv("api", "pub", "JWKS (2 Schlüssel)", "key"), mv("pub", "iss", "PUT JWKS", "key", "cluster-net · mTLS")],
+    fx: s => { s.apiKey = 2; s.issJwks = 2; } }
+];
+
+function freshState() {
+  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], clientCert: false, apiKey: 0, issJwks: 0, pubHas: false };
+}
+function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
+
+const DUR = { move: 1500, item: 520, block: 1500, gap: 260 };
+function segDur(seg) {
+  if (seg.k === "move") return DUR.move;
+  if (seg.k === "check") return seg.items.length * DUR.item + 300;
+  if (seg.k === "block") return DUR.block;
+  if (seg.k === "par") return Math.max(...seg.moves.map(segDur));
+  return 0;
+}
+function stepDur(i) { return STEPS[i].segs.reduce((a, s) => a + segDur(s) + DUR.gap, 0); }
+
+// ---------- Zustand der Seite ----------
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let cur = 0, t0 = 0, playing = false, speed = 1, pausedAt = null, doneSince = null;
+const DWELL = 3200;
+
+const el = id => document.getElementById(id);
+function buildList() {
+  const ol = el("steps");
+  let last = -1;
+  STEPS.forEach((st, i) => {
+    if (st.ph !== last) { const li = document.createElement("li"); li.className = "ph"; li.textContent = PH[st.ph]; ol.appendChild(li); last = st.ph; }
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "step-" + (i + 1);
+    b.innerHTML = '<span class="n">' + (i + 1) + "</span><span></span>";
+    b.lastChild.textContent = st.title;
+    b.addEventListener("click", () => go(i));
+    li.appendChild(b); ol.appendChild(li);
+  });
+}
+function renderPanel() {
+  const st = STEPS[cur];
+  el("phase").textContent = PH[st.ph];
+  el("count").textContent = "Schritt " + (cur + 1) + " von " + STEPS.length;
+  el("title").textContent = st.title;
+  el("text").textContent = st.text;
+  el("inspect-label").textContent = st.il || "";
+  el("inspect").textContent = st.inspect || "";
+  el("btn-prev").disabled = cur === 0;
+  el("btn-next").disabled = cur === STEPS.length - 1;
+  el("btn-play").textContent = playing ? "❚❚ Pause" : "▶ Abspielen";
+  document.querySelectorAll(".steps button").forEach((b, i) => {
+    if (i === cur) { b.setAttribute("aria-current", "step"); if (!EMBED) b.scrollIntoView({ block: "nearest" }); }
+    else b.removeAttribute("aria-current");
+  });
+}
+function now() { return performance.now(); }
+function elapsed() { const base = pausedAt !== null ? pausedAt : now(); return reduceMotion ? Infinity : (base - t0) * speed; }
+function go(i) {
+  cur = Math.max(0, Math.min(STEPS.length - 1, i));
+  t0 = now(); doneSince = null;
+  if (pausedAt !== null) pausedAt = now();
+  renderPanel();
+  if (typeof postState === "function") postState();
+}
+function togglePlay() {
+  playing = !playing;
+  if (playing && cur === STEPS.length - 1 && elapsed() >= stepDur(cur)) go(0);
+  renderPanel();
+}
+el("btn-prev").addEventListener("click", () => go(cur - 1));
+el("btn-next").addEventListener("click", () => go(cur + 1));
+el("btn-replay").addEventListener("click", () => go(cur));
+el("btn-play").addEventListener("click", togglePlay);
+el("speed").addEventListener("change", e => { const e0 = elapsed(); speed = parseFloat(e.target.value); t0 = now() - (isFinite(e0) ? e0 / speed : 0); });
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("select")) return;
+  if (e.key === "ArrowRight") { go(cur + 1); e.preventDefault(); }
+  else if (e.key === "ArrowLeft") { go(cur - 1); e.preventDefault(); }
+  else if (e.key === " " && !(e.target instanceof HTMLButtonElement)) { togglePlay(); e.preventDefault(); }
+});
+
+// ---------- Zeichnen (p5) ----------
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  ["bg", "surface", "ink", "muted", "line", "accent", "trust", "token", "ok", "bad", "zone-a", "zone-b"].forEach(k => C[k] = cs.getPropertyValue("--" + k).trim());
+}
+const center = n => ({ x: N[n].x + N[n].w / 2, y: N[n].y + N[n].h / 2 });
+// Randpunkt eines Knotens in Richtung eines Zielpunkts
+function edgePoint(n, toward) {
+  const c = center(n), b = N[n];
+  const dx = toward.x - c.x, dy = toward.y - c.y;
+  const sx = dx === 0 ? Infinity : (b.w / 2 + 6) / Math.abs(dx);
+  const sy = dy === 0 ? Infinity : (b.h / 2 + 6) / Math.abs(dy);
+  const s = Math.min(sx, sy);
+  return { x: c.x + dx * s, y: c.y + dy * s };
+}
+function ends(a, b) { const p = edgePoint(a, center(b)), q = edgePoint(b, center(a)); return [p, q]; }
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+let FONT = "sans-serif";
+const sketch = p => {
+  let scaleF = 1;
+  function size() {
+    const wrap = document.getElementById("canvas-wrap");
+    const w = Math.max(320, wrap.clientWidth);
+    scaleF = w / W;
+    return [w, w * H / W];
+  }
+  p.setup = () => {
+    const [w, h] = size();
+    p.createCanvas(w, h);
+    p.pixelDensity(EMBED ? 2 : Math.min(2, window.devicePixelRatio || 1));
+    p.textFont(FONT);
+    document.fonts.load('16px "IBM Plex Sans"').then(() => { if (document.fonts.check('16px "IBM Plex Sans"')) FONT = "IBM Plex Sans"; }).catch(() => {});
+    readColors();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
+    new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  };
+  p.windowResized = () => { const [w, h] = size(); p.resizeCanvas(w, h); };
+
+  const col = (k, a) => { const c = p.color(C[k] || "#888"); if (a !== undefined) c.setAlpha(a); return c; };
+
+  function pill(x, y, label, tone, filled) {
+    p.textSize(14.5); p.textStyle(p.BOLD);
+    const tw = p.textWidth(label) + 20;
+    p.noStroke();
+    p.fill(filled ? col(tone) : col("surface"));
+    if (!filled) { p.stroke(col(tone)); p.strokeWeight(1.5); }
+    p.rectMode(p.CENTER); p.rect(x, y, tw, 26, 13); p.rectMode(p.CORNER);
+    p.noStroke(); p.fill(filled ? col("surface") : col(tone));
+    p.textAlign(p.CENTER, p.CENTER); p.text(label, x, y + 1);
+    p.textStyle(p.NORMAL);
+  }
+  function badge(x, y, label, tone) {
+    p.textSize(13); p.textStyle(p.BOLD);
+    const tw = p.textWidth(label) + 12;
+    p.noStroke(); p.fill(col(tone, 40)); p.rect(x, y, tw, 21, 4);
+    p.fill(col(tone)); p.textAlign(p.LEFT, p.CENTER); p.text(label, x + 6, y + 11);
+    p.textStyle(p.NORMAL);
+    return tw + 4;
+  }
+  function node(n, st, active) {
+    const b = N[n];
+    p.stroke(active ? col("accent") : col("line")); p.strokeWeight(active ? 2.5 : 1.5);
+    p.fill(col("surface")); p.rect(b.x, b.y, b.w, b.h, 10);
+    p.noStroke(); p.fill(col("ink")); p.textAlign(p.LEFT, p.TOP);
+    p.textSize(18); p.textStyle(p.BOLD); p.text(b.t, b.x + 12, b.y + 8);
+    p.textStyle(p.NORMAL); p.textSize(14); p.fill(col("muted")); p.text(b.s, b.x + 12, b.y + 30);
+    // Merkmale
+    let bx = b.x + 12; const by = b.y + b.h - 28;
+    if (st.cert.has(n)) bx += badge(bx, by, "Zert.", "trust");
+    if (n === "pub" && st.clientCert) bx += badge(bx, by, "mTLS-Zert.", "trust");
+    if (st.ca.has(n)) bx += badge(bx, by, "CA", "trust");
+    if (n === "api" && st.apiKey) bx += badge(bx, by, st.apiKey === 2 ? "Schlüssel neu + alt" : "Signaturschlüssel", "accent");
+    if (n === "iss" && st.issJwks) bx += badge(bx, by, st.issJwks === 2 ? "JWKS (2)" : "JWKS", "accent");
+    if (st.jwks.has(n)) bx += badge(bx, by, n === "r" ? "Realm-JWKS" : "JWKS-Cache", "accent");
+    if (n === "pki") badge(bx, by, "CA-Schlüssel", "trust");
+    if (n === "pod" && st.files.length) {
+      let fx = b.x; const fy = b.y + b.h + 8;
+      st.files.forEach(f => { fx += badge(fx, fy, f, f === "Access-Token" ? "ok" : "token"); });
+    }
+  }
+  function zones() {
+    ZONES.forEach(z => {
+      p.noStroke(); p.fill(col(z.tone)); p.rect(z.x, z.y, z.w, z.h, 14);
+      p.fill(col("muted")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.LEFT, p.TOP);
+      p.text(z.label, z.x + 14, z.y + 10); p.textStyle(p.NORMAL);
+    });
+    p.fill(col("muted")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.LEFT, p.TOP);
+    p.text("workload-net", 500, 640); p.textStyle(p.NORMAL);
+  }
+  const LINKS = [["pki", "iss"], ["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["iss", "val"], ["pod", "gw"], ["gw", "kc"], ["pod", "r"], ["r", "kc"], ["pod", "val"]];
+  function staticLinks() {
+    p.stroke(col("line")); p.strokeWeight(1.2);
+    p.drawingContext.setLineDash([4, 5]);
+    LINKS.forEach(([a, b]) => { const [u, v] = ends(a, b); p.line(u.x, u.y, v.x, v.y); });
+    p.drawingContext.setLineDash([]);
+  }
+  function arrowHead(x, y, ang, c) {
+    p.push(); p.translate(x, y); p.rotate(ang); p.noStroke(); p.fill(c);
+    p.triangle(0, 0, -11, -5.5, -11, 5.5); p.pop();
+  }
+  function drawMove(seg, t) {
+    const [u, v] = ends(seg.a, seg.b);
+    const c = col(seg.tone);
+    const e = ease(clamp01(t));
+    // Linie wächst mit
+    p.stroke(c); p.strokeWeight(2.5);
+    const hx = u.x + (v.x - u.x) * Math.max(e, 0.02), hy = u.y + (v.y - u.y) * Math.max(e, 0.02);
+    p.line(u.x, u.y, hx, hy);
+    if (e >= 0.98) arrowHead(v.x, v.y, Math.atan2(v.y - u.y, v.x - u.x), c);
+    if (seg.net) {
+      const mx = (u.x + v.x) / 2, my = (u.y + v.y) / 2;
+      p.noStroke(); p.textSize(13); p.textStyle(p.BOLD);
+      const tw = p.textWidth(seg.net) + 12;
+      const ox = Math.abs(v.y - u.y) > Math.abs(v.x - u.x) ? tw / 2 + 14 : 0;
+      const oy = ox ? 0 : -22;
+      p.fill(col("surface", 235)); p.rectMode(p.CENTER); p.rect(mx + ox, my + oy, tw, 21, 4); p.rectMode(p.CORNER);
+      p.fill(col("muted")); p.textAlign(p.CENTER, p.CENTER); p.text(seg.net, mx + ox, my + oy + 1);
+      p.textStyle(p.NORMAL);
+    }
+    if (t < 1.15) pill(hx, hy, seg.label, seg.tone, true);
+  }
+  function drawBlock(seg, t) {
+    const [u, v] = ends(seg.a, seg.b);
+    const reach = 0.22, e = ease(clamp01(t / 0.6)) * reach;
+    const hx = u.x + (v.x - u.x) * e, hy = u.y + (v.y - u.y) * e;
+    p.stroke(col("bad")); p.strokeWeight(2.2); p.drawingContext.setLineDash([7, 6]);
+    p.line(u.x, u.y, hx, hy); p.drawingContext.setLineDash([]);
+    if (t > 0.6) {
+      p.strokeWeight(4); const s = 10;
+      p.line(hx - s, hy - s, hx + s, hy + s); p.line(hx - s, hy + s, hx + s, hy - s);
+      p.noStroke(); p.fill(col("bad")); p.textSize(14); p.textStyle(p.BOLD); p.textAlign(p.CENTER, p.BOTTOM);
+      p.text("kein Netzweg", hx, hy - 14); p.textStyle(p.NORMAL);
+    }
+  }
+  function drawCheck(seg, tms) {
+    const b = N[seg.at];
+    const shown = Math.min(seg.items.length, Math.floor(tms / DUR.item) + 1);
+    p.textSize(14.5);
+    const w = Math.max(...seg.items.map(s => p.textWidth(s))) + 48;
+    const h = seg.items.length * 25 + 14;
+    let x, y;
+    if (seg.side === "right") { x = b.x + b.w + 14; y = b.y; }
+    else if (seg.side === "left") { x = b.x - w - 14; y = b.y; }
+    else { x = b.x + b.w / 2 - w / 2; y = b.y + b.h + 12; }
+    x = Math.max(8, Math.min(W - w - 8, x)); y = Math.max(8, Math.min(H - h - 8, y));
+    p.stroke(col("accent")); p.strokeWeight(1.5); p.fill(col("surface")); p.rect(x, y, w, h, 8);
+    p.noStroke(); p.textAlign(p.LEFT, p.CENTER);
+    for (let i = 0; i < shown; i++) {
+      const yy = y + 19 + i * 25;
+      p.fill(col("ok")); p.textStyle(p.BOLD); p.text("✓", x + 12, yy);
+      p.fill(col("ink")); p.textStyle(p.NORMAL); p.text(seg.items[i], x + 30, yy);
+    }
+  }
+
+  p.draw = () => {
+    if (!C.ink) readColors();
+    const total = stepDur(cur);
+    const e = elapsed();
+    const done = e >= total;
+    if (done && doneSince === null) doneSince = now();
+    if (playing && done && doneSince !== null && now() - doneSince > DWELL / speed) {
+      if (cur < STEPS.length - 1) go(cur + 1); else { playing = false; renderPanel(); }
+    }
+    const st = stateBefore(cur);
+    if (done && STEPS[cur].fx) STEPS[cur].fx(st);
+
+    p.textFont(FONT);
+    p.clear(); p.background(col("surface"));
+    p.push(); p.scale(scaleF);
+    zones(); staticLinks();
+    // aktive Knoten des Schritts
+    const act = new Set();
+    STEPS[cur].segs.forEach(s => { (s.k === "par" ? s.moves : [s]).forEach(m => { if (m.a) { act.add(m.a); act.add(m.b); } if (m.at) act.add(m.at); }); });
+    Object.keys(N).forEach(n => node(n, st, act.has(n)));
+
+    // Segmente abspielen
+    let acc = 0;
+    const overlays = [];
+    for (const seg of STEPS[cur].segs) {
+      const d = segDur(seg), local = e - acc;
+      if (local >= 0) {
+        const list = seg.k === "par" ? seg.moves : [seg];
+        for (const m of list) {
+          const md = segDur(m), tt = local / md;
+          if (m.k === "move" && (tt < 1.15 || !isFinite(e) || done)) drawMove(m, isFinite(tt) ? tt : 2);
+          if (m.k === "block") drawBlock(m, isFinite(tt) ? Math.min(tt, 1) : 1);
+          if (m.k === "check") overlays.push([m, isFinite(local) ? local : Infinity]);
+        }
+      }
+      acc += d + DUR.gap;
+    }
+    overlays.forEach(([m, l]) => drawCheck(m, l));
+    p.pop();
+  };
+};
+
+const EMBED = new URLSearchParams(location.search).has("embed");
+if (EMBED) document.body.classList.add("embed");
+function postState() { if (window.parent !== window) window.parent.postMessage({ wif: "state", step: cur, total: STEPS.length }, "*"); }
+window.addEventListener("message", e => {
+  const m = e.data || {};
+  if (m.wif === "next") go(cur + 1);
+  else if (m.wif === "prev") go(cur - 1);
+  else if (m.wif === "first") go(0);
+  else if (m.wif === "last") go(STEPS.length - 1);
+  else if (m.wif === "state") postState();
+});
+buildList();
+renderPanel();
+t0 = now();
+postState();
+new p5(sketch, "canvas-wrap");
+</script>
+</body>
+</html>

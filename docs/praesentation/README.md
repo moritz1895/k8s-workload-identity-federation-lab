@@ -38,3 +38,27 @@ Hauptteil: `cover` → `problem` → `idee` → `ebenen` → `motivation` → `a
 
 Anhang: `anhang` → `ablauf` → `fehlerfaelle` → `netze` → `aufbau` → `fehlerfaelle-authz` →
 `fehlerfaelle-betrieb`
+
+## Offline-Präsentation
+
+`offline/` ist eine eigenständige Fassung zum Vortragen ohne Internet und ohne claude.ai:
+`offline/index.html` im Browser öffnen, `F` für Vollbild.
+
+| Taste | Wirkung |
+|---|---|
+| → / Leertaste / Klick | nächster Klickschritt bzw. nächste Folie |
+| ← | zurück |
+| F | Vollbild |
+| N | Sprechernotizen ein/aus |
+
+Die Folie `gesamtablauf` enthält dort die Animation selbst: Jeder Klick ist ein Schritt, nach
+Schritt 21 geht es zur nächsten Folie.
+
+`offline/` wird erzeugt, nicht von Hand bearbeitet:
+
+```bash
+python3 docs/praesentation/build_offline.py
+```
+
+Das Skript nimmt `deck.json`, `deck.css`, `slides/` und `animation/index.html` und legt
+p5.js und die Schriften aus `vendor/` daneben (Lizenzen liegen bei).

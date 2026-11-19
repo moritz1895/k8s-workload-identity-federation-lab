@@ -77,6 +77,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 .steps button[aria-current="step"] { background: var(--zone-a); font-weight: 600; }
 .steps button[aria-current="step"] .n { color: var(--accent); }
 .hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+/* Einbettung in eine Präsentation (?embed): nur Bühne und Erklärung, Steuerung über postMessage */
+body.embed { background: transparent; }
+body.embed header, body.embed .controls, body.embed .speed, body.embed .hint, body.embed .steps { display: none; }
+body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; }
+body.embed .panel { max-height: 100vh; overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -298,7 +303,7 @@ function renderPanel() {
   el("btn-next").disabled = cur === STEPS.length - 1;
   el("btn-play").textContent = playing ? "❚❚ Pause" : "▶ Abspielen";
   document.querySelectorAll(".steps button").forEach((b, i) => {
-    if (i === cur) { b.setAttribute("aria-current", "step"); b.scrollIntoView({ block: "nearest" }); }
+    if (i === cur) { b.setAttribute("aria-current", "step"); if (!EMBED) b.scrollIntoView({ block: "nearest" }); }
     else b.removeAttribute("aria-current");
   });
 }
@@ -309,6 +314,7 @@ function go(i) {
   t0 = now(); doneSince = null;
   if (pausedAt !== null) pausedAt = now();
   renderPanel();
+  if (typeof postState === "function") postState();
 }
 function togglePlay() {
   playing = !playing;
@@ -359,7 +365,7 @@ const sketch = p => {
   p.setup = () => {
     const [w, h] = size();
     p.createCanvas(w, h);
-    p.pixelDensity(Math.min(2, window.devicePixelRatio || 1));
+    p.pixelDensity(EMBED ? 2 : Math.min(2, window.devicePixelRatio || 1));
     p.textFont(FONT);
     document.fonts.load('16px "IBM Plex Sans"').then(() => { if (document.fonts.check('16px "IBM Plex Sans"')) FONT = "IBM Plex Sans"; }).catch(() => {});
     readColors();
@@ -526,9 +532,21 @@ const sketch = p => {
   };
 };
 
+const EMBED = new URLSearchParams(location.search).has("embed");
+if (EMBED) document.body.classList.add("embed");
+function postState() { if (window.parent !== window) window.parent.postMessage({ wif: "state", step: cur, total: STEPS.length }, "*"); }
+window.addEventListener("message", e => {
+  const m = e.data || {};
+  if (m.wif === "next") go(cur + 1);
+  else if (m.wif === "prev") go(cur - 1);
+  else if (m.wif === "first") go(0);
+  else if (m.wif === "last") go(STEPS.length - 1);
+  else if (m.wif === "state") postState();
+});
 buildList();
 renderPanel();
 t0 = now();
+postState();
 new p5(sketch, "canvas-wrap");
 </script>
 </body>

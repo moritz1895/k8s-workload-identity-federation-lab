@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workload Identity Federation – PoC</title>
+<style>
+@font-face { font-family: "Inter"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/inter-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/inter-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/inter-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2"); }
+
+* { margin: 0; }
+html, body { height: 100%; background: #101418; overflow: hidden; }
+body { font: 32px/1.2 sans-serif; }
+body > section { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px;
+  box-sizing: border-box; overflow: hidden; transform-origin: 0 0; visibility: hidden; }
+body > section.current { visibility: visible; }
+aside { display: none !important; }
+h1 { font-size: 96px; font-weight: 600; } h2 { font-size: 64px; font-weight: 600; } h3 { font-size: 44px; font-weight: 600; }
+table { width: 100%; border-collapse: separate; border-spacing: 0; border: solid #0003; border-width: 2px 0 0 2px; }
+th, td { padding: .35em .6em; text-align: left; border: solid #0003; border-width: 0 2px 2px 0; }
+svg.xc, svg.xc-flow { border: 0 !important; }
+svg.xc { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+svg.xc-flow { flex: none; width: 48px; height: 24px; align-self: center; overflow: visible; }
+.anim-box { width: 1664px; height: 860px; overflow: hidden; }
+iframe.anim { border: 0; width: 1331px; height: 688px; transform: scale(1.25); transform-origin: 0 0; background: transparent; }
+#hud { position: fixed; right: 14px; bottom: 10px; font: 13px/1 system-ui, sans-serif; color: #8a96a3; }
+#notes { position: fixed; left: 0; right: 0; bottom: 0; max-height: 40vh; overflow: auto; display: none;
+  background: #1b2128ee; color: #e6eaee; font: 18px/1.5 system-ui, sans-serif; padding: 16px 24px; }
+#notes.on { display: block; }
+#help { position: fixed; left: 14px; bottom: 10px; font: 13px/1 system-ui, sans-serif; color: #5b6672; }
+
+body { font-family: 'Inter', sans-serif; color: #1d2530; }
+section { padding: 128px; background: #fafaf8; display: flex; flex-direction: column; gap: 32px; }
+section h2 { font-size: 56px; font-weight: 700; line-height: 1.1; color: #1d2530; }
+
+/* Cover */
+section.cover { justify-content: center; gap: 28px; }
+.cover h1 { font-size: 96px; font-weight: 700; line-height: 1.05; }
+.cover .kicker { font-size: 28px; font-weight: 600; letter-spacing: 2px; color: #2563a8; }
+.cover .lead { font-size: 36px; line-height: 1.35; color: #4a5562; width: 1300px; }
+.cover .meta { font-size: 26px; color: #4a5562; }
+
+/* Stichpunkte */
+.pts { font-size: 26px; line-height: 1.35; color: #1d2530; padding-left: 36px; }
+.pts li { margin-top: 4px; margin-bottom: 4px; }
+.note { font-size: 26px; line-height: 1.35; color: #4a5562; }
+
+/* Diagramme */
+.host { position: relative; width: 1664px; }
+.box { position: absolute; box-sizing: border-box; background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.box .t { font-size: 28px; font-weight: 700; line-height: 1.2; text-align: center; color: #1d2530; }
+.box .d { font-size: 24px; line-height: 1.25; text-align: center; color: #4a5562; }
+.box.accent { background: #e8f0f9; border-color: #2563a8; }
+.box.anchor { background: #fbeee2; border-color: #c2621a; }
+.box.ok { background: #e6f3eb; border-color: #2e7d4f; }
+.lbl { position: absolute; font-size: 24px; line-height: 1.3; color: #3b4652; }
+.panel { position: absolute; box-sizing: border-box; background: #efefec; border-radius: 16px; }
+.panel.blue { background: #eaf1f9; }
+.ph { position: absolute; font-size: 28px; font-weight: 700; line-height: 1.2; color: #1d2530; }
+.warn { position: absolute; box-sizing: border-box; font-size: 24px; line-height: 1.3; color: #b3261e; background: #fbe9e7; border: 2px solid #b3261e; border-radius: 12px; padding: 12px 16px; text-align: center; }
+.ln { color: #4a5562; border-width: 3px; }
+.ln.dash { border-style: dashed; }
+.ln.life { color: #b4bcc6; border-width: 2px; border-style: dashed; }
+
+/* Karten (Aufbau) */
+.flow { display: flex; align-items: stretch; }
+.card { flex: 1; box-sizing: border-box; background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.card .num { font-size: 24px; font-weight: 700; color: #2563a8; }
+.card h3 { font-size: 30px; font-weight: 700; line-height: 1.2; }
+.cl { font-size: 24px; line-height: 1.3; color: #3b4652; padding-left: 28px; }
+.cl li { margin-top: 4px; margin-bottom: 4px; }
+.fc { width: 48px; height: 0; align-self: center; color: #4a5562; border-width: 3px; }
+
+/* Token-Anatomie */
+.jwt { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 24px; }
+.part { background: #ffffff; border: 2px solid #8c97a4; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ptag { align-self: flex-start; font-size: 26px; font-weight: 700; padding: 6px 16px; border-radius: 8px; }
+.ptag.h { background: #e8f0f9; color: #1f4f86; }
+.ptag.p { background: #fbeee2; color: #8a4512; }
+.ptag.s { background: #e6f3eb; color: #22603c; }
+.claims { display: flex; flex-direction: column; gap: 6px; }
+.code { font-family: 'JetBrains Mono', monospace; font-size: 24px; line-height: 1.3; color: #1d2530; }
+.sig { font-size: 24px; line-height: 1.3; color: #1d2530; }
+.chk-h { font-size: 24px; font-weight: 700; color: #4a5562; }
+
+/* Tabellen */
+.tbl { width: 1664px; font-size: 26px; color: #1d2530; }
+.tbl .head { background: #e7e9ec; }
+.tbl .pass { color: #2e7d4f; }
+.tbl .fail { color: #b3261e; }
+
+/* Offline/Online */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; }
+.col { display: flex; flex-direction: column; gap: 16px; }
+.colh { font-size: 30px; font-weight: 700; color: #1d2530; }
+.sh { font-size: 24px; font-weight: 700; color: #4a5562; }
+
+/* Demo */
+.demo { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; }
+.term { background: #1d2530; border-radius: 12px; padding: 32px; display: flex; flex-direction: column; gap: 8px; }
+.term .cmd { font-family: 'JetBrains Mono', monospace; font-size: 26px; line-height: 1.3; color: #f2f2ef; }
+.term .cmt { font-family: 'JetBrains Mono', monospace; font-size: 24px; line-height: 1.3; color: #9fb0c2; }
+.term .gap { height: 12px; }
+
+/* Klickschritte */
+.fragment { opacity: 0; transition: opacity 300ms ease-out; }
+.fragment.visible { opacity: 1; }
+.tbl.small { font-size: 24px; }
+
+</style>
+</head>
+<body>
+<section id="cover" class="cover">
+<p class="kicker">PROOF OF CONCEPT</p>
+<h1>Workload Identity Federation</h1>
+<p class="lead">Wie sich eine Kubernetes-Workload gegenüber Diensten außerhalb des Clusters ausweist und Rechte bekommt – ohne Client-Zertifikat und privaten Schlüssel</p>
+<p class="meta">Moritz Rohde · [Datum]</p>
+<aside>Kurzvorstellung des Labs k8s-workload-identity-federation-lab. Ziel: Idee und Umsetzung verständlich machen, ohne Kubernetes-Vorwissen vorauszusetzen.</aside>
+</section>
+
+<section id="problem">
+<h2>Ausgangssituation: Identität über Client-Zertifikate</h2>
+<!-- host 1664x530
+ panelL 0,0,800,550   panelR 864,0,800,550
+ A1 40,60,360,130   A2 40,230,360,130   A3 40,400,360,130   (center x 220)
+ B1 904,60,360,130  B2 904,230,360,130  B3 904,400,360,130  (center x 1084)
+-->
+<div class="host" style="height:530px">
+<div class="panel" style="left:0px; top:0px; width:800px; height:530px"></div>
+<div class="panel blue" style="left:864px; top:0px; width:800px; height:530px"></div>
+<p class="ph" style="left:40px; top:16px; width:720px">Heute: mTLS mit Client-Zertifikat</p>
+<p class="ph" style="left:904px; top:16px; width:720px">Ziel: Workload Identity (vereinfacht)</p>
+<div class="box" style="left:40px; top:60px; width:360px; height:130px"><p class="t">PKI / Enrollment</p><p class="d">Zertifikat beantragen und ausrollen</p></div>
+<div class="box" style="left:40px; top:230px; width:360px; height:130px"><p class="t">Client</p><p class="d">Keystore mit privatem Schlüssel</p></div>
+<div class="box" style="left:40px; top:400px; width:360px; height:130px"><p class="t">Server</p><p class="d">mappt Subject-DN auf Authorities</p></div>
+<div class="box accent" style="left:904px; top:60px; width:360px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster</p></div>
+<div class="box" style="left:904px; top:230px; width:360px; height:130px"><p class="t">Workload</p><p class="d">kein privater Schlüssel, kein Enrollment</p></div>
+<div class="box" style="left:904px; top:400px; width:360px; height:130px"><p class="t">Keycloak + Dienst</p><p class="d">prüfen Token, vergeben Rechte</p></div>
+<x-connector class="ln" x1="220" y1="190" x2="220" y2="230"></x-connector>
+<x-connector class="ln" x1="220" y1="360" x2="220" y2="400"></x-connector>
+<x-connector class="ln" x1="1084" y1="190" x2="1084" y2="230"></x-connector>
+<x-connector class="ln" x1="1084" y1="360" x2="1084" y2="400"></x-connector>
+<p class="lbl" style="left:430px; top:196px; width:340px">langlebig, oft manuell – Erneuerung wiederkehrend</p>
+<p class="lbl" style="left:430px; top:366px; width:340px">mTLS-Handshake: Zertifikat mit speziellen DN-Merkmalen</p>
+<p class="lbl" style="left:1294px; top:196px; width:340px">stellt automatisch ein kurzlebiges Token aus (10 min)</p>
+<p class="lbl" style="left:1294px; top:366px; width:340px">tauscht es bei Keycloak gegen Rechte, ruft damit den Dienst auf</p>
+</div>
+<ul class="pts">
+<li>Heute besitzt jeder Client einen Keystore mit privatem Schlüssel – manuell enrollt, wiederkehrend erneuert</li>
+<li>Gestohlener Keystore = Zugriff bis zum Ablauf oder bis das Zertifikat gesperrt ist</li>
+<li>Ziel: Die Workload besitzt nichts Dauerhaftes – die Plattform bestätigt ihre Identität per kurzlebigem Token</li>
+</ul>
+<aside>Unser heutiger Weg: mutual TLS mit speziell gestalteten Client-Zertifikaten. Der Server liest Merkmale im Subject-DN und mappt sie auf Rollen bzw. Spring-Security-Authorities. Das Problem ist nicht die Prüfung auf Serverseite, sondern dass jeder Client einen privaten Schlüssel besitzen, enrollen und pflegen muss. Workload Identity dreht das um: Die Plattform, auf der die Software läuft, bestätigt deren Identität.</aside>
+</section>
+
+<section id="idee">
+<h2>Die Idee: Pass und Visum</h2>
+<!-- host 1664x520
+ P 662,0,340,130  (left mid 662,65 ; bottom mid 832,130)
+ W 0,300,340,140  (top mid 170,300 ; right edge x340 ; bottom mid 170,440)
+ K 662,300,340,140 (top mid 832,300 ; left edge x662)
+ R 1324,300,340,140 (bottom mid 1494,440)
+ P->W hv (662,65)->(170,300) ; P->K (832,130)->(832,300) dashed
+ W->K y350 (340->662) ; K->W y410 (662->340) dashed
+ W->R: (170,440)->(170,480)->(1494,480)->(1494,440)
+-->
+<div class="host" style="height:520px">
+<div class="box accent" style="left:662px; top:0px; width:340px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster · „Passamt“</p></div>
+<div class="box" style="left:0px; top:300px; width:340px; height:140px"><p class="t">Workload</p><p class="d">Pod im Cluster · „Reisende:r“</p></div>
+<div class="box accent" style="left:662px; top:300px; width:340px; height:140px"><p class="t">Keycloak</p><p class="d">„Botschaft“ des Fachbereichs</p></div>
+<div class="box ok" style="left:1324px; top:300px; width:340px; height:140px"><p class="t">Dienst R</p><p class="d">„Grenze“ · prüft das Visum</p></div>
+<x-connector class="ln" x1="662" y1="65" x2="170" y2="300" route="hv"></x-connector>
+<x-connector class="ln dash" x1="832" y1="130" x2="832" y2="300"></x-connector>
+<x-connector class="ln" x1="340" y1="350" x2="662" y2="350"></x-connector>
+<x-connector class="ln dash" x1="662" y1="410" x2="340" y2="410"></x-connector>
+<x-connector class="ln" x1="170" y1="440" x2="170" y2="480" head="none"></x-connector>
+<x-connector class="ln" x1="170" y1="480" x2="1494" y2="480" head="none"></x-connector>
+<x-connector class="ln" x1="1494" y1="480" x2="1494" y2="440"></x-connector>
+<p class="lbl" style="left:186px; top:120px; width:440px">1 · stellt den Pass aus (ServiceAccount-Token)</p>
+<p class="lbl" style="left:848px; top:170px; width:440px">2 · veröffentlicht die Prüfmerkmale (JWKS)</p>
+<p class="lbl" style="left:356px; top:280px; width:290px">3 · zeigt den Pass vor</p>
+<p class="lbl" style="left:356px; top:364px; width:290px">4 · stellt Visum aus</p>
+<p class="lbl" style="left:1020px; top:488px; width:290px">5 · zeigt das Visum vor</p>
+</div>
+<ul class="pts">
+<li>Pass = ServiceAccount-Token (wer ich bin) · Visum = Access-Token mit Scopes (was ich darf)</li>
+<li>Geprüft wird ohne Rückfrage beim Aussteller: Die Prüfmerkmale werden vorab geladen und gecacht</li>
+<li>Federation: Keycloak erkennt den Pass aus dem Cluster an – ohne gemeinsames Passwort</li>
+</ul>
+<aside>Analogie: Das Passamt (der Cluster) stellt der Workload einen Pass aus. Die Botschaft des Ziellandes (Keycloak des Fachbereichs) prüft den Pass anhand öffentlich bekannter Merkmale, ohne beim Passamt anzurufen, und stellt ein Visum aus: das Access-Token mit genau den Rechten, die der Fachbereich dieser Workload gibt. An der Grenze (Dienst R) zählt nur noch das Visum. Pass und Visum sind kurz gültig: 10 bzw. 5 Minuten.</aside>
+</section>
+
+<section id="ebenen">
+<h2>Zwei Ebenen: Wer bin ich? – Was darf ich?</h2>
+<!-- host 1664x200: W 0,40,400,130 ; K 632,40,400,130 ; R 1264,40,400,130 ; arrows y 105 -->
+<div class="host" style="height:170px">
+<div class="box" style="left:0px; top:20px; width:400px; height:130px"><p class="t">Workload (Pod)</p><p class="d">Identität vom Cluster</p></div>
+<div class="box accent" style="left:632px; top:20px; width:400px; height:130px"><p class="t">Keycloak-Realm</p><p class="d">des Fachbereichs</p></div>
+<div class="box ok" style="left:1264px; top:20px; width:400px; height:130px"><p class="t">Dienst R</p><p class="d">service-r, prüft Scopes</p></div>
+<x-connector class="ln" x1="400" y1="85" x2="632" y2="85"></x-connector>
+<x-connector class="ln" x1="1032" y1="85" x2="1264" y2="85"></x-connector>
+<p class="lbl" style="left:416px; top:15px; width:200px; text-align:center">Token vom Cluster: wer ich bin</p>
+<p class="lbl" style="left:1048px; top:15px; width:200px; text-align:center">Access-Token: was ich darf</p>
+</div>
+<table class="tbl small">
+<tr class="head"><th style="width:34%">Frage</th><th style="width:18%">Wer entscheidet</th><th style="width:48%">Wo liegt die Regel</th></tr>
+<tr><td>Wer ist die Workload?</td><td>Cluster</td><td>ServiceAccount-Token (iss + sub)</td></tr>
+<tr><td>Welcher Client im Realm ist das?</td><td>Fachbereich</td><td>Realm: Client ist an iss + sub der Workload gebunden</td></tr>
+<tr><td>Was darf die Workload?</td><td>Fachbereich</td><td>Realm: Client-Scope-Zuordnung</td></tr>
+<tr><td>Welcher Scope schützt welchen Endpunkt?</td><td>Team von R (im Fachbereich)</td><td>Code von R (SecurityFilterChain)</td></tr>
+</table>
+<ul class="pts">
+<li>Pod = laufende Anwendung im Cluster; ServiceAccount = ihre Identität im Cluster</li>
+<li>Realm = abgegrenzter Bereich in Keycloak, einer pro Fachbereich; Client = Eintrag für eine aufrufende Workload</li>
+<li>Scope = benanntes Recht wie r:orders:read; Dienst R macht daraus die Authority SCOPE_r:orders:read</li>
+<li>Im Token: iss = Aussteller · sub = wer · aud = für wen bestimmt · exp = Ablauf</li>
+</ul>
+<aside>Keycloak ist hier der Autorisierungsserver: Er stellt Access-Tokens mit Rechten aus. Das ServiceAccount-Token beweist nur die Identität und wird ausschließlich bei Keycloak vorgelegt. Was die Workload darf, entscheidet der Fachbereich, dem der Dienst gehört, über die Client-Scope-Zuordnung in seinem Realm. Dienst R kennt keine Workload-Namen: Eine neue Workload zu berechtigen ändert nur den Realm, einen neuen Endpunkt zu schützen nur den Code von R.</aside>
+</section>
+
+<section id="motivation">
+<h2>Vom Client-Zertifikat zur Workload Identity</h2>
+<table class="tbl">
+<tr class="head"><th style="width:20%">Aspekt</th><th style="width:38%">Heute: mTLS-Client-Zertifikat</th><th style="width:42%">Ziel: Workload Identity (PoC)</th></tr>
+<tr><td>Was der Client besitzt</td><td>Keystore mit privatem Schlüssel</td><td>nichts Dauerhaftes – die Plattform stellt das Token bereit</td></tr>
+<tr><td>Bereitstellung</td><td>Enrollment, teils manuell, wiederkehrend</td><td>automatisch, vom Cluster ausgestellt und erneuert</td></tr>
+<tr><td>Gültigkeit</td><td>lang – bis zum Zertifikatsablauf</td><td>10 min (ServiceAccount-Token), 5 min (Access-Token)</td></tr>
+<tr><td>Bei Diebstahl</td><td>Zugriff bis Ablauf oder Sperrung</td><td>ServiceAccount-Token: bis zu 10 min neue Access-Tokens, nur mit den Rechten dieser Workload; Access-Token: bis zu 5 min, nur bei einem Dienst</td></tr>
+<tr><td>Rechte entziehen</td><td>Zertifikat sperren</td><td>Zuordnung im Realm entfernen: sofort keine neuen Access-Tokens; ausgestellte gelten bis exp (≤ 5 min)</td></tr>
+<tr><td>Identitätsmerkmale</td><td>Merkmale im Subject-DN</td><td>iss + sub des ServiceAccount-Tokens</td></tr>
+<tr><td>Rechte</td><td>Merkmale im Subject-DN → Authorities</td><td>Scope im Access-Token → Authority</td></tr>
+</table>
+<ul class="pts">
+<li>Rechte stecken nicht mehr im Zertifikat, sondern in einer Zuordnung, die der Fachbereich in Keycloak pflegt</li>
+<li>Ein Bearer-Token braucht weiterhin TLS zum Server (einseitig, ohne Client-Zertifikat) – mit einem Zertifikat der internen CA</li>
+</ul>
+<aside>Ehrliche Gegenüberstellung: Ein Zertifikat lässt sich sperren. Ein ausgestelltes Token lässt sich nicht zurückziehen; dafür gilt das Access-Token nur 5 Minuten und nur für einen Dienst. Entzieht der Fachbereich die Zuordnung im Realm, bekommt die Workload ab sofort keine neuen Access-Tokens mehr. Ein gestohlenes ServiceAccount-Token taugt nur dazu, bei Keycloak Access-Tokens mit den Rechten genau dieser Workload zu holen – höchstens 10 Minuten lang.</aside>
+</section>
+
+<section id="ablauf-authz">
+<h2>Ablauf: Pod → Keycloak → Dienst R</h2>
+<!-- host 1664x700
+ heads top 0 h 100: POD 0..320 (c160) ; KC 448..768 (c608) ; IW 896..1216 (c1056) ; R 1344..1664 (c1504)
+ lifelines y 100 -> 696
+ m1 y190 160->608 ; m2 y260 608->1056 ; box3 448,284,320,150 ; m4 y450 608->160 ; m5 y520 160->1504 ; box6 1344,544,320,126 ; m7 y680 1504->160
+-->
+<div class="host" style="height:700px">
+<div class="box" style="left:0px; top:0px; width:320px; height:100px"><p class="t">Pod „consumer“</p><p class="d">Token: aud = Realm</p></div>
+<div class="box accent" style="left:448px; top:0px; width:320px; height:100px"><p class="t">Keycloak</p><p class="d">Realm domain-rst</p></div>
+<div class="box" style="left:896px; top:0px; width:320px; height:100px"><p class="t">issuer-web</p><p class="d">JWKS des Clusters</p></div>
+<div class="box ok" style="left:1344px; top:0px; width:320px; height:100px"><p class="t">Dienst R</p><p class="d">service-r</p></div>
+<x-connector class="ln life" x1="160" y1="100" x2="160" y2="696" head="none"></x-connector>
+<x-connector class="ln life" x1="608" y1="100" x2="608" y2="696" head="none"></x-connector>
+<x-connector class="ln life" x1="1056" y1="100" x2="1056" y2="696" head="none"></x-connector>
+<x-connector class="ln life" x1="1504" y1="100" x2="1504" y2="696" head="none"></x-connector>
+<div class="box accent fragment" data-fragment-index="2" style="left:448px; top:284px; width:320px; height:150px"><p class="t">3 · prüft den „Pass“</p><p class="d">Signatur, iss, aud, exp; Client per sub</p></div>
+<div class="box ok fragment" data-fragment-index="5" style="left:1344px; top:544px; width:320px; height:126px"><p class="t">6 · prüft das „Visum“</p><p class="d">Realm-JWKS (Cache), Scope → Authority</p></div>
+<x-connector class="ln fragment" data-fragment-index="0" x1="160" y1="190" x2="608" y2="190"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="1" x1="608" y1="260" x2="1056" y2="260"></x-connector>
+<x-connector class="ln dash fragment" data-fragment-index="3" x1="608" y1="450" x2="160" y2="450"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="4" x1="160" y1="520" x2="1504" y2="520"></x-connector>
+<x-connector class="ln dash fragment" data-fragment-index="6" x1="1504" y1="680" x2="160" y2="680"></x-connector>
+<p class="lbl fragment" data-fragment-index="0" style="left:176px; top:120px; width:416px">1 · POST /token mit ServiceAccount-Token als Nachweis</p>
+<p class="lbl fragment" data-fragment-index="1" style="left:624px; top:190px; width:416px">2 · Discovery + JWKS laden (TLS, Cache)</p>
+<p class="lbl fragment" data-fragment-index="3" style="left:176px; top:348px; width:256px">4 · Access-Token (aud = service-r, Scopes, 5 min)</p>
+<p class="lbl fragment" data-fragment-index="4" style="left:1072px; top:450px; width:416px">5 · GET /orders mit Bearer Access-Token</p>
+<p class="lbl fragment" data-fragment-index="6" style="left:624px; top:640px; width:416px">7 · 200, 401 oder 403</p>
+</div>
+<aside>Die Schritte erscheinen beim Präsentieren nacheinander per Klick. 1: Die Workload ruft den Token-Endpunkt über keycloak-gateway auf (Grant client_credentials, kein Client-Secret); ihr ServiceAccount-Token dient als Client-Nachweis, im Standard „Client-Assertion“ genannt. 2 und 3: Keycloak findet über iss den Identity-Provider lab-cluster, lädt bei Bedarf die JWKS von issuer-web, prüft das Token und sucht den Client, dem genau dieser sub zugeordnet ist (workload-a). 4: Das Access-Token enthält nur Scopes, die dem Client im Realm zugeordnet sind; die Workload cacht es, bis die Restlaufzeit unter 60 Sekunden fällt. Woher aud = service-r kommt: Jeder Scope r:… trägt im Realm einen Audience-Mapper auf service-r; die Workload fragt pro Dienst ein eigenes Token mit dessen Scopes an. 6: Dienst R holt die Realm-JWKS beim ersten Token und cacht sie; jeder Scope wird zur Authority SCOPE_&lt;scope&gt;. 7: 401 bei ungültigem Token, 403 bei fehlendem Scope. Die animierte Seite „WIF-Ablauf Schritt für Schritt“ zeigt das noch kleinteiliger.</aside>
+</section>
+
+<section id="gesamtablauf" data-anim style="padding:64px 128px; gap:24px">
+<h2>Gesamtablauf Schritt für Schritt</h2>
+<div class="anim-box"><iframe class="anim" src="animation.html?embed" title="Animierter Gesamtablauf, Schritt für Schritt"></iframe></div>
+<aside>Weiterklicken wie bei den übrigen Folien: Jeder Klick ist ein Schritt der Animation, nach Schritt 21 geht es zur nächsten Folie. Die Animation ist eine eigene Seite und wird dort weiter gepflegt; der Link öffnet sie im Browser. Zu jedem Schritt zeigt sie einen Erklärtext und den Inhalt der Tokens und Anfragen. Wer den Link öffnen soll, braucht Zugriff: Die Seite muss dafür auf claude.ai geteilt sein.</aside>
+</section>
+<section id="tokens">
+<h2>Zwei Tokens, zwei Aufgaben</h2>
+<table class="tbl">
+<tr class="head"><th style="width:16%">Merkmal</th><th style="width:42%">ServiceAccount-Token („Pass“)</th><th style="width:42%">Access-Token („Visum“)</th></tr>
+<tr><td>Ausgestellt von</td><td>Cluster (API-Server)</td><td>Keycloak, Realm domain-rst</td></tr>
+<tr><td>iss</td><td>https://issuer-web</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
+<tr><td>aud</td><td>Issuer-URL des Realms</td><td>service-r (Dienst R)</td></tr>
+<tr><td>Wer</td><td>sub = system:serviceaccount:wif-demo:consumer</td><td>azp = workload-a (Client für consumer)</td></tr>
+<tr><td>Rechte</td><td>keine</td><td>scope = r:orders:read r:orders:write</td></tr>
+<tr><td>Laufzeit</td><td>600 s, der Cluster erneuert es</td><td>300 s, die Workload cacht und erneuert es</td></tr>
+<tr><td>Geprüft von</td><td>Keycloak: Signatur, iss, aud, exp; iss + sub → Client</td><td>Dienst R: Signatur, iss, aud, exp; Scope → Authority</td></tr>
+</table>
+<ul class="pts">
+<li>Gestohlenes ServiceAccount-Token: höchstens 10 min lang Access-Tokens holen – nur mit den Rechten dieser Workload</li>
+<li>Dienst R akzeptiert nur Tokens, deren einzige Audienz R ist – ein Token für einen anderen Dienst nützt bei R nichts</li>
+</ul>
+<aside>Beide Tokens sind ganz normale JWTs, signiert mit RS256. Das ServiceAccount-Token geht nur an Keycloak; Dienst R lehnt es ab. workload-a ist nur der Name des Clients im Realm; verbunden mit der Workload ist er ausschließlich über iss und sub. ServiceAccount-Tokens haben keinen Replay-Schutz; das begrenzen die kurze Laufzeit und die Bindung an den Realm.</aside>
+</section>
+
+<section id="architektur">
+<h2>Wie die Schlüssel des Clusters zu Keycloak kommen</h2>
+<!-- host 1664x540
+ cluster panel 0,0,840,540
+ API 40,60,320,140   (bottom mid 200,200 ; right mid 360,130)
+ PUB 520,60,280,140  (left mid 520,130 ; right mid 800,130)
+ POD 40,400,760,120  (top 400 at x200 ; right mid 800,460)
+ ISS 1104,60,560,140 (left mid 1104,130 ; bottom mid 1384,200)
+ VAL 1104,400,560,120 (left mid 1104,460 ; top mid 1384,400)
+-->
+<div class="host" style="height:540px">
+<div class="panel" style="left:0px; top:0px; width:840px; height:540px"></div>
+<p class="ph" style="left:24px; top:14px; width:792px">Kubernetes-Cluster (k3s)</p>
+<div class="box accent" style="left:40px; top:60px; width:320px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
+<div class="box" style="left:520px; top:60px; width:280px; height:140px"><p class="t">Publisher</p><p class="d">liest JWKS, pusht bei Änderung</p></div>
+<div class="box" style="left:40px; top:400px; width:760px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
+<div class="box" style="left:1104px; top:60px; width:560px; height:140px"><p class="t">issuer-web (nginx)</p><p class="d">:443 liest jeder, :8443 schreibt nur der Publisher</p></div>
+<div class="box accent" style="left:1104px; top:400px; width:560px; height:120px"><p class="t">Keycloak (Fachbereich)</p><p class="d">prüft ServiceAccount-Tokens</p></div>
+<x-connector class="ln" x1="360" y1="130" x2="520" y2="130"></x-connector>
+<x-connector class="ln" x1="200" y1="200" x2="200" y2="400"></x-connector>
+<x-connector class="ln" x1="800" y1="130" x2="1104" y2="130"></x-connector>
+<x-connector class="ln" x1="800" y1="460" x2="1104" y2="460"></x-connector>
+<x-connector class="ln" x1="1384" y1="400" x2="1384" y2="200"></x-connector>
+<p class="lbl" style="left:216px; top:270px; width:280px">Token, 10 min</p>
+<p class="lbl" style="left:856px; top:60px; width:232px">PUT per mTLS (Port 8443)</p>
+<p class="lbl" style="left:856px; top:390px; width:232px">POST /token über keycloak-gateway</p>
+<p class="lbl" style="left:1400px; top:260px; width:264px">GET Discovery + JWKS, TLS</p>
+<p class="warn" style="left:856px; top:226px; width:232px">kein Netzweg von Keycloak zum API-Server</p>
+</div>
+<ul class="pts">
+<li>Keycloak darf den API-Server nicht erreichen – darum bringt der Publisher die öffentlichen Schlüssel nach außen zu issuer-web</li>
+<li>Schreiben darf nur der Publisher, per mTLS: ein einziges Infrastruktur-Zertifikat statt eines pro Workload</li>
+<li>Pods erreichen Keycloak nur über keycloak-gateway, das nur die Realm-Pfade durchlässt</li>
+</ul>
+<aside>Der Publisher ist ein Pod im Cluster mit der eingebauten Rolle system:service-account-issuer-discovery. Alle 15 Sekunden vergleicht er das JWKS des API-Servers mit dem, was issuer-web ausliefert, und lädt nur bei Abweichung hoch. Den Upload-Port 8443 erreicht man nur aus dem Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau CN=jwks-publisher. Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
+</section>
+
+<section id="vertrauen">
+<h2>Vertrauenskette ohne Rückfrage beim Cluster</h2>
+<!-- host 1664x480
+ A1 0,0,380,170 (bottom mid 190,170)          A2 428,0,808,170 (bottom mid 832,170)
+ chain top 330 h 150: C1 0 ; C2 428 ; C3 856 ; C4 1284 ; width 380 ; mid y 405 ; centers 190, 618, 1046, 1474
+ A1->C1 190,170->190,330 ; A2 drop 832,170->832,300 ; bar 618..1046 @300 ; stubs 618,1046 300->330
+ chain 380->428, 808->856, 1236->1284 @405
+-->
+<div class="host" style="height:480px">
+<div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: Aussteller</p><p class="d">Issuer des Clusters, im Realm eingetragen</p></div>
+<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">issuer-web muss ein Zertifikat dieser CA vorweisen – kein Abschalten der Prüfung</p></div>
+<div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss ein eingetragener Aussteller sein</p></div>
+<div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">Steckbrief des Ausstellers: wo liegen die Schlüssel?</p></div>
+<div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
+<div class="box ok" style="left:1284px; top:330px; width:380px; height:150px"><p class="t">Signatur gültig</p><p class="d">passender Schlüssel gewählt und verifiziert</p></div>
+<x-connector class="ln" x1="190" y1="170" x2="190" y2="330"></x-connector>
+<x-connector class="ln" x1="832" y1="170" x2="832" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="1046" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="618" y2="330"></x-connector>
+<x-connector class="ln" x1="1046" y1="300" x2="1046" y2="330"></x-connector>
+<x-connector class="ln" x1="380" y1="405" x2="428" y2="405"></x-connector>
+<x-connector class="ln" x1="808" y1="405" x2="856" y2="405"></x-connector>
+<x-connector class="ln" x1="1236" y1="405" x2="1284" y2="405"></x-connector>
+</div>
+<ul class="pts">
+<li>Nur zwei Dingen wird ohne weiteren Beweis vertraut: dem Issuer des Clusters und der internen CA</li>
+<li>Alles Weitere wird daraus abgeleitet, ohne Rückfrage beim Cluster</li>
+<li>Dienst R prüft Access-Tokens nach demselben Muster – mit dem Realm als Issuer</li>
+</ul>
+<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt Keycloak über eine TLS-Verbindung, deren Zertifikat von der internen CA stammen muss, das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
+</section>
+
+<section id="offline-online">
+<h2>Prüfen ohne Rückfrage (dieser PoC) vs. online beim Cluster</h2>
+<div class="cols">
+<div class="col">
+<p class="colh">Ohne Rückfrage, über JWKS – dieser PoC</p>
+<!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
+<div class="host" style="width:800px; height:170px">
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">issuer-web</p><p class="d">für alle Prüfer lesbar</p></div>
+<x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
+<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
+</div>
+<p class="sh">Stärken</p>
+<ul class="pts">
+<li>keine Laufzeit-Abhängigkeit vom Cluster</li>
+<li>kein Credential beim Prüfer, Cluster von außen unerreichbar</li>
+<li>pro Anfrage nur lokale Signaturprüfung</li>
+</ul>
+<p class="sh">Grenzen</p>
+<ul class="pts">
+<li>kein Widerruf vor exp – daher nur 10 min Laufzeit</li>
+<li>Rotation braucht Überlappung: alter Schlüssel bleibt Token-Laufzeit + Cache-Dauer im JWKS</li>
+</ul>
+</div>
+<div class="col">
+<p class="colh">Online über TokenReview-API</p>
+<!-- host 800x170: same geometry -->
+<div class="host" style="width:800px; height:170px">
+<div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
+<div class="box accent" style="left:540px; top:40px; width:260px; height:120px"><p class="t">API-Server</p><p class="d">im Cluster</p></div>
+<x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
+<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">pro Anfrage, mit Credential</p>
+</div>
+<p class="sh">Stärken</p>
+<ul class="pts">
+<li>sofortiger Widerruf, Live-Zustand des Clusters</li>
+</ul>
+<p class="sh">Grenzen</p>
+<ul class="pts">
+<li>API-Server nicht erreichbar → jede Prüfung schlägt fehl</li>
+<li>Netzweg vom Dienst zum API-Server nötig</li>
+<li>Prüfer braucht eigenes Cluster-Credential (RBAC)</li>
+<li>ein Netzwerk-Roundtrip pro Anfrage</li>
+</ul>
+</div>
+</div>
+<ul class="pts">
+<li>Denkbarer Ausbau: hybrid – ohne Rückfrage als Regelfall, TokenReview nur für besonders sensible Operationen</li>
+<li>Mit Keycloak kommt eine Laufzeitabhängigkeit hinzu: Ohne erreichbaren Keycloak gibt es nach Ablauf kein neues Access-Token</li>
+</ul>
+<aside>Der PoC prüft Tokens ohne Rückfrage beim Aussteller: Die öffentlichen Schlüssel werden vorab geladen und gecacht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen. Taucht eine unbekannte kid auf, laden die Prüfer das JWKS neu; der alte Schlüssel muss trotzdem lange genug im JWKS bleiben, damit ältere Tokens gültig bleiben.</aside>
+</section>
+
+<section id="demo">
+<h2>Live-Demo</h2>
+<div class="demo">
+<div class="term">
+<p class="cmt"># einmalig</p>
+<p class="cmd">cp .env.example .env</p>
+<div class="gap"></div>
+<p class="cmt"># Lab starten</p>
+<p class="cmd">docker compose up -d --build</p>
+<div class="gap"></div>
+<p class="cmt"># Token-Austausch und Zugriff auf Dienst R</p>
+<p class="cmd">docker compose run --rm demo authz</p>
+<div class="gap"></div>
+<p class="cmt"># Veröffentlichung und Upload-Schutz</p>
+<p class="cmd">docker compose run --rm demo</p>
+<div class="gap"></div>
+<p class="cmt"># alles, inkl. Netztrennung und Rotation</p>
+<p class="cmd">tools/run-all-checks.sh</p>
+</div>
+<div class="col">
+<p class="colh">Was die Demo zeigt</p>
+<ol class="pts">
+<li>consumer tauscht sein ServiceAccount-Token gegen ein Access-Token</li>
+<li>consumer → Dienst R: 200</li>
+<li>Recht fehlt: 403; unbekannte Workload: abgelehnt</li>
+<li>Keycloak-Administration über das Gateway nicht erreichbar</li>
+<li>Upload ohne gültiges Publisher-Zertifikat: abgelehnt</li>
+</ol>
+</div>
+</div>
+<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2; aufräumen mit docker compose down -v. Dienst R ist vom Host nur per HTTPS erreichbar (Port 18081, Zertifikat der Lab-CA). Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. run-all-checks.sh dauert länger, weil es den API-Server für die Schlüsselrotation neu startet. Zum Nachvollziehen Schritt für Schritt gibt es die animierte Seite „WIF-Ablauf Schritt für Schritt“.</aside>
+</section>
+
+<section id="lab-vs-prod">
+<h2>Was im Lab bewusst vereinfacht ist</h2>
+<table class="tbl small">
+<tr class="head"><th style="width:22%">Thema</th><th style="width:36%">Im PoC</th><th style="width:42%">Für einen echten Einsatz</th></tr>
+<tr><td>Issuer-Endpoint</td><td>nginx-Container im Docker-Netz</td><td>stabile HTTPS-URL, für alle Prüfer erreichbar, z. B. Objektspeicher oder Gateway</td></tr>
+<tr><td>TLS-Vertrauen</td><td>Lab-CA als Stellvertreter der internen PKI</td><td>interne PKI, Root-CA auf allen Systemen verteilt</td></tr>
+<tr><td>JWKS veröffentlichen</td><td>Publisher pusht per mTLS bei Änderung, ohne Inhaltscheck</td><td>gleiches Muster; Inhalt prüfen, Alarm bei neuem kid</td></tr>
+<tr><td>Schlüsselrotation</td><td>vorheriger Schlüssel bleibt bis zur nächsten Rotation im JWKS</td><td>alter Schlüssel bleibt mindestens Token-Laufzeit + Cache-Dauer im JWKS</td></tr>
+<tr><td>Widerruf</td><td>ausgestellte Tokens gelten bis exp</td><td>kurze Laufzeit, ggf. jti-Sperrliste oder hybride Online-Prüfung</td></tr>
+<tr><td>Transport zum Dienst</td><td>TLS (einseitig) mit Zertifikat der Lab-CA</td><td>TLS mit Zertifikat der internen PKI; optional mTLS oder sender-gebundene Tokens (DPoP)</td></tr>
+<tr><td>Keycloak</td><td>Einzelknoten, Datei-Datenbank, Realm per JSON-Import</td><td>gemeinsamer HA-Keycloak; Realm als Code per CI, 4-Augen-Review, Audit</td></tr>
+</table>
+<ul class="pts">
+<li>Das Muster selbst ist produktionsnah – vereinfacht sind Betrieb und Verteilung der Metadaten</li>
+<li>Keycloak ist austauschbar; die Alternative Spring Authorization Server bräuchte eine eigene Prüfung des ServiceAccount-Tokens</li>
+<li>Die Entscheidungen sind als ADRs 0001–0004 im Repo dokumentiert</li>
+</ul>
+<aside>Hier lohnt sich die Diskussion mit den Kolleginnen und Kollegen: Wo würden wir Discovery-Dokument und JWKS in unserer Umgebung veröffentlichen, und wie gehen wir mit Rotation und Widerruf um?</aside>
+</section>
+
+<section id="anhang">
+<h2>Anhang</h2>
+<ul class="pts">
+<li>Variante ohne Keycloak: Pod → Validator, mit ihren Prüfungen</li>
+<li>Verbindungen, Netze und TLS</li>
+<li>Startreihenfolge des Labs</li>
+<li>Prüfungen zu Token-Austausch und Zugriff</li>
+<li>Prüfungen zu Veröffentlichung, Netzen und Rotation</li>
+</ul>
+<aside>Nachschlagefolien für Rückfragen; im Vortrag nicht nötig.</aside>
+</section>
+
+<section id="ablauf">
+<h2>Anhang: Variante Pod → Validator, ohne Keycloak</h2>
+<!-- host 1664x560
+ heads top 0 h 80: API 0..320 (c160) ; POD 448..768 (c608) ; VAL 896..1216 (c1056) ; ISS 1344..1664 (c1504)
+ lifelines y 80 -> 560
+ m0 y170 1056->1504 ; m1 y270 160->608 ; m2 y360 608->1056 ; check box 896,384,320,100 ; m4 y540 1056->608
+-->
+<div class="host" style="height:560px">
+<div class="box accent" style="left:0px; top:0px; width:320px; height:80px"><p class="t">API-Server</p></div>
+<div class="box" style="left:448px; top:0px; width:320px; height:80px"><p class="t">Pod „consumer“</p></div>
+<div class="box ok" style="left:896px; top:0px; width:320px; height:80px"><p class="t">Validator</p></div>
+<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">issuer-web</p></div>
+<x-connector class="ln life" x1="160" y1="80" x2="160" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
+<x-connector class="ln life" x1="1504" y1="80" x2="1504" y2="556" head="none"></x-connector>
+<div class="box ok fragment" data-fragment-index="3" style="left:896px; top:384px; width:320px; height:100px"><p class="t">3 · prüft lokal</p><p class="d">Signatur, iss, aud, exp</p></div>
+<x-connector class="ln fragment" data-fragment-index="0" x1="1056" y1="170" x2="1504" y2="170"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="1" x1="160" y1="270" x2="608" y2="270"></x-connector>
+<x-connector class="ln fragment" data-fragment-index="2" x1="608" y1="360" x2="1056" y2="360"></x-connector>
+<x-connector class="ln dash fragment" data-fragment-index="4" x1="1056" y1="540" x2="608" y2="540"></x-connector>
+<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS laden (TLS)</p>
+<p class="lbl fragment" data-fragment-index="1" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
+<p class="lbl fragment" data-fragment-index="2" style="left:624px; top:290px; width:416px">2 · GET /whoami über HTTPS mit Bearer-Token</p>
+<p class="lbl fragment" data-fragment-index="4" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>
+</div>
+<ul class="pts">
+<li>Der Validator, ein eigener Spring-Boot-Dienst, prüft das ServiceAccount-Token selbst – mit derselben Vertrauenskette wie Keycloak</li>
+<li>Er beantwortet nur „wer bist du?“; Rechte gibt es hier nicht (Vorstufe, ADR 0001–0003)</li>
+<li>Dafür bekommt der Pod ein zweites ServiceAccount-Token mit aud = wif-demo-validator</li>
+</ul>
+<aside>Die Schritte erscheinen beim Präsentieren nacheinander per Klick. Schritt 1: Das kubelet ruft die TokenRequest-API mit audience wif-demo-validator und 600 Sekunden Laufzeit auf. Schritt 2 läuft über HTTPS mit einem Zertifikat der internen CA. Schritt 4: 200 mit den Claims im Body, oder 401 mit kurzem Ablehnungsgrund. Die JWKS werden 5 Minuten gecacht.</aside>
+</section>
+
+<section id="fehlerfaelle">
+<h2>Anhang: Prüfungen der Variante (Validator)</h2>
+<table class="tbl">
+<tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
+<tr><td>OK</td><td>Gültiges ServiceAccount-Token des Pods</td><td>demo</td><td class="pass">200 + Claims</td></tr>
+<tr><td>E1</td><td>Falsche Audienz – Token für einen anderen Dienst</td><td>demo</td><td class="fail">401</td></tr>
+<tr><td>E2</td><td>Abgelaufen – exp überschritten</td><td>demo (DEMO_EXPIRY=1)</td><td class="fail">401</td></tr>
+<tr><td>E3</td><td>Manipulierte Signatur</td><td>demo</td><td class="fail">401</td></tr>
+<tr><td>E4</td><td>Unbekannter Schlüssel – kid nicht im JWKS</td><td>Unit-Test</td><td class="fail">401</td></tr>
+<tr><td>E5</td><td>Falscher Issuer</td><td>Unit-Test</td><td class="fail">401</td></tr>
+<tr><td>E6</td><td>Kein Bearer-Header</td><td>curl ohne Header</td><td class="fail">401</td></tr>
+<tr><td>E7</td><td>Kein gültiges JWT-Format</td><td>Unit-Test</td><td class="fail">401</td></tr>
+</table>
+<ul class="pts">
+<li>Der Validator lässt nur RS256 und ES256 zu, verlangt sub, iat und exp und erlaubt 60 s Uhrabweichung</li>
+<li>Implementiert mit Nimbus JOSE + JWT, rein lokal – kein Netzwerkaufruf pro Anfrage</li>
+</ul>
+<aside>E1 bis E3 zeigt das Demo-Skript live, E2 nur auf Wunsch, weil man dafür rund 10 Minuten warten muss. E4, E5 und E7 sind über Unit-Tests abgedeckt, die vollständig offline laufen.</aside>
+</section>
+
+<section id="netze">
+<h2>Anhang: Verbindungen, Netze und TLS</h2>
+<table class="tbl">
+<tr class="head"><th style="width:36%">Verbindung</th><th style="width:20%">Netz</th><th style="width:44%">Absicherung</th></tr>
+<tr><td>Publisher → issuer-web (Upload, Port 8443)</td><td>cluster-net</td><td>mTLS: Client-Zertifikat der internen CA mit CN=jwks-publisher</td></tr>
+<tr><td>Keycloak, Validator → issuer-web (Port 443)</td><td>relying-net</td><td>TLS, Serverzertifikat der internen CA</td></tr>
+<tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; Gateway leitet nur /realms/domain-rst/ weiter</td></tr>
+<tr><td>Pod → Dienst R (/orders)</td><td>workload-net</td><td>TLS; Bearer: Access-Token</td></tr>
+<tr><td>Dienst R → Keycloak (Realm-JWKS)</td><td>relying-net</td><td>TLS, Serverzertifikat der internen CA</td></tr>
+<tr><td>Pod → Validator (Variante, /whoami)</td><td>workload-net</td><td>TLS; Bearer: ServiceAccount-Token</td></tr>
+<tr><td>Keycloak, Dienst R, Validator → API-Server</td><td class="fail">–</td><td class="fail">kein Netzweg</td></tr>
+</table>
+<ul class="pts">
+<li>Jeder Prüfer vertraut nur der internen CA – keine öffentlichen CAs, kein Abschalten der Prüfung</li>
+<li>Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht</li>
+<li>run-all-checks.sh prüft die Netztrennung aus Sicht von Keycloak, Dienst R und Validator</li>
+</ul>
+<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für Cluster und Upload, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. TLS ist außerhalb des Uploads einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu. Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy; solange er läuft, ist auch er aus dem Workload-Netz erreichbar.</aside>
+</section>
+
+<section id="aufbau">
+<h2>Anhang: Startreihenfolge mit docker compose up</h2>
+<div class="flow">
+<div class="card">
+<p class="num">1</p>
+<h3>pki-init, sa-keys</h3>
+<ul class="cl"><li>Lab-CA und Zertifikate aller Dienste</li><li>Signaturschlüssel des Clusters</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">2</p>
+<h3>server (k3s)</h3>
+<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">3</p>
+<h3>bootstrap</h3>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an</li><li>gibt dem Publisher sein Client-Zertifikat</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">4</p>
+<h3>issuer-web</h3>
+<ul class="cl"><li>Publisher lädt Discovery + JWKS per mTLS hoch</li><li>nginx liefert sie per HTTPS aus</li></ul>
+</div>
+<x-connector class="fc"></x-connector>
+<div class="card">
+<p class="num">5</p>
+<h3>Dienste</h3>
+<ul class="cl"><li>keycloak + gateway</li><li>service-r (Dienst R)</li><li>validator (Variante)</li></ul>
+</div>
+</div>
+<ul class="pts">
+<li>Auf dem Host nur Docker + Compose v2 – alles andere läuft in Containern, in drei getrennten Netzen</li>
+<li>Reihenfolge über Compose-Abhängigkeiten: Ein Dienst startet erst, wenn seine Vorgänger bereit bzw. erfolgreich beendet sind</li>
+<li>Keycloak startet erst, wenn issuer-web bereit ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
+</ul>
+<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach hält der Publisher im Cluster issuer-web aktuell, auch bei einer Schlüsselrotation. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
+</section>
+
+<section id="fehlerfaelle-authz">
+<h2>Anhang: Prüfungen zu Token-Austausch und Zugriff</h2>
+<p class="note">consumer liest und schreibt · reader nur lesen · stranger im Realm unbekannt · Dienst S = zweiter Dienst</p>
+<table class="tbl small">
+<tr class="head"><th style="width:6%">Nr.</th><th style="width:64%">Situation</th><th style="width:30%">Ergebnis</th></tr>
+<tr><td>1</td><td>consumer holt ein Access-Token zum Lesen und Schreiben</td><td class="pass">200, Token für Dienst R</td></tr>
+<tr><td>2</td><td>reader will zusätzlich Schreibrecht</td><td class="fail">400 invalid_scope</td></tr>
+<tr><td>3</td><td>stranger fragt ein Token an</td><td class="fail">401 invalid_client</td></tr>
+<tr><td>4</td><td>Nachweis mit einem Token für einen anderen Empfänger</td><td class="fail">400 invalid_client</td></tr>
+<tr><td>5</td><td>Gefälschter Nachweis (fremder Cluster, fremder Schlüssel)</td><td class="fail">401 invalid_client</td></tr>
+<tr><td>6</td><td>consumer liest und schreibt bei Dienst R</td><td class="pass">200</td></tr>
+<tr><td>7</td><td>reader will schreiben, consumer will löschen</td><td class="fail">403 insufficient_scope</td></tr>
+<tr><td>8</td><td>Token für Dienst S, oder für R und S zugleich, bei R</td><td class="fail">401</td></tr>
+<tr><td>9</td><td>Manipuliertes Access-Token bei R</td><td class="fail">401</td></tr>
+<tr><td>10</td><td>ServiceAccount-Token direkt bei R</td><td class="fail">401</td></tr>
+<tr><td>11</td><td>Keycloak-Administration über das Gateway</td><td class="fail">404</td></tr>
+</table>
+<p class="note">400 und 401 bedeuten beide „abgelehnt“ – bei falscher Audienz antwortet Keycloak mit 400</p>
+<aside>Die Fälle entsprechen den Abschnitten 9 bis 20 von docker compose run --rm demo authz. 400 statt 401 bei Fall 4 ist Keycloaks Antwort auf eine falsche Audienz; beides heißt „abgelehnt“. Fall 11 betrifft Admin-API, Admin-Konsole und Master-Realm. Nicht in der Tabelle: Dienst R spricht nur TLS mit Zertifikat der internen CA, und die Workload holt bei drei Aufrufen nur ein Access-Token (Cache).</aside>
+</section>
+
+<section id="fehlerfaelle-betrieb">
+<h2>Anhang: Prüfungen zu Veröffentlichung, Netzen und Rotation</h2>
+<table class="tbl">
+<tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
+<tr><td>U1</td><td>JWKS-Upload ohne oder mit fremdem Zertifikat</td><td>demo</td><td class="fail">400</td></tr>
+<tr><td>U2</td><td>Upload mit falschem CN oder über den öffentlichen Port</td><td>demo</td><td class="fail">403</td></tr>
+<tr><td>U3</td><td>Veröffentlichtes JWKS nach den Versuchen</td><td>demo</td><td class="pass">unverändert</td></tr>
+<tr><td>N1</td><td>Keycloak, Dienst R, Validator → API-Server</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
+<tr><td>N2</td><td>Prüfende Dienste → Upload-Port von issuer-web</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
+<tr><td>N3</td><td>Validator mit fremder CA</td><td>run-all-checks.sh</td><td class="fail">startet nicht</td></tr>
+<tr><td>R1</td><td>Schlüsselrotation: neues JWKS veröffentlicht</td><td>run-all-checks.sh</td><td class="pass">neue kid</td></tr>
+<tr><td>R2</td><td>Tokens mit altem und mit neuem Schlüssel</td><td>run-all-checks.sh</td><td class="pass">200</td></tr>
+</table>
+<ul class="pts">
+<li>Schreiben darf nur der Publisher – geprüft über Zertifikat, DN und Netz</li>
+<li>Bei der Rotation bleibt der alte Schlüssel zum Prüfen im JWKS, Tokens von vorher gelten weiter</li>
+</ul>
+<aside>N3: Mit einer fremden CA scheitert schon die Verbindung zu issuer-web, der Dienst startet nicht. R2 gilt für beide Prüfer: Der Validator akzeptiert Tokens von vor und nach der Rotation, Keycloak stellt für einen mit dem neuen Schlüssel signierten Client-Nachweis ein Access-Token aus.</aside>
+</section>
+
+<div id="hud"></div>
+<div id="notes"></div>
+<div id="help">→ / Leertaste weiter · ← zurück · F Vollbild · N Notizen</div>
+<script>
+
+"use strict";
+const SVGNS = "http://www.w3.org/2000/svg";
+const slides = [...document.querySelectorAll("body > section")];
+let si = 0, step = 0;
+const anim = { step: 0, total: Infinity };
+
+// ---- arrows: <x-connector> -> inline SVG ----
+function pathPoints(x1, y1, x2, y2, route) {
+  if (route === "hv") return [[x1, y1], [x2, y1], [x2, y2]];
+  if (route === "vh") return [[x1, y1], [x1, y2], [x2, y2]];
+  if (route === "elbow") {
+    if (Math.abs(x2 - x1) >= Math.abs(y2 - y1)) { const mx = (x1 + x2) / 2; return [[x1, y1], [mx, y1], [mx, y2], [x2, y2]]; }
+    const my = (y1 + y2) / 2; return [[x1, y1], [x1, my], [x2, my], [x2, y2]];
+  }
+  return [[x1, y1], [x2, y2]];
+}
+function head(svg, from, to, w, color) {
+  const dx = to[0] - from[0], dy = to[1] - from[1], len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len, L = 4 * w, H = 2 * w;
+  const bx = to[0] - ux * L, by = to[1] - uy * L;
+  const p = document.createElementNS(SVGNS, "polygon");
+  p.setAttribute("points", `${to[0]},${to[1]} ${bx - uy * H},${by + ux * H} ${bx + uy * H},${by - ux * H}`);
+  p.setAttribute("fill", color);
+  svg.appendChild(p);
+  return [bx + ux * w * 0.5, by + uy * w * 0.5];
+}
+function renderConnectors() {
+  for (const xc of [...document.querySelectorAll("x-connector")]) {
+    const color = getComputedStyle(xc).color;
+    const w = xc.classList.contains("life") ? 2 : 3;
+    const dashed = xc.classList.contains("dash") || xc.classList.contains("life");
+    const headMode = xc.getAttribute("head") || "end";
+    const svg = document.createElementNS(SVGNS, "svg");
+    let pts;
+    if (!xc.hasAttribute("x1")) { svg.setAttribute("class", "xc-flow"); pts = [[0, 12], [48, 12]]; }
+    else {
+      svg.setAttribute("class", "xc " + xc.className);
+      const n = a => parseFloat(xc.getAttribute(a));
+      pts = pathPoints(n("x1"), n("y1"), n("x2"), n("y2"), xc.getAttribute("route") || "straight");
+    }
+    if (xc.dataset.fragmentIndex !== undefined) svg.dataset.fragmentIndex = xc.dataset.fragmentIndex;
+    if (xc.classList.contains("fragment")) svg.classList.add("fragment");
+    if (headMode === "end" || headMode === "both") pts[pts.length - 1] = head(svg, pts[pts.length - 2], pts[pts.length - 1], w, color);
+    if (headMode === "both") pts[0] = head(svg, pts[1], pts[0], w, color);
+    const pl = document.createElementNS(SVGNS, "polyline");
+    pl.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+    pl.setAttribute("fill", "none"); pl.setAttribute("stroke", color); pl.setAttribute("stroke-width", w);
+    pl.setAttribute("stroke-linecap", "round"); pl.setAttribute("stroke-linejoin", "round");
+    if (dashed) pl.setAttribute("stroke-dasharray", `${3 * w} ${3 * w}`);
+    svg.insertBefore(pl, svg.firstChild);
+    xc.replaceWith(svg);
+  }
+}
+
+// ---- click steps (.fragment) ----
+function groups(sec) {
+  const frs = [...sec.querySelectorAll(".fragment")];
+  const keys = [...new Set(frs.map(f => Number(f.dataset.fragmentIndex ?? 1e6)))].sort((a, b) => a - b);
+  return { frs, keys };
+}
+function applyFragments() {
+  const { frs, keys } = groups(slides[si]);
+  for (const f of frs) {
+    const k = keys.indexOf(Number(f.dataset.fragmentIndex ?? 1e6));
+    f.classList.toggle("visible", k < step);
+    f.classList.toggle("current-fragment", k === step - 1);
+  }
+}
+const isAnim = sec => sec.hasAttribute("data-anim");
+const frameOf = sec => sec.querySelector("iframe");
+function send(sec, msg) { const f = frameOf(sec); if (f && f.contentWindow) f.contentWindow.postMessage({ wif: msg }, "*"); }
+
+// ---- navigation ----
+function show(i, atEnd) {
+  si = Math.max(0, Math.min(slides.length - 1, i));
+  slides.forEach((s, k) => s.classList.toggle("current", k === si));
+  step = atEnd ? groups(slides[si]).keys.length : 0;
+  applyFragments();
+  if (isAnim(slides[si])) { if (atEnd) { send(slides[si], "last"); anim.step = anim.total - 1; } else { send(slides[si], "first"); anim.step = 0; } }
+  document.getElementById("hud").textContent = (si + 1) + " / " + slides.length;
+  const aside = slides[si].querySelector("aside");
+  document.getElementById("notes").textContent = aside ? aside.textContent : "";
+  history.replaceState(null, "", "#" + (si + 1));
+}
+function next() {
+  const sec = slides[si];
+  if (isAnim(sec) && anim.step < anim.total - 1) { send(sec, "next"); anim.step++; return; }
+  if (step < groups(sec).keys.length) { step++; applyFragments(); return; }
+  if (si < slides.length - 1) show(si + 1, false);
+}
+function prev() {
+  const sec = slides[si];
+  if (isAnim(sec) && anim.step > 0) { send(sec, "prev"); anim.step--; return; }
+  if (step > 0) { step--; applyFragments(); return; }
+  if (si > 0) show(si - 1, true);
+}
+window.addEventListener("message", e => {
+  const m = e.data || {};
+  if (m.wif === "state") { anim.step = m.step; anim.total = m.total; }
+});
+document.addEventListener("keydown", e => {
+  const k = e.key;
+  if (["ArrowRight", "PageDown", " ", "Enter"].includes(k)) { next(); e.preventDefault(); }
+  else if (["ArrowLeft", "PageUp", "Backspace"].includes(k)) { prev(); e.preventDefault(); }
+  else if (k === "Home") show(0, false);
+  else if (k === "End") show(slides.length - 1, false);
+  else if (k === "f" || k === "F") { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
+  else if (k === "n" || k === "N") document.getElementById("notes").classList.toggle("on");
+});
+document.addEventListener("click", e => { if (e.target.closest("a, iframe, #notes")) return; if (e.clientX < innerWidth / 3) prev(); else next(); });
+
+function fit() {
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  for (const sec of slides) sec.style.transform = `scale(${s}) translate(-50%, -50%)`;
+}
+window.addEventListener("resize", fit);
+
+renderConnectors();
+fit();
+slides.filter(isAnim).forEach(sec => { const f = frameOf(sec); f.addEventListener("load", () => send(sec, "state")); send(sec, "state"); });
+const start = parseInt((location.hash || "#1").slice(1), 10);
+show(Number.isFinite(start) ? start - 1 : 0, false);
+
+</script>
+</body>
+</html>
