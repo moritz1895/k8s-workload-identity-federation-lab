@@ -129,14 +129,14 @@ const W = 1280, H = 720;
 const N = {
   pki: { x: 300, y: 20,  w: 230, h: 84, t: "Interne PKI", s: "Lab-CA (pki-init)" },
   api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", s: "stellt „Pässe“ aus" },
-  pub: { x: 290, y: 330, w: 180, h: 86, t: "Publisher", s: "Pod jwks-publisher" },
+  iss: { x: 300, y: 300, w: 210, h: 100, t: "Issuer-Pod", s: "sync + web (nur GET)" },
   pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", s: "ServiceAccount consumer" },
-  iss: { x: 540, y: 146, w: 210, h: 110, t: "issuer-web", s: "Upload 8443 · Lesen 443" },
+  ing: { x: 540, y: 150, w: 196, h: 110, t: "Ingress", s: "Traefik · issuer.wif.local" },
   kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", s: "für Pods nur Realm-Pfade" },
   r:   { x: 960, y: 500, w: 220, h: 92, t: "Dienst R", s: "service-r" }
 };
 const ZONES = [
-  { x: 24, y: 118, w: 452, h: 586, label: "Kubernetes-Cluster", tone: "zone-a" },
+  { x: 24, y: 118, w: 740, h: 586, label: "Kubernetes-Cluster", tone: "zone-a" },
   { x: 846, y: 118, w: 410, h: 586, label: "Fachbereich", tone: "zone-b" }
 ];
 
@@ -146,7 +146,7 @@ const PH = ["Überblick", "Vorbereitung", "Identität: der „Pass“", "Rechte:
 const mv = (a, b, label, tone, net, flip) => ({ k: "move", a, b, label, tone, net, flip });
 const par = (...moves) => ({ k: "par", moves });
 const chk = (at, items, side) => ({ k: "check", at, items, side: side || "right" });
-const blkTo = (a, x, y, lbl) => ({ k: "block", a, x, y, lbl });
+const blkTo = (a, x, y, side, text) => ({ k: "block", a, x, y, side, text });
 
 const STEPS = [
   { ph: 0, title: "Überblick: „Pass“, „Visum“, Aufruf",
@@ -156,24 +156,24 @@ const STEPS = [
     fx: null },
 
   { ph: 1, title: "Die interne PKI sichert die Verbindungen",
-    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für issuer-web, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Das einzige Client-Zertifikat erhält der Publisher – eine Infrastruktur-Komponente, nicht jede Workload. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
-    il: "Wer bekommt was", inspect: "issuer-web  Server-Zert. + Root-CA\nKeycloak    Server-Zert. + Root-CA\nDienst R    Server-Zert. + Root-CA\nPublisher   Client-Zert. + Root-CA\nPod         nur Root-CA\n(Pfeile im Bild vereinfacht)",
-    segs: [par(mv("pki", "iss", "", "trust"), mv("pki", "kc", "", "trust"), mv("pki", "pub", "Client-Zert.", "trust", undefined, true))],
-    fx: s => { ["iss", "kc", "r"].forEach(n => s.cert.add(n)); ["iss", "pub", "pod", "kc", "r"].forEach(n => s.ca.add(n)); s.clientCert = true; } },
+    text: "Die interne PKI (im Lab: pki-init) stellt Serverzertifikate für den Ingress des Clusters, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Ein Client-Zertifikat bekommt niemand – weder eine Workload noch eine Komponente des Clusters. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "Ingress    Server-Zert. issuer.wif.local\nKeycloak   Server-Zert. + Root-CA\nDienst R   Server-Zert. + Root-CA\nPod        nur Root-CA\nIssuer-Pod nichts von der PKI\nClient-Zertifikate: keine\n(Pfeile im Bild vereinfacht)",
+    segs: [par(mv("pki", "ing", "Server-Zert.", "trust"), mv("pki", "kc", "", "trust"))],
+    fx: s => { ["ing", "kc", "r"].forEach(n => s.cert.add(n)); ["pod", "kc", "r"].forEach(n => s.ca.add(n)); } },
   { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
-    text: "Der API-Server bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine Adresse außerhalb des Clusters ein: issuer-web. Dort sollen Prüfer die öffentlichen Schlüssel finden.",
-    il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer-web\nservice-account-jwks-uri\n  = https://issuer-web/openid/v1/jwks",
-    segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer-web"], "right")],
+    text: "Der API-Server bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine eigene Adresse ein, nicht die des API-Servers: https://issuer.wif.local. Dort sollen Prüfer die öffentlichen Schlüssel finden.",
+    il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer.wif.local\nservice-account-jwks-uri\n  = https://issuer.wif.local/openid/v1/jwks",
+    segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer.wif.local"], "right")],
     fx: s => { s.apiKey = 1; } },
-  { ph: 1, title: "Der Publisher bringt die Schlüssel nach außen",
-    text: "Keycloak darf den Cluster nicht erreichen. Deshalb liest ein Pod im Cluster, der Publisher, die öffentlichen Schlüssel beim API-Server und lädt sie zu issuer-web hoch. Schreiben darf dort nur, wer das Client-Zertifikat des Publishers vorweist. Der private Schlüssel verlässt den Cluster nie.",
-    il: "Details", inspect: "Hochgeladen werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen\nissuer-web:\n  Port 8443: Upload, nur Client-Zert.\n  Port 443:  Lesen für alle Prüfer\nAbgleich alle 15 s",
-    segs: [mv("api", "pub", "Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), chk("iss", ["Zertifikat von der internen CA", "DN exakt CN=jwks-publisher"], "above")],
+  { ph: 1, title: "Der Issuer-Pod spiegelt die Schlüssel",
+    text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Issuer-Pod, alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server und liefert die Kopie über den Ingress nur lesend aus. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen. Es gibt keinen Schreibweg von außen und kein Client-Zertifikat. Der private Schlüssel verlässt den API-Server nie.",
+    il: "Details", inspect: "Issuer-Pod (Namespace wif-issuer):\n  sync: GET beim API-Server, alle 15 s\n        darf nur Discovery lesen\n  web:  nginx, nur GET, kein Token\nIngress (Traefik):\n  Host issuer.wif.local, nur 2 Pfade\n  Serverzert. der internen PKI\nAusgeliefert werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen",
+    segs: [mv("api", "iss", "GET · JWKS", "key", undefined, true), chk("iss", ["Aussteller und jwks_uri stimmen", "mindestens ein Schlüssel", "neue Key-ID → Warnung im Log"], "below")],
     fx: s => { s.issJwks = 1; } },
 
   { ph: 2, title: "Der Pod bekommt seinen „Pass“",
     text: "Kubernetes legt dem Pod ein ServiceAccount-Token als Datei ab: den „Pass“. Er nennt, wer die Workload ist, gilt nur für Keycloak und nur 600 Sekunden. Vor Ablauf wird er automatisch erneuert. Der Pod muss dafür nichts besitzen und nichts tun.",
-    il: "Inhalt des „Passes“", inspect: "iss (Aussteller): https://issuer-web\nsub (wer):\n  system:serviceaccount:\n    wif-demo:consumer\naud (für wen): Keycloak-Realm\nexp (Ablauf): Ausstellung + 600 s",
+    il: "Inhalt des „Passes“", inspect: "iss (Aussteller): https://issuer.wif.local\nsub (wer):\n  system:serviceaccount:\n    wif-demo:consumer\naud (für wen): Keycloak-Realm\nexp (Ablauf): Ausstellung + 600 s",
     segs: [mv("api", "pod", "„Pass“", "token")],
     fx: s => { s.files.push("„Pass“"); } },
 
@@ -182,13 +182,13 @@ const STEPS = [
     il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
     segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["Gateway: nur Realm-Pfade"], "below")], fx: null },
   { ph: 3, title: "Keycloak holt die Schlüssel des Clusters",
-    text: "Im „Pass“ steht als Aussteller https://issuer-web. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die öffentlichen Schlüssel bei issuer-web und merkt sie sich. Beim Cluster fragt Keycloak nie nach.",
-    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer-web\n  Schlüssel:\n    https://issuer-web/openid/v1/jwks",
-    segs: [mv("kc", "iss", "GET Schlüssel · TLS", "token"), mv("iss", "kc", "Cluster-JWKS · TLS", "key")],
+    text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die öffentlichen Schlüssel über den Ingress beim Issuer-Pod und merkt sie sich. Das Serverzertifikat am Ingress muss von der internen CA stammen. Den API-Server fragt Keycloak nie.",
+    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab ingress-lb,\nnur TCP) → Ingress, dort endet TLS\n→ Issuer-Pod, nur GET",
+    segs: [mv("kc", "ing", "GET Schlüssel · TLS", "token"), mv("ing", "iss", "", "token"), mv("iss", "ing", "", "key"), mv("ing", "kc", "Cluster-JWKS · TLS", "key")],
     fx: s => { s.jwks.add("kc"); } },
   { ph: 3, title: "Keycloak prüft den „Pass“",
     text: "Keycloak prüft die Signatur mit dem passenden Schlüssel, ob der Pass für Keycloak ausgestellt wurde und ob er noch gilt. Dann sucht es den Eintrag (Client), der zu genau diesem Aussteller und diesem „wer“ gehört. Vergleich zu heute: Statt Merkmalen im Subject-DN ordnet Keycloak über Aussteller + sub zu. Gibt es keinen Eintrag, ist hier Schluss.",
-    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer-web)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
+    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer.wif.local)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
     segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "Client workload-a gefunden"], "below")], fx: null },
   { ph: 3, title: "Keycloak stellt das „Visum“ aus",
     text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
@@ -201,7 +201,7 @@ const STEPS = [
     il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <„Visum“>",
     segs: [mv("pod", "r", "GET /orders · TLS", "token")], fx: null },
   { ph: 4, title: "Dienst R holt die Schlüssel des Realms",
-    text: "Beim ersten „Visum“ lädt Dienst R die öffentlichen Schlüssel des Realms bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne Gateway. issuer-web braucht Dienst R nicht.",
+    text: "Beim ersten „Visum“ lädt Dienst R die öffentlichen Schlüssel des Realms bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne Gateway. Den Ingress des Clusters braucht Dienst R nicht.",
     il: "", inspect: "",
     segs: [mv("r", "kc", "GET Schlüssel · TLS", "token"), mv("kc", "r", "Realm-JWKS · TLS", "key")],
     fx: s => { s.jwks.add("r"); } },
@@ -218,19 +218,19 @@ const STEPS = [
     text: "Löschen verlangt SCOPE_r:orders:admin. Dieses Recht hat der Fachbereich der Workload nicht gegeben, also antwortet Dienst R mit 403. Das „Visum“ ist gültig, es reicht nur nicht für diese Aktion.",
     il: "", inspect: "",
     segs: [mv("pod", "r", "DELETE /orders/7", "token"), mv("r", "pod", "403", "bad")], fx: null },
-  { ph: 5, title: "Gegenprobe: kein Weg in den Cluster",
-    text: "Keycloak holt die Cluster-Schlüssel bei issuer-web, Dienst R braucht nur Keycloak. Keiner von beiden hat einen Netzweg in den Cluster oder Zugangsdaten dafür – und keiner braucht sie.",
-    il: "", inspect: "",
-    segs: [par(blkTo("kc", 478, 300, "left"), blkTo("r", 478, 520, "right"))], fx: null },
-  { ph: 5, title: "Betrieb: Schlüsselwechsel im Cluster",
-    text: "Der Cluster bekommt einen neuen Signaturschlüssel. Der Publisher bemerkt die Änderung und lädt die neuen Schlüssel hoch; der alte bleibt zum Prüfen drin. Taucht ein „Pass“ mit unbekannter Key-ID auf, lädt Keycloak die Schlüssel bei issuer-web neu. Der alte Schlüssel kann weg, wenn alle alten Pässe abgelaufen und die Caches erneuert sind – frühestens nach 600 s plus der Zeit, die Prüfer Schlüssel zwischenspeichern.",
-    il: "Schlüssel nach dem Wechsel", inspect: "<neu>  signiert neue „Pässe“\n<alt>  nur noch zum Prüfen",
-    segs: [mv("api", "pub", "neue Cluster-JWKS", "key"), mv("pub", "iss", "PUT · mTLS", "key"), mv("kc", "iss", "GET (neue Key-ID)", "token"), mv("iss", "kc", "Cluster-JWKS", "key")],
+  { ph: 5, title: "Gegenprobe: nur die Ingress-Route, kein Weg zum API-Server",
+    text: "Vom Cluster erreicht Keycloak nur die Ingress-Route mit den zwei Pfaden für Discovery-Dokument und JWKS, und auch die nur lesend. Ein anderer Host wird am Ingress abgewiesen. Zum API-Server führt kein Netzweg, und Zugangsdaten dafür hat Keycloak nicht – es braucht sie auch nicht. Dienst R braucht nur Keycloak.",
+    il: "Geprüft im Lab", inspect: "GET über ingress-lb       erlaubt\nPUT, POST, DELETE         403\nanderer Pfad              404\nanderer Host (SNI)        kein TLS\nAPI-Server, Node-Port     kein Netzweg",
+    segs: [par(mv("kc", "ing", "nur GET", "ok"), blkTo("kc", 770, 330, "left", "kein Weg zum API-Server"), blkTo("r", 770, 630, "left", "kein Weg zum API-Server"))], fx: null },
+  { ph: 5, title: "Betrieb: Schlüsselwechsel in zwei Phasen",
+    text: "Phase 1 (sa-keys stage): Der neue öffentliche Schlüssel B kommt vorab ins JWKS, signiert wird weiter mit A. Der Issuer-Pod übernimmt B beim nächsten Abgleich und meldet die neue Key-ID im Log. Phase 2 (sa-keys activate), erst wenn B ausgeliefert wird: Ab jetzt signiert B. Kommt ein „Pass“ mit der neuen Key-ID, lädt Keycloak neu und findet sie schon – bereits der erste wird angenommen. A bleibt für noch gültige Pässe im JWKS und fällt beim nächsten Wechsel weg.",
+    il: "Schlüssel im Verlauf", inspect: "Zeitpunkt       signiert  im JWKS\nvorher          A         A\nnach stage      A         A, B\nnach activate   B         B, A\n(jeweils Neustart des API-Servers)",
+    segs: [chk("api", ["stage: B vorab im JWKS", "signiert weiter mit A"], "right"), mv("api", "iss", "JWKS A + B", "key"), chk("iss", ["liefert B aus", "Warnung im Log: neue Key-ID"], "below"), mv("api", "pod", "„Pass“ (B)", "token"), mv("kc", "ing", "GET (neue Key-ID)", "token"), mv("ing", "kc", "JWKS B + A", "key")],
     fx: s => { s.apiKey = 2; s.issJwks = 2; } }
 ];
 
 function freshState() {
-  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], clientCert: false, apiKey: 0, issJwks: 0, pubHas: false };
+  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], apiKey: 0, issJwks: 0 };
 }
 function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
 
@@ -369,7 +369,6 @@ const sketch = p => {
     // Merkmale, bei Platzmangel in einer zweiten Zeile
     const bl = [];
     if (st.cert.has(n)) bl.push(["Zert.", "trust"]);
-    if (n === "pub" && st.clientCert) bl.push(["Client-Zert.", "trust"]);
     if (st.ca.has(n)) bl.push(["CA", "trust"]);
     if (n === "api" && st.apiKey) bl.push([st.apiKey === 2 ? "Schlüssel neu + alt" : "Signaturschlüssel", "accent"]);
     if (n === "iss" && st.issJwks) bl.push([st.issJwks === 2 ? "Cluster-JWKS (2)" : "Cluster-JWKS", "accent"]);
@@ -396,7 +395,7 @@ const sketch = p => {
       p.text(z.label, z.x + 14, z.y + 10); p.textStyle(p.NORMAL);
     });
   }
-  const LINKS = [["api", "pub"], ["pub", "iss"], ["api", "pod"], ["iss", "kc"], ["pod", "kc"], ["pod", "r"], ["r", "kc"]];
+  const LINKS = [["api", "iss"], ["iss", "ing"], ["api", "pod"], ["ing", "kc"], ["pod", "kc"], ["pod", "r"], ["r", "kc"]];
   function staticLinks() {
     p.stroke(col("line")); p.strokeWeight(1.2);
     p.drawingContext.setLineDash([4, 5]);
@@ -439,8 +438,8 @@ const sketch = p => {
       p.strokeWeight(4); const s = 11;
       p.line(hx - s, hy - s, hx + s, hy + s); p.line(hx - s, hy + s, hx + s, hy - s);
       p.noStroke(); p.fill(col("bad")); p.textSize(14); p.textStyle(p.BOLD);
-      if (seg.lbl === "left") { p.textAlign(p.RIGHT, p.CENTER); p.text("kein Netzweg in den Cluster", hx - 16, hy - 18); }
-      else { p.textAlign(p.LEFT, p.CENTER); p.text("kein Netzweg in den Cluster", hx + 18, hy - 18); }
+      if (seg.side === "left") { p.textAlign(p.RIGHT, p.CENTER); p.text(seg.text, hx - 16, hy - 18); }
+      else { p.textAlign(p.LEFT, p.CENTER); p.text(seg.text, hx + 18, hy - 18); }
       p.textStyle(p.NORMAL);
     }
   }

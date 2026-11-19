@@ -1,36 +1,39 @@
 <section id="architektur">
 <h2>Wie die Schlüssel des Clusters zu Keycloak kommen</h2>
 <!-- host 1664x540
- cluster panel 0,0,840,540
- API 40,60,320,140   (bottom mid 200,200 ; right mid 360,130)
- PUB 520,60,280,140  (left mid 520,130 ; right mid 800,130)
- POD 40,400,760,120  (top 400 at x200 ; right mid 800,460)
- ISS 1104,60,560,140 (left mid 1104,130 ; bottom mid 1384,200)
- VAL 1104,400,560,120 (left mid 1104,460 ; top mid 1384,400)
+ cluster panel 0,0,1120,540
+ API 40,60,300,140   (right mid 340,130 ; bottom mid 190,200)
+ ISS 420,60,320,140  (left mid 420,130 ; right mid 740,130)
+ ING 820,60,260,140  (left mid 820,130 ; right mid 1080,130)
+ POD 40,400,700,120  (top 400 at x190 ; right mid 740,460)
+ LB  1180,60,180,140 (left mid 1180,130 ; right mid 1360,130)
+ KC  1420,60,244,460 (left 1420)
 -->
 <div class="host" style="height:540px">
-<div class="panel" style="left:0px; top:0px; width:840px; height:540px"></div>
-<p class="ph" style="left:24px; top:14px; width:792px">Kubernetes-Cluster (k3s)</p>
-<div class="box accent" style="left:40px; top:60px; width:320px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
-<div class="box" style="left:520px; top:60px; width:280px; height:140px"><p class="t">Publisher</p><p class="d">liest JWKS, pusht bei Änderung</p></div>
-<div class="box" style="left:40px; top:400px; width:760px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
-<div class="box" style="left:1104px; top:60px; width:560px; height:140px"><p class="t">issuer-web (nginx)</p><p class="d">:443 liest jeder, :8443 schreibt nur der Publisher</p></div>
-<div class="box accent" style="left:1104px; top:400px; width:560px; height:120px"><p class="t">Keycloak (Fachbereich)</p><p class="d">prüft ServiceAccount-Tokens</p></div>
-<x-connector class="ln" x1="360" y1="130" x2="520" y2="130"></x-connector>
-<x-connector class="ln" x1="200" y1="200" x2="200" y2="400"></x-connector>
-<x-connector class="ln" x1="800" y1="130" x2="1104" y2="130"></x-connector>
-<x-connector class="ln" x1="800" y1="460" x2="1104" y2="460"></x-connector>
-<x-connector class="ln" x1="1384" y1="400" x2="1384" y2="200"></x-connector>
-<p class="lbl" style="left:216px; top:270px; width:280px">Token, 10 min</p>
-<p class="lbl" style="left:856px; top:60px; width:232px">PUT per mTLS (Port 8443)</p>
-<p class="lbl" style="left:856px; top:390px; width:232px">POST /token, TLS</p>
-<p class="lbl" style="left:1400px; top:260px; width:264px">GET Discovery + JWKS, TLS</p>
-<p class="warn" style="left:856px; top:226px; width:232px">kein Netzweg von Keycloak zum API-Server</p>
+<div class="panel" style="left:0px; top:0px; width:1120px; height:540px"></div>
+<p class="ph" style="left:24px; top:14px; width:1072px">Kubernetes-Cluster (k3s)</p>
+<div class="box accent" style="left:40px; top:60px; width:300px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
+<div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Issuer-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
+<div class="box" style="left:820px; top:60px; width:260px; height:140px"><p class="t">Ingress</p><p class="d">Traefik, nur 2 Pfade</p></div>
+<div class="box" style="left:40px; top:400px; width:700px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
+<div class="box" style="left:1180px; top:60px; width:180px; height:140px"><p class="t">ingress-lb</p><p class="d">nur TCP 443</p></div>
+<div class="box accent" style="left:1420px; top:60px; width:244px; height:460px"><p class="t">Keycloak</p><p class="d">Fachbereich, prüft den „Pass“</p></div>
+<x-connector class="ln" x1="420" y1="130" x2="340" y2="130"></x-connector>
+<x-connector class="ln" x1="190" y1="200" x2="190" y2="400"></x-connector>
+<x-connector class="ln" x1="820" y1="130" x2="740" y2="130"></x-connector>
+<x-connector class="ln" x1="1180" y1="130" x2="1080" y2="130"></x-connector>
+<x-connector class="ln" x1="1420" y1="130" x2="1360" y2="130"></x-connector>
+<x-connector class="ln" x1="740" y1="460" x2="1420" y2="460"></x-connector>
+<p class="lbl" style="left:206px; top:270px; width:280px">Token, 10 min</p>
+<p class="lbl" style="left:344px; top:210px; width:400px">GET mit eigenem ServiceAccount</p>
+<p class="lbl" style="left:820px; top:210px; width:560px">GET Discovery + JWKS, TLS endet am Ingress</p>
+<p class="lbl" style="left:1136px; top:390px; width:280px">POST /token, TLS</p>
+<p class="warn" style="left:780px; top:290px; width:600px">kein Netzweg von Keycloak zum API-Server</p>
 </div>
 <ul class="pts">
-<li>Keycloak darf den API-Server nicht erreichen – darum bringt der Publisher die öffentlichen Schlüssel nach außen zu issuer-web</li>
-<li>Schreiben darf nur der Publisher, per mTLS: ein einziges Infrastruktur-Zertifikat statt eines pro Workload</li>
+<li>Keycloak darf den API-Server nicht erreichen – darum spiegelt ein Pod im Cluster die öffentlichen Schlüssel und liefert sie über den Ingress aus</li>
+<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Issuer-Pod holt selbst, von außen lässt sich nichts einspielen</li>
 <li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
 </ul>
-<aside>Der Publisher ist ein Pod im Cluster mit der eingebauten Rolle system:service-account-issuer-discovery. Alle 15 Sekunden vergleicht er das JWKS des API-Servers mit dem, was issuer-web ausliefert, und lädt nur bei Abweichung hoch. Den Upload-Port 8443 erreicht man nur aus dem Cluster-Netz, und nginx verlangt ein Client-Zertifikat der internen CA mit genau CN=jwks-publisher. Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
+<aside>Der Issuer-Pod im Namespace wif-issuer hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>

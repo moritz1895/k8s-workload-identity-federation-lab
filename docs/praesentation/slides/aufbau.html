@@ -4,25 +4,25 @@
 <div class="card">
 <p class="num">1</p>
 <h3>pki-init, sa-keys</h3>
-<ul class="cl"><li>Lab-CA und Zertifikate aller Dienste</li><li>Signaturschlüssel des Clusters</li></ul>
+<ul class="cl"><li>Lab-CA und Serverzertifikate, auch für den Ingress</li><li>Signaturschlüssel des Clusters</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">2</p>
 <h3>server (k3s)</h3>
-<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer zeigt auf issuer-web</li></ul>
+<ul class="cl"><li>Kubernetes-Cluster in einem Container</li><li>Token-Issuer https://issuer.wif.local</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">3</p>
 <h3>bootstrap</h3>
-<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an</li><li>gibt dem Publisher sein Client-Zertifikat</li></ul>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an, darunter den Issuer-Pod</li><li>Ingress-Zertifikat, Traefik-Einstellungen, Härtung von wif-issuer</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">4</p>
-<h3>issuer-web</h3>
-<ul class="cl"><li>Publisher lädt Discovery + JWKS per mTLS hoch</li><li>nginx liefert sie per HTTPS aus</li></ul>
+<h3>ingress-lb</h3>
+<ul class="cl"><li>einziger Weg der Prüfer in den Cluster, nur TCP 443</li><li>bereit, sobald der Issuer-Pod das JWKS über den Ingress ausliefert</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
@@ -34,7 +34,7 @@
 <ul class="pts">
 <li>Auf dem Host nur Docker + Compose v2 – alles andere läuft in Containern, in drei getrennten Netzen</li>
 <li>Reihenfolge über Compose-Abhängigkeiten: Ein Dienst startet erst, wenn seine Vorgänger bereit bzw. erfolgreich beendet sind</li>
-<li>Keycloak startet erst, wenn issuer-web bereit ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
+<li>Keycloak startet erst, wenn das JWKS über ingress-lb abrufbar ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
 </ul>
-<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach hält der Publisher im Cluster issuer-web aktuell, auch bei einer Schlüsselrotation. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
+<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach gleicht der Issuer-Pod im Cluster Discovery-Dokument und JWKS alle 15 Sekunden mit dem API-Server ab, auch bei einem Schlüsselwechsel. k3s bringt Traefik als Ingress-Controller mit; bootstrap passt ihn an und spielt die Admission-Regeln ein, bis dahin gibt es im Lab nur den Admin. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
 </section>

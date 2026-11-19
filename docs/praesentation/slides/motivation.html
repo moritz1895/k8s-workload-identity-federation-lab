@@ -13,6 +13,7 @@
 <ul class="pts">
 <li>Rechte stecken nicht mehr im Zertifikat, sondern in einer Zuordnung, die der Fachbereich in Keycloak pflegt</li>
 <li>Ein Bearer-Token braucht weiterhin TLS zum Server (einseitig, ohne Client-Zertifikat) – mit einem Zertifikat der internen CA</li>
+<li>Kein Client-Zertifikat mehr, auch nicht für die Schlüssel des Clusters: Ein Pod im Cluster liefert sie selbst aus</li>
 </ul>
 <aside>Ehrliche Gegenüberstellung: Ein Zertifikat lässt sich sperren. Ein ausgestelltes Token lässt sich nicht zurückziehen; dafür gilt das Access-Token nur 5 Minuten und nur für einen Dienst. Entzieht der Fachbereich die Zuordnung im Realm, bekommt die Workload ab sofort keine neuen Access-Tokens mehr. Ein gestohlenes ServiceAccount-Token taugt nur dazu, bei Keycloak Access-Tokens mit den Rechten genau dieser Workload zu holen – höchstens 10 Minuten lang.</aside>
 </section>

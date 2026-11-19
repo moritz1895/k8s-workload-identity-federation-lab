@@ -9,7 +9,7 @@
 <div class="box accent" style="left:0px; top:0px; width:320px; height:80px"><p class="t">API-Server</p></div>
 <div class="box" style="left:448px; top:0px; width:320px; height:80px"><p class="t">Pod „consumer“</p></div>
 <div class="box ok" style="left:896px; top:0px; width:320px; height:80px"><p class="t">Validator</p></div>
-<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">issuer-web</p></div>
+<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">Issuer-Pod (Ingress)</p></div>
 <x-connector class="ln life" x1="160" y1="80" x2="160" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
@@ -19,7 +19,7 @@
 <x-connector class="ln fragment" data-fragment-index="1" x1="160" y1="270" x2="608" y2="270"></x-connector>
 <x-connector class="ln fragment" data-fragment-index="2" x1="608" y1="360" x2="1056" y2="360"></x-connector>
 <x-connector class="ln dash fragment" data-fragment-index="4" x1="1056" y1="540" x2="608" y2="540"></x-connector>
-<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS laden (TLS)</p>
+<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS über den Ingress laden (TLS)</p>
 <p class="lbl fragment" data-fragment-index="1" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
 <p class="lbl fragment" data-fragment-index="2" style="left:624px; top:290px; width:416px">2 · GET /whoami über HTTPS mit Bearer-Token</p>
 <p class="lbl fragment" data-fragment-index="4" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>

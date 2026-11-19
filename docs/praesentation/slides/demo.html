@@ -11,10 +11,10 @@
 <p class="cmt"># Token-Austausch und Zugriff auf Dienst R</p>
 <p class="cmd">docker compose run --rm demo authz</p>
 <div class="gap"></div>
-<p class="cmt"># Veröffentlichung und Upload-Schutz</p>
+<p class="cmt"># Veröffentlichung über den Ingress, nur lesend</p>
 <p class="cmd">docker compose run --rm demo</p>
 <div class="gap"></div>
-<p class="cmt"># alles, inkl. Netztrennung und Rotation</p>
+<p class="cmt"># alles, inkl. Härtung, Netztrennung, Schlüsselwechsel</p>
 <p class="cmd">tools/run-all-checks.sh</p>
 </div>
 <div class="col">
@@ -24,9 +24,9 @@
 <li>consumer → Dienst R: 200</li>
 <li>Recht fehlt: 403; unbekannte Workload: abgelehnt</li>
 <li>Keycloak-Administration über das Gateway nicht erreichbar</li>
-<li>Upload ohne gültiges Publisher-Zertifikat: abgelehnt</li>
+<li>Issuer-Endpunkt nur lesend: PUT, POST, DELETE abgelehnt, fremder Host abgewiesen</li>
 </ol>
 </div>
 </div>
-<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2; aufräumen mit docker compose down -v. Dienst R ist vom Host nur per HTTPS erreichbar (Port 18081, Zertifikat der Lab-CA). Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. run-all-checks.sh dauert länger, weil es den API-Server für die Schlüsselrotation neu startet. Zum Nachvollziehen Schritt für Schritt gibt es die animierte Seite „WIF-Ablauf Schritt für Schritt“.</aside>
+<aside>Voraussetzung auf dem Rechner ist nur Docker mit Compose v2; aufräumen mit docker compose down -v. Dienst R ist vom Host nur per HTTPS erreichbar (Port 18081, Zertifikat der Lab-CA). Die Keycloak-Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. run-all-checks.sh dauert länger, weil es den API-Server für den Schlüsselwechsel in zwei Phasen zweimal neu startet. Zum Nachvollziehen Schritt für Schritt gibt es die animierte Seite „WIF-Ablauf Schritt für Schritt“.</aside>
 </section>

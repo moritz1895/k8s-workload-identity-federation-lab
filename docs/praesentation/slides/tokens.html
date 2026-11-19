@@ -3,7 +3,7 @@
 <table class="tbl">
 <tr class="head"><th style="width:16%">Merkmal</th><th style="width:42%">ServiceAccount-Token („Pass“)</th><th style="width:42%">Access-Token („Visum“)</th></tr>
 <tr><td>Ausgestellt von</td><td>Cluster (API-Server)</td><td>Keycloak, Realm domain-rst</td></tr>
-<tr><td>iss</td><td>https://issuer-web</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
+<tr><td>iss</td><td>https://issuer.wif.local</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
 <tr><td>aud</td><td>Issuer-URL des Realms</td><td>service-r (Dienst R)</td></tr>
 <tr><td>Wer</td><td>sub = system:serviceaccount:wif-demo:consumer</td><td>azp = workload-a (Client für consumer)</td></tr>
 <tr><td>Rechte</td><td>keine</td><td>scope = r:orders:read r:orders:write</td></tr>
