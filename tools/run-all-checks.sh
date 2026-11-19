@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Host-side driver for every lab check. Needs only docker compose on the host:
-#   1. base demo (discovery, pod -> validator, negative token and upload cases)
+#   1. base demo (discovery, pod -> validator, negative token and ingress cases)
 #   1b. authorization server demo (pod -> keycloak -> service R, negative cases)
+#   1c. protection of the issuer namespace (admission, RBAC, NetworkPolicy, pod)
+#   1d. issuer pod without API server and with an implausible state
 #   2. network separation as seen from validator, keycloak and service R
 #   3. validator with a foreign CA refuses to start
-#   4. signing key rotation in the cluster, published by the jwks-publisher
+#   4. signing key change in two phases, served by the in-cluster issuer pod
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,6 +22,12 @@ docker compose run --rm demo all
 
 section "1b. authorization server demo"
 docker compose run --rm demo authz
+
+section "1c. protection of the issuer namespace"
+docker compose run --rm demo hardening
+
+section "1d. issuer pod resilience"
+docker compose run --rm demo resilience
 
 section "2. network separation (seen from the relying parties)"
 # $1 = service, $2 = host:port, $3 = description
@@ -37,17 +45,18 @@ unreachable_from_keycloak() {
     pass "keycloak cannot reach $1 ($2)"
 }
 for service in validator service-r; do
-    unreachable "$service" 172.31.9.2:6443  "API server via workload-net"
-    unreachable "$service" 172.31.7.2:6443  "API server via cluster-net"
-    unreachable "$service" 172.31.8.20:8443 "issuer upload listener via relying-net"
+    unreachable "$service" 172.31.9.2:6443   "API server via workload-net"
+    unreachable "$service" 172.31.7.2:6443   "API server via cluster-net"
+    unreachable "$service" 172.31.7.2:30443  "ingress node port via cluster-net"
+    unreachable "$service" 172.31.9.2:30443  "ingress node port via workload-net"
 done
 timeout 8 docker compose exec -T keycloak bash -c "exec 3<>/dev/tcp/172.31.8.20/443" \
-    && pass "keycloak reaches the issuer read listener (probe works)" \
-    || fail "keycloak cannot reach the issuer read listener — TCP probe is broken"
+    && pass "keycloak reaches the ingress route through ingress-lb (probe works)" \
+    || fail "keycloak cannot reach ingress-lb — TCP probe is broken"
 unreachable_from_keycloak 172.31.9.2:6443  "API server via workload-net"
 unreachable_from_keycloak 172.31.7.2:6443  "API server via cluster-net"
-unreachable_from_keycloak 172.31.7.20:8443 "issuer upload listener via cluster-net"
-unreachable_from_keycloak 172.31.8.20:8443 "issuer upload listener via relying-net"
+unreachable_from_keycloak 172.31.7.2:30443 "ingress node port via cluster-net"
+unreachable_from_keycloak 172.31.7.20:443  "ingress-lb's cluster-net side"
 
 section "3. validator with a foreign CA refuses to start"
 FOREIGN_LOG=$(mktemp)
@@ -62,9 +71,13 @@ rm -f "$FOREIGN_LOG"
 [ "$FOREIGN_EXIT" != "0" ] && pass "validator with foreign CA exited with $FOREIGN_EXIT" \
     || fail "validator with foreign CA exited cleanly"
 
-section "4. signing key rotation"
+section "4. signing key change in two phases"
 docker compose run --rm demo pre-rotation
-docker compose run --rm sa-keys rotate
+docker compose run --rm sa-keys stage
+docker compose restart server
+docker compose up -d --wait server
+docker compose run --rm demo staged
+docker compose run --rm sa-keys activate
 docker compose restart server
 docker compose up -d --wait server
 docker compose run --rm demo post-rotation

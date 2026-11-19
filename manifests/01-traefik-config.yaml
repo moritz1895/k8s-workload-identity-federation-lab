@@ -1,0 +1,43 @@
+# Configures the ingress controller k3s ships (Traefik):
+#   - Service type NodePort with a fixed port; kube-proxy opens node ports only on the
+#     cluster-net address (--nodeport-addresses), where ingress-lb forwards to them
+#   - only the HTTPS entry point is exposed
+#   - only plain Ingress objects define routes: Traefik's own CRDs and the Gateway
+#     API provider are switched off, so the admission policies in
+#     05-issuer-admission.yaml cover every route
+#   - strict SNI: a TLS handshake for a host without a configured certificate fails
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      spec:
+        type: NodePort
+    ports:
+      web:
+        expose:
+          default: false
+      websecure:
+        nodePort: 30443
+    providers:
+      kubernetesCRD:
+        enabled: false
+      kubernetesGateway:
+        enabled: false
+      file:
+        enabled: true
+        content: |
+          tls:
+            options:
+              default:
+                sniStrict: true
+                minVersion: VersionTLS12
+    resources:
+      requests:
+        cpu: 10m
+        memory: 48Mi
+      limits:
+        memory: 128Mi

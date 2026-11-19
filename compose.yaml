@@ -1,9 +1,11 @@
 name: wif-lab
 
 # Three separate trust / network zones:
-#   cluster-net  — the cluster and the one way out of it: the issuer's upload listener
-#   relying-net  — the issuer's public read listener and the relying parties
-#                  (validator, keycloak, service-r)
+#   cluster-net  — the cluster node; the API server and the ingress node port listen
+#                  only on its address here
+#   relying-net  — the relying parties (validator, keycloak, service-r) and the one
+#                  way into the cluster: ingress-lb, which passes only TCP 443 on to
+#                  the ingress route of the issuer pod
 #   workload-net — the path workloads in the cluster use to call validator,
 #                  keycloak and service-r
 # No relying party shares a network with the API server's listener, and no
@@ -29,11 +31,9 @@ volumes:
   k3s-data:
   kubeconfig:
   sa-keys:
-  oidc-web:
   pki-ca:
   ca-trust:
   issuer-tls:
-  publisher-tls:
   keycloak-tls:
   service-r-tls:
   validator-tls:
@@ -54,14 +54,16 @@ services:
       - pki-ca:/pki/ca
       - ca-trust:/pki/trust
       - issuer-tls:/pki/issuer
-      - publisher-tls:/pki/publisher
       - keycloak-tls:/pki/keycloak
       - service-r-tls:/pki/service-r
       - validator-tls:/pki/validator
       - pki-demo:/pki/demo
       - ./tools:/work:ro
 
-  # ServiceAccount signing keys. `docker compose run --rm sa-keys rotate` rotates.
+  # ServiceAccount signing keys. A key change runs in two phases, each followed by
+  # `docker compose restart server`:
+  #   docker compose run --rm sa-keys stage      (new key verifies only)
+  #   docker compose run --rm sa-keys activate   (new key signs, once it is served)
   sa-keys:
     build:
       context: ./tools
@@ -74,21 +76,23 @@ services:
       - sa-keys:/sa-keys
       - ./tools:/work:ro
 
-  # Single-node k3s. Tokens carry iss=https://issuer-web; the API server listens
-  # only on its cluster-net address.
+  # Single-node k3s with its bundled ingress controller (Traefik, configured in
+  # manifests/01-traefik-config.yaml). Tokens carry iss=https://issuer.wif.local, the
+  # ingress host of the in-cluster issuer pod. The API server and the node ports
+  # listen only on the cluster-net address.
   server:
     image: ${K3S_IMAGE:-rancher/k3s:v1.34.11-k3s1}
     command:
       - server
-      - --disable=traefik
       - --disable=servicelb
       - --disable=metrics-server
       - --tls-san=k3s-server
       - --node-ip=172.31.7.2
       - --advertise-address=172.31.7.2
       - --bind-address=172.31.7.2
-      - --kube-apiserver-arg=service-account-issuer=https://issuer-web
-      - --kube-apiserver-arg=service-account-jwks-uri=https://issuer-web/openid/v1/jwks
+      - --kube-proxy-arg=nodeport-addresses=172.31.7.0/24
+      - --kube-apiserver-arg=service-account-issuer=https://issuer.wif.local
+      - --kube-apiserver-arg=service-account-jwks-uri=https://issuer.wif.local/openid/v1/jwks
       - --kube-apiserver-arg=service-account-signing-key-file=/sa-keys/signing.key
       - --kube-apiserver-arg=service-account-key-file=/sa-keys/verify.pub
     privileged: true
@@ -121,8 +125,8 @@ services:
       start_period: 15s
 
   # One-shot cluster setup with the admin kubeconfig: applies the manifests and
-  # hands the publisher its client certificate and the CA as Secret / ConfigMap.
-  # It never touches the issuer endpoint.
+  # hands the ingress its serving certificate and the workloads the CA as
+  # Secret / ConfigMap.
   bootstrap:
     build:
       context: ./tools
@@ -132,7 +136,7 @@ services:
     volumes:
       - kubeconfig:/kube:ro
       - ca-trust:/trust:ro
-      - publisher-tls:/publisher-tls:ro
+      - issuer-tls:/issuer-tls:ro
       - ./manifests:/manifests:ro
       - ./tools:/work:ro
     networks:
@@ -143,45 +147,53 @@ services:
       pki-init:
         condition: service_completed_successfully
 
-  # Stand-alone OIDC issuer endpoint, outside the cluster.
-  #   :443  on every address — public, read-only discovery document + JWKS
-  #         (the validator reads it via relying-net, the publisher via cluster-net)
-  #   :8443 on cluster-net — mTLS upload, only for the jwks-publisher certificate
-  # Healthy once the publisher has uploaded the first JWKS.
-  issuer-web:
+  # Stand-in for the load balancer in front of the ingress nodes: the relying
+  # parties' only way into the cluster. Listens on relying-net and passes TCP 443
+  # through to Traefik's node port on cluster-net. Healthy once the issuer pod
+  # serves the JWKS through the ingress. It is the only container in both
+  # relying-net and cluster-net, hence locked down: read-only, only the
+  # capabilities nginx needs to bind 443 and drop to its worker user.
+  ingress-lb:
     image: ${NGINX_IMAGE:-nginx:1.29-alpine}
-    entrypoint: ["sh", "-c", "mkdir -p /oidc/.tmp && chown -R nginx:nginx /oidc && exec nginx -g 'daemon off;'"]
+    command: ["nginx", "-c", "/etc/nginx/ingress-lb.conf", "-g", "daemon off;"]
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE", "SETUID", "SETGID"]
+    security_opt: ["no-new-privileges:true"]
     volumes:
-      - oidc-web:/oidc
-      - issuer-tls:/tls:ro
       - ca-trust:/trust:ro
-      - ./tools/nginx-issuer.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./tools/nginx-ingress-lb.conf:/etc/nginx/ingress-lb.conf:ro
     networks:
       cluster-net:
         ipv4_address: 172.31.7.20
       relying-net:
         ipv4_address: 172.31.8.20
         aliases:
-          - issuer-web
+          - issuer.wif.local
+    mem_limit: 32m
     depends_on:
-      pki-init:
-        condition: service_completed_successfully
+      server:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "test", "-s", "/oidc/openid/v1/jwks"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "--cacert", "/trust/ca.crt",
+             "--resolve", "issuer.wif.local:443:172.31.8.20", "https://issuer.wif.local/openid/v1/jwks"]
       interval: 5s
       timeout: 3s
-      retries: 60
-      start_period: 10s
+      retries: 120
+      start_period: 30s
 
   # The relying party: NOT in the cluster. Trusts the internal CA, does OIDC
-  # discovery against issuer-web and validates pod tokens offline (Nimbus).
+  # discovery against issuer.wif.local and validates pod tokens offline (Nimbus).
   # HTTPS only (8443) with a serving certificate from the internal PKI.
   validator:
     build:
       context: ./validator
     image: wif-lab/validator
     environment:
-      - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
+      - WIF_ISSUER=${WIF_ISSUER:-https://issuer.wif.local}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
       - WIF_ISSUER_CA=/trust/ca.crt
       - VALIDATOR_TLS_DIR=/tls
@@ -196,7 +208,7 @@ services:
     ports:
       - "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"
     depends_on:
-      issuer-web:
+      ingress-lb:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--cacert", "/trust/ca.crt", "https://localhost:8443/healthz"]
@@ -210,7 +222,7 @@ services:
   validator-foreign-ca:
     image: wif-lab/validator
     environment:
-      - WIF_ISSUER=${WIF_ISSUER:-https://issuer-web}
+      - WIF_ISSUER=${WIF_ISSUER:-https://issuer.wif.local}
       - WIF_AUDIENCE=${WIF_AUDIENCE:-wif-demo-validator}
       - WIF_ISSUER_CA=/pki-demo/foreign-ca.crt
       - VALIDATOR_TLS_DIR=/tls
@@ -226,7 +238,7 @@ services:
   # Authorization server of the domain that owns R, S and T. Production start mode,
   # HTTPS only, but single node with the embedded file database (lab only).
   # Accepts the cluster's ServiceAccount tokens as client assertions (Kubernetes
-  # identity provider `lab-cluster`, keys from issuer-web) and issues access
+  # identity provider `lab-cluster`, keys from issuer.wif.local) and issues access
   # tokens whose scopes are the realm's client-scope assignments.
   # Only on relying-net: workloads reach it through keycloak-gateway, which exposes
   # nothing but the domain realm's public endpoints. Admin console on the host only.
@@ -264,7 +276,7 @@ services:
     depends_on:
       pki-init:
         condition: service_completed_successfully
-      issuer-web:
+      ingress-lb:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
@@ -355,7 +367,7 @@ services:
       start_period: 30s
 
   # Verification harness:
-  #   docker compose run --rm demo [all|authz|pre-rotation|post-rotation]
+  #   docker compose run --rm demo [all|authz|hardening|resilience|pre-rotation|staged|post-rotation]
   demo:
     build:
       context: ./tools

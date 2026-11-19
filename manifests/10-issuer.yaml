@@ -1,0 +1,351 @@
+# In-cluster OIDC issuer endpoint. Serves the cluster's discovery document and JWKS
+# read-only behind the ingress host issuer.wif.local.
+#
+#   sync — reads both documents from the API server with its own ServiceAccount
+#          (read-only discovery role), accepts only plausible states and writes them
+#          atomically into a shared emptyDir. Logs every kid that appears or vanishes.
+#   web  — serves the copy with GET only. It never talks to the API server, so no
+#          request from outside reaches the API server.
+#
+# Whoever controls what this namespace serves can forge ServiceAccount tokens for every
+# ServiceAccount; it is protected like the control plane (RBAC, admission policies in
+# 05-issuer-admission.yaml, NetworkPolicies below, hardened pods).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: issuer
+  namespace: wif-issuer
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wif-issuer-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - kind: ServiceAccount
+    name: issuer
+    namespace: wif-issuer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuer-sync
+  namespace: wif-issuer
+data:
+  sync.sh: |
+    #!/bin/sh
+    # Mirrors the API server's discovery document and JWKS into $OUT. A state is
+    # taken over only when it is plausible (expected issuer and jwks_uri, at least
+    # one key); otherwise, and whenever the API server cannot be read, the last good
+    # state stays in place. $OUT starts empty, so the web container reports ready
+    # only after the first successful round.
+    set -u
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+    API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+    OUT=/srv/oidc
+    WORK=/tmp/sync
+    INTERVAL="${SYNC_INTERVAL_SECONDS:-15}"
+    mkdir -p "$WORK" "$OUT/.well-known" "$OUT/openid/v1"
+
+    log() { echo "issuer-sync: $*"; }
+
+    fetch() {
+      printf 'Authorization: Bearer %s\n' "$(cat "$SA/token")" > "$WORK/auth-header"
+      curl -fsS --max-time 10 --max-filesize 65536 --cacert "$SA/ca.crt" \
+        -H "@$WORK/auth-header" "$API$1" -o "$2"
+    }
+
+    kids_of() {
+      [ -s "$1" ] || return 0
+      grep -o '"kid":"[^"]*"' "$1" | cut -d'"' -f4 | sort -u
+    }
+
+    plausible() {
+      grep -qF "\"issuer\":\"$EXPECTED_ISSUER\"" "$WORK/discovery.json" \
+        || { log "REJECTED state: discovery document does not name issuer $EXPECTED_ISSUER"; return 1; }
+      grep -qF "\"jwks_uri\":\"$EXPECTED_JWKS_URI\"" "$WORK/discovery.json" \
+        || { log "REJECTED state: discovery document does not name jwks_uri $EXPECTED_JWKS_URI"; return 1; }
+      [ -n "$(kids_of "$WORK/jwks.json")" ] \
+        || { log "REJECTED state: JWKS holds no key"; return 1; }
+    }
+
+    report_kid_changes() {
+      kids_of "$OUT/openid/v1/jwks" > "$WORK/served-kids"
+      kids_of "$WORK/jwks.json" > "$WORK/new-kids"
+      for kid in $(comm -13 "$WORK/served-kids" "$WORK/new-kids"); do
+        log "WARNING kid appeared: $kid"
+      done
+      for kid in $(comm -23 "$WORK/served-kids" "$WORK/new-kids"); do
+        log "WARNING kid vanished: $kid"
+      done
+    }
+
+    take_over() {
+      cp "$WORK/jwks.json" "$OUT/openid/v1/.jwks.tmp"
+      cp "$WORK/discovery.json" "$OUT/.well-known/.openid-configuration.tmp"
+      mv -f "$OUT/openid/v1/.jwks.tmp" "$OUT/openid/v1/jwks"
+      mv -f "$OUT/.well-known/.openid-configuration.tmp" "$OUT/.well-known/openid-configuration"
+    }
+
+    while true; do
+      if fetch /.well-known/openid-configuration "$WORK/discovery.json" \
+         && fetch /openid/v1/jwks "$WORK/jwks.json"; then
+        if ! cmp -s "$WORK/jwks.json" "$OUT/openid/v1/jwks" \
+           || ! cmp -s "$WORK/discovery.json" "$OUT/.well-known/openid-configuration"; then
+          if plausible; then
+            report_kid_changes
+            take_over
+            log "serving JWKS sha256=$(sha256sum "$OUT/openid/v1/jwks" | cut -d' ' -f1) kids=[ $(kids_of "$OUT/openid/v1/jwks" | tr '\n' ' ')]"
+          fi
+        fi
+      else
+        log "reading from the API server failed, keeping the last good state, retrying in ${INTERVAL}s"
+      fi
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuer-nginx
+  namespace: wif-issuer
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_tokens off;
+        root /srv/oidc;
+
+        location = /.well-known/openid-configuration {
+            limit_except GET { deny all; }
+            default_type application/json;
+        }
+
+        location = /openid/v1/jwks {
+            limit_except GET { deny all; }
+            default_type application/json;
+        }
+
+        location / {
+            return 404;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuer
+  namespace: wif-issuer
+  labels:
+    app: issuer
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: issuer
+  template:
+    metadata:
+      labels:
+        app: issuer
+    spec:
+      serviceAccountName: issuer
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sync
+          image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
+          command: ["sh", "/scripts/sync.sh"]
+          env:
+            - name: EXPECTED_ISSUER
+              value: https://issuer.wif.local
+            - name: EXPECTED_JWKS_URI
+              value: https://issuer.wif.local/openid/v1/jwks
+            - name: SYNC_INTERVAL_SECONDS
+              value: "15"
+          securityContext: &hardened
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}
+            limits: {memory: 32Mi}
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+            - name: discovery-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: oidc
+              mountPath: /srv/oidc
+            - name: sync-tmp
+              mountPath: /tmp
+        - name: web
+          image: nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext: *hardened
+          readinessProbe:
+            httpGet:
+              path: /openid/v1/jwks
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 5m, memory: 8Mi}
+            limits: {memory: 32Mi}
+          volumeMounts:
+            - name: web-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: oidc
+              mountPath: /srv/oidc
+              readOnly: true
+            - name: web-tmp
+              mountPath: /tmp
+      volumes:
+        - name: script
+          configMap:
+            name: issuer-sync
+        - name: web-config
+          configMap:
+            name: issuer-nginx
+        - name: oidc
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: sync-tmp
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: web-tmp
+          emptyDir:
+            sizeLimit: 8Mi
+        # Only the sync container gets a ServiceAccount token; the web container,
+        # which faces the ingress, has none.
+        - name: discovery-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: issuer
+  namespace: wif-issuer
+spec:
+  selector:
+    app: issuer
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issuer
+  namespace: wif-issuer
+  annotations:
+    # Above any priority Traefik derives from rule length, so no other route can
+    # outrank this one for the issuer paths.
+    traefik.ingress.kubernetes.io/router.priority: "1000000000"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - issuer.wif.local
+      secretName: issuer-tls
+  rules:
+    - host: issuer.wif.local
+      http:
+        paths:
+          - path: /.well-known/openid-configuration
+            pathType: Exact
+            backend:
+              service:
+                name: issuer
+                port:
+                  name: http
+          - path: /openid/v1/jwks
+            pathType: Exact
+            backend:
+              service:
+                name: issuer
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: wif-issuer
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: issuer-from-ingress-controller
+  namespace: wif-issuer
+spec:
+  podSelector:
+    matchLabels:
+      app: issuer
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - port: 8080
+---
+# The sync container talks to the API server through the kubernetes Service IP; the
+# policy is evaluated after the Service address is translated to the server's address.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: issuer-to-api-server
+  namespace: wif-issuer
+spec:
+  podSelector:
+    matchLabels:
+      app: issuer
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 172.31.7.2/32
+      ports:
+        - port: 6443
