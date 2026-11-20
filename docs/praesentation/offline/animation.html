@@ -217,7 +217,7 @@ const STEPS = [
     il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer.wif.local)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
     obj: { fmt: "JWS-Prüfung", note: "lokal in Keycloak, nichts übertragen",
       body: "Header.kid  RKm3ye…G1BM\n  → passender Schlüssel im JWKS\nSignatur    RS256 über Header.Payload\niss         https://issuer.wif.local\naud         enthält …/realms/domain-rst\nnbf ≤ jetzt < exp\niss + sub   → Client workload-a" },
-    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "Client workload-a gefunden"], "below")], fx: null },
+    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "sub consumer → Client workload-a"], "below")], fx: s => { s.client = 1; } },
   { ph: 3, title: "Keycloak stellt das „Visum“ aus",
     text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
     il: "", inspect: "",
@@ -270,7 +270,7 @@ const STEPS = [
 ];
 
 function freshState() {
-  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], apiKey: 0, issJwks: 0 };
+  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], apiKey: 0, issJwks: 0, client: 0 };
 }
 function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
 
@@ -427,6 +427,7 @@ const sketch = p => {
     if (n === "kc" && st.jwks.has("kc")) bl.push(["Cluster-JWKS", "accent"]);
     if (n === "kc" && st.files.includes("„Visum“")) bl.push(["Realm-Schlüssel", "accent"]);
     if (n === "r" && st.jwks.has("r")) bl.push(["Realm-JWKS", "accent"]);
+    if (n === "pod" && st.client) bl.push(["bei Keycloak: workload-a", "token"]);
     if (n === "pki") bl.push(["CA-Schlüssel", "trust"]);
     let bx = b.x + 12, by = b.y + (b.s2 ? 74 : 54);
     p.textSize(13); p.textStyle(p.BOLD);
