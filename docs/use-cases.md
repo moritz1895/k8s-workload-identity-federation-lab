@@ -41,7 +41,7 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
   └───────────┼──────────────────────────▲────────────┘
               │                          │ TCP, durchgereicht an 172.31.7.2:30443
               │              ┌───────────┴────────────┐
-              │              │ ingress-lb (nginx TCP) │
+              │              │ load-balancer (nginx TCP) │
               │              │ 172.31.8.20:443        │
               │              └───────────▲────────────┘
               │                          │ TLS bis Traefik, interne CA
@@ -59,7 +59,7 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
 
    WICHTIG: Der Validator sendet NIE eine Anfrage an den API-Server (server) und kann ihn
             über kein Netz erreichen. Vom Cluster erreicht er nur die Route
-            https://issuer.wif.local über ingress-lb.
+            https://issuer.wif.local über load-balancer.
 ```
 
 ---
@@ -80,7 +80,7 @@ Lab löst [`tools/demo.sh`](../tools/demo.sh) (Abschnitt 3) diesen Aufruf aus.
 
 ### Vorbedingungen
 
-- Cluster, Discovery-Pod, `ingress-lb` und Validator laufen; der Start (Use Case 2) ist
+- Cluster, Discovery-Pod, `load-balancer` und Validator laufen; der Start (Use Case 2) ist
   durchgelaufen und der Discovery-Pod liefert die aktuellen Schlüssel aus (Use Case 3).
 - Der Validator hat beim Start erfolgreich OIDC-Discovery gegen `https://issuer.wif.local`
   gemacht: Das Feld `issuer` im Discovery-Dokument war exakt `https://issuer.wif.local`, und
@@ -222,7 +222,7 @@ Bei einem abgelehnten Token:
 - **server** - der k3s-Cluster samt Gateway-Controller Traefik.
 - **bootstrap** - Einmal-Container, der den Cluster einrichtet ([`tools/bootstrap.sh`](../tools/bootstrap.sh)).
 - **Discovery-Pod** - Deployment `issuer-discovery` im Cluster, das die Metadaten ausliefert (Use Case 3).
-- **ingress-lb** - Stellvertreter des Load Balancers vor dem Cluster ("ingress" = eingehender Verkehr; schreibgeschütztes
+- **load-balancer** - Stellvertreter des Load Balancers vor dem Cluster (schreibgeschütztes
   Dateisystem, nur die nötigen Capabilities, `no-new-privileges`).
 - **validator** und **keycloak** - starten zuletzt.
 
@@ -274,15 +274,15 @@ Bei einem abgelehnten Token:
 5. **Der Discovery-Pod gleicht ab** (Use Case 3). Erst nach dem ersten erfolgreichen Abgleich
    ist er bereit und bekommt von Traefik Verkehr.
 
-6. **ingress-lb wird `healthy`** (`depends_on: server healthy`), sobald
+6. **load-balancer wird `healthy`** (`depends_on: server healthy`), sobald
    `https://issuer.wif.local/openid/v1/jwks` über ihn mit einem Zertifikat der internen CA
    antwortet.
 
-7. **validator startet** (`depends_on: ingress-lb healthy`). `entrypoint.sh` wartet auf
+7. **validator startet** (`depends_on: load-balancer healthy`). `entrypoint.sh` wartet auf
    `/trust/ca.crt`, dann startet die JVM. Beim Hochfahren macht der Validator die
    OIDC-Discovery (siehe Use Case 1, Schritt 4) und ist danach unter `https://…:8443` bereit
    (`/healthz` liefert `{"status":"UP"}`; auf dem Host unter dem in `.env` gesetzten Port,
-   Standard `https://localhost:18080`). Keycloak wartet ebenfalls auf `ingress-lb`.
+   Standard `https://localhost:18080`). Keycloak wartet ebenfalls auf `load-balancer`.
 
 8. **demo läuft nicht automatisch mit.** `demo` und `validator-foreign-ca` stecken hinter
    Compose-Profilen und laufen nur mit `docker compose run --rm ...`.
@@ -301,7 +301,7 @@ Bei einem abgelehnten Token:
 |---|---|
 | k3s wird nicht rechtzeitig `ready` | `bootstrap` startet nicht (Compose-Abhängigkeit), `up` schlägt fehl. |
 | Rollout von `issuer-discovery` oder einer Workload überschreitet 180 s, Traefik 300 s | `bootstrap.sh` bricht mit Fehler ab (`set -e`). |
-| Discovery-Pod wird nicht bereit (API-Server nicht lesbar, Stand nicht plausibel) | `ingress-lb` wird nie `healthy`, Validator und Keycloak starten nicht. Ursache im Log des Containers `sync`. |
+| Discovery-Pod wird nicht bereit (API-Server nicht lesbar, Stand nicht plausibel) | `load-balancer` wird nie `healthy`, Validator und Keycloak starten nicht. Ursache im Log des Containers `sync`. |
 | Discovery-Dokument nennt einen anderen `issuer` als `WIF_ISSUER` | Validator wirft beim Start `IllegalStateException`, Container wird nicht `healthy`. |
 | `/trust/ca.crt` erscheint nicht innerhalb von 180 s | `validator/entrypoint.sh` beendet sich mit Fehlercode 1. |
 
@@ -315,7 +315,7 @@ Bei einem abgelehnten Token:
   Containern `sync` und `web` ([`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml)).
 - **API-Server** - Quelle der Metadaten.
 - **Traefik** - Gateway-Controller, veröffentlicht die beiden Pfade unter `issuer.wif.local`.
-- **Relying Parties** - Validator und Keycloak, lesen über `ingress-lb`.
+- **Relying Parties** - Validator und Keycloak, lesen über `load-balancer`.
 
 ### Auslöser
 
@@ -361,8 +361,8 @@ Bei einem abgelehnten Token:
 |---|---|---|---|
 | **I1** | `PUT`, `POST` oder `DELETE` auf das JWKS | `demo.sh` Abschnitt 6 | HTTP **404** (die Route passt nur auf `GET`, der Pod sieht die Anfrage nie); JWKS unverändert |
 | **I2** | Pfad, den die HTTPRoute nicht veröffentlicht (`/`) | `demo.sh` Abschnitt 6 | HTTP **404** |
-| **I3** | TLS-Handshake über `ingress-lb` für einen fremden Host (SNI `other.wif.local`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch, Handshake abgelehnt (strict SNI) |
-| **I4** | API-Server-Name über `ingress-lb` (SNI `kubernetes.default.svc`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch; kein Weg zum API-Server |
+| **I3** | TLS-Handshake über `load-balancer` für einen fremden Host (SNI `other.wif.local`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch, Handshake abgelehnt (strict SNI) |
+| **I4** | API-Server-Name über `load-balancer` (SNI `kubernetes.default.svc`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch; kein Weg zum API-Server |
 | **I5** | SNI `issuer.wif.local`, aber `Host: other.wif.local` | `demo.sh` Abschnitt 6 | HTTP **404** oder **421** |
 | **I6** | API-Server für die Discovery-Pods nicht erreichbar | `demo resilience`, Abschnitt R1 (NetworkPolicy-Egress entzogen) | Log `reading from the API server failed, keeping the last good state, retrying in 15s`; JWKS unverändert; beide Pods bleiben bereit |
 | **I7** | Stand nicht plausibel (Pod erwartet einen anderen Issuer) | `demo resilience`, Abschnitt R2 | Log `REJECTED state: …`; der neue Pod wird nie bereit, die beiden bisherigen liefern unverändert aus |
@@ -478,7 +478,7 @@ ausgeliefert wird.
 | 1b | `demo authz` | wie oben |
 | 1c | `demo hardening` | wie oben |
 | 1d | `demo resilience` | wie oben |
-| 2 | von Validator und `service-r` aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443`, `172.31.9.2:30443`; von Keycloak aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443` und die `cluster-net`-Seite von `ingress-lb` (`172.31.7.20:443`) | keine Verbindung; Keycloak erreicht `172.31.8.20:443` (Gegenprobe) |
+| 2 | von Validator und `service-r` aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443`, `172.31.9.2:30443`; von Keycloak aus `172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443` und die `cluster-net`-Seite von `load-balancer` (`172.31.7.20:443`) | keine Verbindung; Keycloak erreicht `172.31.8.20:443` (Gegenprobe) |
 | 3 | `validator-foreign-ca` | Exit-Code ungleich 0 (`PKIX`) |
 | 4 | Schlüsselwechsel (Use Case 4) | alte und neue Tokens werden beim ersten Versuch angenommen, vom Validator wie vom Realm |
 

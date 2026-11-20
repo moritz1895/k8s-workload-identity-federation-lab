@@ -61,7 +61,7 @@ Zertifikat ab (strict SNI). API-Server-Parameter: `service-account-issuer=https:
 `service-account-jwks-uri=https://issuer.wif.local/openid/v1/jwks`.
 
 **Netze.** Die Relying Parties (Validator, Keycloak) erreichen nur die Route
-`issuer.wif.local`, nicht den API-Server. Im Lab steht dafür `ingress-lb`, ein nginx im
+`issuer.wif.local`, nicht den API-Server. Im Lab steht dafür `load-balancer`, ein nginx im
 TCP-Modus, als Stellvertreter für den Load Balancer vor dem Cluster: Er hört in `relying-net` auf
 Port 443 und reicht nur dorthin an Traefiks Node-Port weiter. TLS endet im Cluster.
 kube-proxy öffnet Node-Ports nur auf der Adresse in `cluster-net`

@@ -18,7 +18,7 @@ NS="wif-demo"
 DISCOVERY_NS="wif-issuer-discovery"
 ISSUER_HOST=issuer.wif.local
 ISSUER=https://$ISSUER_HOST
-INGRESS_LB_ADDR=172.31.8.20
+LOAD_BALANCER_ADDR=172.31.8.20
 CA=/trust/ca.crt
 STATE=/state
 REALM_ISSUER="${KC_REALM_ISSUER:-https://keycloak:8443/realms/domain-rst}"
@@ -89,9 +89,9 @@ tls_only_checks() {
         || fail "$label: expected curl exit 60 without the internal CA, got $untrusted"
 }
 
-# Request to the ingress through ingress-lb; extra curl args shape the request.
+# Request to the gateway through load-balancer; extra curl args shape the request.
 # Echoes the HTTP status, or 000 when no HTTP exchange happened (e.g. TLS refused).
-ingress_status() {
+gateway_status() {
     curl -s -o /dev/null -w '%{http_code}' --max-time 5 --cacert "$CA" "$@" || true
 }
 
@@ -147,19 +147,19 @@ base_checks() {
     echo '{"keys":[]}' > /tmp/fake-jwks.json
     for method in PUT POST DELETE; do
         echo "$method $ISSUER/openid/v1/jwks"
-        expect_status 404 "$(ingress_status -X "$method" -H 'Content-Type: application/json' \
+        expect_status 404 "$(gateway_status -X "$method" -H 'Content-Type: application/json' \
             --data-binary @/tmp/fake-jwks.json "$ISSUER/openid/v1/jwks")" "$method on the JWKS not routed (the route matches GET only)"
     done
     echo "GET $ISSUER/  (a path the HTTPRoute does not match)"
-    expect_status 404 "$(ingress_status "$ISSUER/")" "unrouted path not served"
-    echo "GET https://other.wif.local/openid/v1/jwks  through ingress-lb (foreign host, SNI other.wif.local)"
-    expect_status 000 "$(ingress_status --resolve "other.wif.local:443:$INGRESS_LB_ADDR" -k \
+    expect_status 404 "$(gateway_status "$ISSUER/")" "unrouted path not served"
+    echo "GET https://other.wif.local/openid/v1/jwks  through load-balancer (foreign host, SNI other.wif.local)"
+    expect_status 000 "$(gateway_status --resolve "other.wif.local:443:$LOAD_BALANCER_ADDR" -k \
         https://other.wif.local/openid/v1/jwks)" "TLS handshake for a foreign host refused (strict SNI)"
-    echo "GET https://kubernetes.default.svc/version  through ingress-lb (API server name)"
-    expect_status 000 "$(ingress_status --resolve "kubernetes.default.svc:443:$INGRESS_LB_ADDR" -k \
+    echo "GET https://kubernetes.default.svc/version  through load-balancer (API server name)"
+    expect_status 000 "$(gateway_status --resolve "kubernetes.default.svc:443:$LOAD_BALANCER_ADDR" -k \
         https://kubernetes.default.svc/version)" "no way to the API server through the Gateway"
     echo "GET $ISSUER/openid/v1/jwks  with SNI $ISSUER_HOST but Host: other.wif.local"
-    MISROUTED=$(ingress_status -H 'Host: other.wif.local' "$ISSUER/openid/v1/jwks")
+    MISROUTED=$(gateway_status -H 'Host: other.wif.local' "$ISSUER/openid/v1/jwks")
     echo "HTTP $MISROUTED"
     [ "$MISROUTED" = "404" ] || [ "$MISROUTED" = "421" ] \
         && pass "foreign Host header not routed ($MISROUTED)" || fail "foreign Host header got $MISROUTED"

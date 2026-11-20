@@ -15,7 +15,7 @@ Entscheidung: [ADR 0004](../adr/0004-keycloak-als-autorisierungsserver-pro-fachb
 
 ```
       workload-net 172.31.9.0/24                         relying-net 172.31.8.0/24
- Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► ingress-lb .8.20:443 ──► Discovery-Pod (issuer.wif.local)
+ Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► load-balancer .8.20:443 ──► Discovery-Pod (issuer.wif.local)
    (keycloak = 172.31.9.30)              .9.30 / .8.31         Realm domain-rst
       │                                  nur /realms/domain-rst/        ▲
       │                                                                 │ Discovery + JWKS (beim ersten Token)
@@ -97,7 +97,7 @@ Jeder Workload-Client bindet sich daran:
 Bei einer Token-Anfrage findet Keycloak über `iss` der Client-Assertion den Identity-Provider,
 prüft Signatur, `exp`, `nbf` und `aud` (= Realm-Issuer-URL) und sucht den Client mit passendem
 `jwt.credential.sub`. Die Schlüssel lädt Keycloak lazy beim ersten Bedarf über
-`https://issuer.wif.local/.well-known/openid-configuration` → `jwks_uri` (über `ingress-lb`
+`https://issuer.wif.local/.well-known/openid-configuration` → `jwks_uri` (über `load-balancer`
 in `relying-net` zum Gateway des Discovery-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
 Verbindung zum API-Server gibt es nicht.
 
@@ -185,7 +185,7 @@ Keycloak hängt nur in `relying-net` (172.31.8.30, Alias `keycloak`) und veröff
 **keinen** Host-Port. Gemessen: Docker macht einen veröffentlichten Container-Port auch aus
 den anderen Bridge-Netzen erreichbar, unabhängig von der Host-Adresse, an die er gebunden
 ist – ein Pod erreichte `keycloak:8443` über 172.31.8.30, solange der Port veröffentlicht
-war. Nicht veröffentlichte Ports (`ingress-lb :443`, Keycloak `:9000`) bleiben isoliert.
+war. Nicht veröffentlichte Ports (`load-balancer :443`, Keycloak `:9000`) bleiben isoliert.
 
 ### `keycloak-gateway`
 
@@ -358,7 +358,7 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 
 | Dienst | Netz | Adresse | Zweck |
 |---|---|---|---|
-| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `ingress-lb`); `service-r`, `demo` und die Proxys erreichen ihn |
+| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `load-balancer`); `service-r`, `demo` und die Proxys erreichen ihn |
 | `keycloak-gateway` | `relying-net` | 172.31.8.31 | Weiterleitung zu Keycloak |
 | `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (`keycloak` per `hostAliases`) |
 | `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole, Host `127.0.0.1:18443`, nur Profil `admin` |
@@ -367,8 +367,8 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 
 `tools/run-all-checks.sh` (Abschnitt 2) prüft per Bash-`/dev/tcp`, dass Keycloak weder den
 API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Node-Port von Traefik
-(`172.31.7.2:30443`) noch die `cluster-net`-Seite von `ingress-lb` (`172.31.7.20:443`)
-erreicht, wohl aber `ingress-lb` in `relying-net` (`172.31.8.20:443`).
+(`172.31.7.2:30443`) noch die `cluster-net`-Seite von `load-balancer` (`172.31.7.20:443`)
+erreicht, wohl aber `load-balancer` in `relying-net` (`172.31.8.20:443`).
 Prüfung 20 in `demo.sh authz` prüft die Gegenrichtung aus dem Pod
 `stranger`: Admin-API, Admin-Konsole und Master-Realm `404`, Pfad-Traversal bleibt im Realm,
 172.31.8.30:8443 und :9000 unerreichbar, Realm-Discovery über das Gateway `200`.

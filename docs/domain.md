@@ -105,7 +105,7 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
   │        │       Traefik (Gateway issuer.wif.local) ──────────┘                                │
   │        │       ▲                                                                             │
   └────────┼───────┼─────────────────────────────────────────────────────────────────────────────┘
-           │       │  TCP 443, durchgereicht von ingress-lb (Stellvertreter des Load Balancers)
+           │       │  TCP 443, durchgereicht von load-balancer (Stellvertreter des Load Balancers)
            │       │
            │       │  OIDC-Discovery + JWKS, nur HTTPS:
            │       │    https://issuer.wif.local/.well-known/openid-configuration
@@ -414,7 +414,7 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **Gateway API (Gateway, HTTPRoute)** | Kubernetes-Objekte, die beschreiben, unter welchem Host und Pfad ein Dienst im Cluster von außen erreichbar ist: Das `Gateway` legt Listener fest (Port, Hostname, Zertifikat), die `HTTPRoute` leitet Pfade an einen Service. Umgesetzt werden sie vom **Gateway-Controller** (hier Traefik), der TLS beendet. Nachfolger des älteren `Ingress`. |
 | **`hostAliases`** | Feld im Pod, das feste Name-zu-IP-Einträge in die `/etc/hosts` des Pods schreibt - für Namen, die CoreDNS nicht kennt. |
 | **`iat` (Issued At)** | Claim: Ausstellungszeitpunkt des Tokens. |
-| **ingress-lb** | Im Lab der Stellvertreter des Load Balancers vor dem Cluster: reicht nur TCP 443 an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. "Ingress" meint hier den eingehenden Verkehr, nicht das Kubernetes-Objekt `Ingress`. |
+| **load-balancer** | Im Lab der Stellvertreter des Load Balancers vor dem Cluster: reicht nur TCP 443 an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. |
 | **`iss` (Issuer)** | Claim: URL des Ausstellers. Hier `https://issuer.wif.local`. |
 | **Issuer / Issuer-Endpoint** | Der Aussteller bzw. die URL, unter der seine öffentlichen Metadaten (Discovery-Dokument, JWKS) liegen. |
 | **Discovery-Pod** | Deployment `issuer-discovery` im Namespace `wif-issuer-discovery`: spiegelt Discovery-Dokument und JWKS vom API-Server und liefert sie nur lesend hinter dem Gateway `issuer.wif.local` aus. Er stellt keine Tokens aus; Issuer ist der API-Server. |

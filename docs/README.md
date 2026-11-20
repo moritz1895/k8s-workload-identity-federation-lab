@@ -22,8 +22,8 @@ Für Details zur Umsetzung:
 
 | Dokument | Inhalt |
 |---|---|
-| [technical/architecture.md](technical/architecture.md) | Compose-Topologie: alle Services inkl. `ingress-lb`, die Volumes, die drei Netze, Startreihenfolge. |
-| [technical/bootstrap-und-issuer.md](technical/bootstrap-und-issuer.md) | Lab-PKI (`pki-init.sh`), Signaturschlüssel und zweiphasiger Wechsel (`sa-keys.sh`), `bootstrap.sh`, der Discovery-Pod (`sync` + `web`), Gateway, HTTPRoute und `ingress-lb`, Härtung von `wif-issuer-discovery`, Verhalten bei Fehlern. |
+| [technical/architecture.md](technical/architecture.md) | Compose-Topologie: alle Services inkl. `load-balancer`, die Volumes, die drei Netze, Startreihenfolge. |
+| [technical/bootstrap-und-issuer.md](technical/bootstrap-und-issuer.md) | Lab-PKI (`pki-init.sh`), Signaturschlüssel und zweiphasiger Wechsel (`sa-keys.sh`), `bootstrap.sh`, der Discovery-Pod (`sync` + `web`), Gateway, HTTPRoute und `load-balancer`, Härtung von `wif-issuer-discovery`, Verhalten bei Fehlern. |
 | [technical/validator.md](technical/validator.md) | Der Java-Dienst: Konfiguration, Startablauf, die Nimbus-Validierungskette, die Endpunkte, die Tests. |
 | [technical/trust-und-tls.md](technical/trust-und-tls.md) | Die TLS-Vertrauensbeziehungen inkl. strict SNI am Gateway; wie der Validator einen Truststore nur mit der internen CA baut; `PKIX path building failed`. |
 | [technical/build-und-betrieb.md](technical/build-und-betrieb.md) | Images & Multi-Stage-Build, die Betriebsbefehle, Schlüsselwechsel, `run-all-checks.sh`, alle `.env`-Variablen, häufige Fehlerbilder. |

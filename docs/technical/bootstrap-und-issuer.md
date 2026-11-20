@@ -6,7 +6,7 @@ und JWKS vom API-Server zu den Relying Parties bringen: die Lab-PKI (`tools/pki-
 Signaturschlüssel (`tools/sa-keys.sh`), die Cluster-Einrichtung (`tools/bootstrap.sh`), den
 Discovery-Pod mit Gateway und HTTPRoute (`manifests/10-issuer-discovery.yaml`), Traefik
 (`manifests/01-traefik-config.yaml`), die Härtung des Namespace
-(`manifests/05-issuer-discovery-admission.yaml`) und `ingress-lb` (`tools/nginx-ingress-lb.conf`).
+(`manifests/05-issuer-discovery-admission.yaml`) und `load-balancer` (`tools/nginx-load-balancer.conf`).
 Die Entscheidungen dahinter:
 [ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod, Pull) und
 [ADR 0006](../adr/0006-gateway-api-statt-ingress.md) (Gateway API).
@@ -26,7 +26,7 @@ Discovery-Pod stellt nur dessen Metadaten unter der Issuer-URL `https://issuer.w
  validator, keycloak (relying-net)
         │ GET https://issuer.wif.local/...
         ▼
- ingress-lb 172.31.8.20:443 ── TCP, TLS unverändert ──► 172.31.7.2:30443 (cluster-net)
+ load-balancer 172.31.8.20:443 ── TCP, TLS unverändert ──► 172.31.7.2:30443 (cluster-net)
                                                               │
  ── Cluster ──────────────────────────────────────────────────┼───────────────
                                                               ▼
@@ -210,7 +210,7 @@ kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
 
 - `00-namespace.yaml` – die beiden Namespaces (erneut, idempotent).
 - `01-traefik-config.yaml` – `HelmChartConfig` für das in k3s mitgelieferte Traefik
-  ([Gateway](#gateway-traefik-gateway-httproute-und-ingress-lb)).
+  ([Gateway](#gateway-traefik-gateway-httproute-und-load-balancer)).
 - `05-issuer-discovery-admission.yaml` – die `ValidatingAdmissionPolicy`s
   `issuer-host-reserved` und `issuer-discovery-image-digest` mit ihren Bindings.
 - `10-issuer-discovery.yaml` – ServiceAccount, ClusterRoleBinding, ConfigMaps, Deployment, Service,
@@ -326,7 +326,7 @@ server {
 
 ---
 
-## Gateway: Traefik, Gateway, HTTPRoute und `ingress-lb`
+## Gateway: Traefik, Gateway, HTTPRoute und `load-balancer`
 
 Eine Route besteht aus dem **Proxy**, der Verbindungen annimmt, TLS beendet und weiterleitet
 (Traefik, der Gateway-Controller in `kube-system`), und aus der **Beschreibung** als
@@ -378,11 +378,10 @@ Von Traefik zum Pod läuft HTTP ohne TLS (Port 8080), abgesichert nur durch die
 NetworkPolicy `issuer-discovery-from-gateway`. Die Gateway API bietet dafür
 `BackendTLSPolicy`; das Lab nutzt sie nicht.
 
-### `ingress-lb` (`tools/nginx-ingress-lb.conf`)
+### `load-balancer` (`tools/nginx-load-balancer.conf`)
 
 Stellvertreter für den Load Balancer vor den Knoten mit dem Gateway-Controller und der
-einzige Weg der Relying Parties in den Cluster. „Ingress“ meint im Namen den eingehenden
-Verkehr, nicht das Kubernetes-Objekt. nginx im `stream`-Modus (TCP):
+einzige Weg der Relying Parties in den Cluster. nginx im `stream`-Modus (TCP):
 
 ```nginx
 server {
@@ -403,7 +402,7 @@ server {
 
 ### Was `demo all` (Prüfung 6) am Endpunkt prüft
 
-| Anfrage über `ingress-lb` | Ergebnis |
+| Anfrage über `load-balancer` | Ergebnis |
 |---|---|
 | `PUT`, `POST`, `DELETE` auf `/openid/v1/jwks` | `404` (die Route passt nur auf `GET`) |
 | `GET /` (nicht geroutet) | `404` |

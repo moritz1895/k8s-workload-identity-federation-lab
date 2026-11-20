@@ -93,8 +93,6 @@ Admission-Regel sorgt nur dafür, dass kein anderes Gateway den Host beansprucht
   entscheidet über das Routing, wie zuvor.
 - **Zwischen Traefik und Pod läuft weiterhin HTTP ohne TLS.** Die Gateway API bietet dafür
   `BackendTLSPolicy` (im Lab vorhanden, aber nicht genutzt).
-- **`ingress-lb` behält seinen Namen.** „Ingress“ meint dort den eingehenden Verkehr, nicht
-  das Kubernetes-Objekt.
 
 ## Alternativen
 

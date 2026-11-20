@@ -56,6 +56,7 @@ header p { margin: 0; color: var(--muted); font-size: 14px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 13px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend .fmt-key { font-family: var(--font-mono); font-size: 11.5px; font-weight: 700; color: var(--token); background: color-mix(in srgb, var(--token) 15%, transparent); border-radius: 4px; padding: 0 5px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .phase { font-weight: 600; color: var(--accent); }
@@ -66,6 +67,13 @@ header p { margin: 0; color: var(--muted); font-size: 14px; }
 .inspect:empty { display: none; }
 .inspect-label { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
 .inspect-label:empty { display: none; }
+.obj { display: flex; flex-direction: column; gap: 6px; }
+.obj[hidden] { display: none; }
+.obj-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.obj-head .inspect-label { margin: 0; }
+.obj-fmt { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--token); border: 1.5px solid var(--token); border-radius: 5px; padding: 0 7px; }
+.obj-note { font-size: 12.5px; color: var(--muted); }
+.obj .inspect { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; }
 button { font: inherit; font-size: 14px; font-weight: 500; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 7px 12px; cursor: pointer; }
 button:hover { border-color: var(--accent); }
@@ -103,12 +111,17 @@ body.embed .panel { max-height: 100vh; overflow-y: auto; }
       <span><i style="background:var(--bad)"></i>abgelehnt</span>
       <span><i style="background:transparent; border:1.5px dashed var(--line)"></i>mögliche Verbindung</span>
       <span><i style="background:transparent; border:1.5px solid var(--token); border-radius:6px; width:20px"></i>Rolle im Bild „Pass und Visum“</span>
+      <span><code class="fmt-key">JWT</code>Datentyp: JWT = signiertes Token (JWS) · JWKS = öffentliche Schlüssel · X.509 = Zertifikat · alle Verbindungen über TLS</span>
     </div>
   </div>
   <aside class="panel" aria-live="polite">
     <div class="meta"><span class="phase" id="phase"></span><span class="count" id="count"></span></div>
     <h2 id="title"></h2>
     <p class="text" id="text"></p>
+    <div class="obj" id="obj">
+      <div class="obj-head"><span class="inspect-label">Datenobjekt</span><span class="obj-fmt" id="obj-fmt"></span><span class="obj-note" id="obj-note"></span></div>
+      <pre class="inspect" id="obj-body"></pre>
+    </div>
     <div class="inspect-label" id="inspect-label"></div>
     <pre class="inspect" id="inspect"></pre>
     <div class="controls">
@@ -144,7 +157,7 @@ const ZONES = [
 const PH = ["Überblick", "Vorbereitung", "Identität: der „Pass“", "Rechte: das „Visum“", "Aufruf von Dienst R", "Gegenproben und Betrieb"];
 
 // Schritt-Bausteine
-const mv = (a, b, label, tone, net, flip) => ({ k: "move", a, b, label, tone, net, flip });
+const mv = (a, b, label, tone, fmt, flip) => ({ k: "move", a, b, label, tone, fmt, flip });
 const par = (...moves) => ({ k: "par", moves });
 const chk = (at, items, side) => ({ k: "check", at, items, side: side || "right" });
 const blkTo = (a, x, y, side, text) => ({ k: "block", a, x, y, side, text });
@@ -153,58 +166,80 @@ const STEPS = [
   { ph: 0, title: "Überblick: „Pass“, „Visum“, Aufruf",
     text: "Der Pod („Reisende:r“) bekommt vom API-Server des Clusters („Passamt“) einen „Pass“: das ServiceAccount-Token. Bei Keycloak, der „Botschaft“ seines Fachbereichs, tauscht er ihn gegen ein „Visum“, das Access-Token, und zeigt es bei Dienst R („Grenze“) vor. Im Pod liegt dafür weder ein Passwort noch ein Client-Zertifikat. Die folgenden Schritte zeigen, was im Hintergrund nötig ist, damit das sicher funktioniert.",
     il: "", inspect: "",
-    segs: [par(mv("api", "pod", "„Pass“", "token"), mv("pod", "kc", "„Pass“ zeigen", "token"), mv("kc", "pod", "„Visum“", "token"), mv("pod", "r", "„Visum“ zeigen", "token"))],
+    obj: { fmt: "JWT · JWKS", note: "drei Datenobjekte, alle JSON",
+      body: "„Pass“    ServiceAccount-Token\n          JWT, signiert (JWS, RS256)\n„Visum“   Access-Token\n          JWT, signiert (JWS, RS256)\n„Prüfmerkmale“  JWKS\n          JSON, öffentlich, nicht signiert\n\nEin JWT besteht aus drei Base64url-Teilen:\nHeader.Payload.Signatur\neyJhbGciOiJSUzI1NiIs… = {\"alg\":\"RS256\",…" },
+    segs: [par(mv("api", "pod", "„Pass“", "token", "JWT"), mv("pod", "kc", "„Pass“ zeigen", "token", "JWT"), mv("kc", "pod", "„Visum“", "token", "JWT"), mv("pod", "r", "„Visum“ zeigen", "token", "JWT"))],
     fx: null },
 
   { ph: 1, title: "Die interne PKI sichert die Verbindungen",
     text: "Die interne PKI (im Lab: pki-init) ist die „Beglaubigung“: Sie bestätigt, dass die Stellen echt sind, und stellt dafür Serverzertifikate für Traefik im Cluster (Host issuer.wif.local), Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Ein Client-Zertifikat bekommt niemand – weder eine Workload noch eine Komponente des Clusters. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
     il: "Wer bekommt was", inspect: "Traefik    Server-Zert. issuer.wif.local\n           (am Gateway issuer-discovery)\nKeycloak   Server-Zert. + Root-CA\nDienst R   Server-Zert. + Root-CA\nPod        nur Root-CA\nDiscovery-Pod  nichts von der PKI\nClient-Zertifikate: keine\n(Pfeile im Bild vereinfacht)",
-    segs: [par(mv("pki", "ing", "Server-Zert.", "trust"), mv("pki", "kc", "", "trust"))],
+    obj: { fmt: "X.509-Zertifikat", note: "zeigt Traefik im TLS-Handshake",
+      body: "Subject  O=WIF Lab, CN=issuer.wif.local\nSAN      DNS:issuer.wif.local\nIssuer   O=WIF Lab,\n         CN=WIF Lab Internal Root CA\nEKU      serverAuth\nPrüfer vergleichen mit dem hinterlegten\nRoot-Zertifikat." },
+    segs: [par(mv("pki", "ing", "Server-Zert.", "trust", "X.509"), mv("pki", "kc", "", "trust"))],
     fx: s => { ["ing", "kc", "r"].forEach(n => s.cert.add(n)); ["pod", "kc", "r"].forEach(n => s.ca.add(n)); } },
   { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
     text: "Der API-Server, das „Passamt“, bekommt ein eigenes Schlüsselpaar für ServiceAccount-Tokens – es stammt nicht von der PKI. Mit dem privaten Schlüssel signiert er jeden „Pass“. Als Aussteller trägt er eine eigene Adresse ein, nicht die des API-Servers: https://issuer.wif.local. Dort sollen Prüfer die „Prüfmerkmale“ finden: die öffentlichen Schlüssel (JWKS).",
     il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer.wif.local\nservice-account-jwks-uri\n  = https://issuer.wif.local/openid/v1/jwks",
+    obj: { fmt: "RSA-Schlüsselpaar", note: "wird nicht übertragen",
+      body: "privat      bleibt im API-Server\nöffentlich  als JWK im JWKS\nkid         SHA-256 des öffentlichen\n            Schlüssels, z. B. RKm3ye…G1BM;\n            steht in jedem „Pass“-Header" },
     segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer.wif.local"], "right")],
     fx: s => { s.apiKey = 1; } },
   { ph: 1, title: "Der Discovery-Pod hängt die Prüfmerkmale aus",
     text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Discovery-Pod („Aushang“), alle 15 Sekunden die Prüfmerkmale – Discovery-Dokument und JWKS – beim API-Server. Nach außen geht die Kopie nur über Traefik, den einzigen „Schalter“: Gateway und HTTPRoute lassen nur GET auf die zwei Pfade durch, nur GET erreicht den Pod. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen. Es gibt keinen Schreibweg von außen und kein Client-Zertifikat. Der private Schlüssel verlässt den API-Server nie.",
     il: "Details", inspect: "Discovery-Pod (Namespace wif-issuer-discovery):\n  sync: GET beim API-Server, alle 15 s\n        darf nur Discovery lesen\n  web:  nginx, nur GET, kein Token\nTraefik (Gateway-Controller):\n  Gateway: Listener issuer.wif.local,\n    Serverzert. der internen PKI\n  HTTPRoute: nur GET, nur 2 Pfade\nAusgeliefert werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen",
-    segs: [mv("api", "iss", "GET · JWKS", "key", undefined, true), chk("iss", ["Aussteller und jwks_uri stimmen", "mindestens ein Schlüssel", "neue Key-ID → Warnung im Log"], "below")],
+    obj: { fmt: "JWKS (JSON)", note: "nicht signiert, geschützt durch TLS",
+      body: "GET /openid/v1/jwks\nAuthorization: Bearer <SA-Token des\n               Discovery-Pods>\n\n{\"keys\": [{\"kty\": \"RSA\", \"alg\": \"RS256\",\n  \"use\": \"sig\", \"kid\": \"RKm3ye…G1BM\",\n  \"n\": \"vkyuCh…\", \"e\": \"AQAB\"}]}\n\ndazu das Discovery-Dokument:\n{\"issuer\": \"https://issuer.wif.local\",\n \"jwks_uri\": \"…/openid/v1/jwks\", …}" },
+    segs: [mv("api", "iss", "Prüfmerkmale", "key", "JWKS", true), chk("iss", ["Aussteller und jwks_uri stimmen", "mindestens ein Schlüssel", "neue Key-ID → Warnung im Log"], "below")],
     fx: s => { s.issJwks = 1; } },
 
   { ph: 2, title: "Der Pod bekommt seinen „Pass“",
     text: "Kubernetes legt dem Pod ein ServiceAccount-Token als Datei ab: den „Pass“. Er nennt, wer die Workload ist, gilt nur für Keycloak und nur 600 Sekunden. Vor Ablauf wird er automatisch erneuert. Der Pod muss dafür nichts besitzen und nichts tun.",
-    il: "Inhalt des „Passes“", inspect: "iss (Aussteller): https://issuer.wif.local\nsub (wer):\n  system:serviceaccount:\n    wif-demo:consumer\naud (für wen): Keycloak-Realm\nexp (Ablauf): Ausstellung + 600 s",
-    segs: [mv("api", "pod", "„Pass“", "token")],
+    il: "", inspect: "",
+    obj: { fmt: "JWT (JWS, RS256)", note: "als Datei im Pod",
+      body: "Header\n{\"alg\": \"RS256\", \"kid\": \"RKm3ye…G1BM\"}\n\nPayload (Auszug)\n{\"iss\": \"https://issuer.wif.local\",\n \"sub\": \"system:serviceaccount:wif-demo:consumer\",\n \"aud\": [\"https://keycloak:8443/realms/domain-rst\"],\n \"iat\": 1795180713, \"exp\": 1795181313,\n \"kubernetes.io\": {\"namespace\": \"wif-demo\",\n   \"pod\": {…}, \"serviceaccount\": {…}}}\n\nSignatur: privater Schlüssel des API-Servers\n\niss = Aussteller · sub = wer · aud = für wen\nexp = Ablauf (iat + 600 s)" },
+    segs: [mv("api", "pod", "„Pass“", "token", "JWT")],
     fx: s => { s.files.push("„Pass“"); } },
 
   { ph: 3, title: "Der Pod fragt bei Keycloak nach Rechten",
     text: "Der Pod ruft Keycloak auf, die „Botschaft“ seines Fachbereichs. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Vor Keycloak sitzt keycloak-gateway, ein nginx (im Bild nicht eigens gezeigt): Er lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
-    il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
-    segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["keycloak-gateway: nur Realm-Pfade"], "below")], fx: null },
+    il: "", inspect: "",
+    obj: { fmt: "Formular (x-www-form-urlencoded)", note: "der „Pass“ steckt in client_assertion",
+      body: "POST /realms/domain-rst/protocol/\n     openid-connect/token\n\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion_type=urn:ietf:params:\n  oauth:client-assertion-type:jwt-bearer\nclient_assertion=eyJhbGciOiJSUzI1NiIs…\n  ← der „Pass“ als JWT, der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R" },
+    segs: [mv("pod", "kc", "POST /token", "token", "Form + JWT"), chk("kc", ["keycloak-gateway: nur Realm-Pfade"], "below")], fx: null },
   { ph: 3, title: "Keycloak holt die Prüfmerkmale des Clusters",
     text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die Prüfmerkmale (JWKS) am „Schalter“ – bei Traefik – vom Discovery-Pod und merkt sie sich. Das Serverzertifikat, das Traefik für issuer.wif.local zeigt, muss von der internen CA stammen. Den API-Server fragt Keycloak nie.",
-    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab ingress-lb,\nnur TCP) → Traefik, dort endet TLS\n→ HTTPRoute: nur GET → Discovery-Pod",
-    segs: [mv("kc", "ing", "GET · TLS", "token"), mv("ing", "iss", "", "token"), mv("iss", "ing", "", "key"), mv("ing", "kc", "Prüfmerkmale (JWKS)", "key")],
+    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab load-balancer,\nnur TCP) → Traefik, dort endet TLS\n→ HTTPRoute: nur GET → Discovery-Pod",
+    obj: { fmt: "JWKS (JSON)", note: "nicht signiert – echt, weil TLS mit Zertifikat der internen CA",
+      body: "GET https://issuer.wif.local/openid/v1/jwks\n\n{\"keys\": [{\"kid\": \"RKm3ye…G1BM\",\n  \"kty\": \"RSA\", \"alg\": \"RS256\", \"use\": \"sig\",\n  \"n\": \"vkyuCh…\", \"e\": \"AQAB\"}]}" },
+    segs: [mv("kc", "ing", "GET · TLS", "token"), mv("ing", "iss", "", "token"), mv("iss", "ing", "", "key"), mv("ing", "kc", "Prüfmerkmale", "key", "JWKS")],
     fx: s => { s.jwks.add("kc"); } },
   { ph: 3, title: "Keycloak prüft den „Pass“",
     text: "Keycloak prüft die Signatur mit dem passenden Schlüssel, ob der Pass für Keycloak ausgestellt wurde und ob er noch gilt. Dann sucht es den Eintrag (Client), der zu genau diesem Aussteller und diesem „wer“ gehört. Vergleich zu heute: Statt Merkmalen im Subject-DN ordnet Keycloak über Aussteller + sub zu. Gibt es keinen Eintrag, ist hier Schluss.",
     il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer.wif.local)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
-    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "Client workload-a gefunden"], "below")], fx: null },
+    obj: { fmt: "JWS-Prüfung", note: "lokal in Keycloak, nichts übertragen",
+      body: "Header.kid  RKm3ye…G1BM\n  → passender Schlüssel im JWKS\nSignatur    RS256 über Header.Payload\niss         https://issuer.wif.local\naud         enthält …/realms/domain-rst\nnbf ≤ jetzt < exp\niss + sub   → Client workload-a" },
+    segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "sub consumer → Client workload-a"], "below")], fx: s => { s.client = 1; } },
   { ph: 3, title: "Keycloak stellt das „Visum“ aus",
     text: "Das Access-Token ist das „Visum“. Es enthält nur Scopes, die der Fachbereich dem Client zugeordnet hat, gilt nur für Dienst R und nur 300 Sekunden. Signiert ist es mit dem Schlüssel des Realms. Der Pod hebt es auf und holt erst ein neues, wenn weniger als 60 Sekunden übrig sind.",
-    il: "Inhalt des „Visums“", inspect: "iss (Aussteller): Keycloak-Realm\naud (für wen): service-r = Dienst R\nazp (Client): workload-a\nscope (Rechte):\n  r:orders:read r:orders:write\nexp (Ablauf): Ausstellung + 300 s",
-    segs: [mv("kc", "pod", "„Visum“ · TLS", "token")],
+    il: "", inspect: "",
+    obj: { fmt: "JSON mit JWT (JWS, RS256)", note: "Token-Antwort von Keycloak",
+      body: "{\"access_token\": \"eyJhbGciOiJSUzI1NiIs…\",\n \"token_type\": \"Bearer\", \"expires_in\": 300,\n \"scope\": \"r:orders:write r:orders:read\"}\n\naccess_token dekodiert – Header\n{\"alg\": \"RS256\", \"typ\": \"JWT\", \"kid\": \"skkaRW…HQkY\"}\n\nPayload (Auszug)\n{\"iss\": \"https://keycloak:8443/realms/domain-rst\",\n \"aud\": \"service-r\",\n \"azp\": \"workload-a\",\n \"scope\": \"r:orders:write r:orders:read\",\n \"iat\": 1795181167, \"exp\": 1795181467}\n\nSignatur: Schlüssel des Realms\n\naud = Dienst R · azp = Client · scope = Rechte" },
+    segs: [mv("kc", "pod", "„Visum“", "token", "JWT")],
     fx: s => { s.files.push("„Visum“"); } },
 
   { ph: 4, title: "Aufruf von Dienst R",
     text: "Der Pod ruft Dienst R auf, die „Grenze“, und legt das „Visum“ vor – über normales TLS, ohne Client-Zertifikat: Die Identität steckt im Visum. Den „Pass“ bekommt Dienst R nie zu sehen; er würde ihn ablehnen, weil Aussteller und Empfänger nicht passen.",
-    il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <„Visum“>",
-    segs: [mv("pod", "r", "GET /orders · TLS", "token")], fx: null },
+    il: "", inspect: "",
+    obj: { fmt: "HTTP mit Bearer-Token (RFC 6750)", note: "das „Visum“ als JWT im Header",
+      body: "GET /orders HTTP/1.1\nHost: service-r.wif.local:8443\nAuthorization: Bearer eyJhbGciOiJSUzI1NiIs…\n                      ← das „Visum“" },
+    segs: [mv("pod", "r", "GET /orders", "token", "Bearer JWT")], fx: null },
   { ph: 4, title: "Dienst R holt die Prüfmerkmale des Realms",
     text: "Beim ersten „Visum“ lädt Dienst R die Prüfmerkmale der Visa – die öffentlichen Schlüssel des Realms (Realm-JWKS) – bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne keycloak-gateway. Traefik im Cluster braucht Dienst R nicht.",
     il: "", inspect: "",
-    segs: [mv("r", "kc", "GET · TLS", "token"), mv("kc", "r", "Prüfmerkmale (Realm-JWKS)", "key")],
+    obj: { fmt: "JWKS (JSON) des Realms", note: "Dienst R nimmt den Schlüssel mit der kid aus dem „Visum“",
+      body: "GET /realms/domain-rst/protocol/\n    openid-connect/certs\n\n{\"keys\": [\n {\"kid\": \"skkaRW…HQkY\", \"alg\": \"RS256\",\n  \"use\": \"sig\", …},\n {\"kid\": \"KnVV5_…LYVA\", \"alg\": \"RSA-OAEP\",\n  \"use\": \"enc\", …}]}" },
+    segs: [mv("r", "kc", "GET · TLS", "token"), mv("kc", "r", "Prüfmerkmale Realm", "key", "JWKS")],
     fx: s => { s.jwks.add("r"); } },
   { ph: 4, title: "Dienst R prüft das „Visum“",
     text: "Dienst R ist ein Standard-Spring-Resource-Server. Er prüft Signatur, Aussteller, Empfänger und Ablauf und macht aus jedem Scope eine Authority. Den Namen der Workload (azp) sieht er, entscheidet aber nur nach Scopes.",
@@ -213,25 +248,31 @@ const STEPS = [
   { ph: 4, title: "Die Regel im Dienst greift: 200",
     text: "GET /orders verlangt SCOPE_r:orders:read – vorhanden, also 200. Vergleich zu heute: Statt „DN → Rolle“ im Dienst gilt „Scope → Authority“. Welche Workload welche Rechte bekommt, steht im Realm; welcher Scope welchen Endpunkt schützt, steht im Code von Dienst R.",
     il: "Regeln in Dienst R", inspect: "GET /orders\n  → SCOPE_r:orders:read\nPOST /orders\n  → SCOPE_r:orders:write\nDELETE /orders/{id}\n  → SCOPE_r:orders:admin",
-    segs: [mv("r", "pod", "200 · TLS", "ok")], fx: null },
+    obj: { fmt: "JSON", note: "Antwort von Dienst R",
+      body: "HTTP/1.1 200\nContent-Type: application/json\n\n{\"clientId\": \"workload-a\",\n \"scopes\": [\"r:orders:write\", \"r:orders:read\"],\n \"endpoint\": \"GET /orders\"}" },
+    segs: [mv("r", "pod", "200", "ok", "JSON")], fx: null },
 
   { ph: 5, title: "Gegenprobe: fehlendes Recht gibt 403",
     text: "Löschen verlangt SCOPE_r:orders:admin. Dieses Recht hat der Fachbereich der Workload nicht gegeben, also antwortet Dienst R mit 403. Das „Visum“ ist gültig, es reicht nur nicht für diese Aktion.",
     il: "", inspect: "",
-    segs: [mv("pod", "r", "DELETE /orders/7", "token"), mv("r", "pod", "403", "bad")], fx: null },
+    obj: { fmt: "HTTP-Antwort ohne Body", note: "der Grund steht im Header",
+      body: "HTTP/1.1 403\nWWW-Authenticate: Bearer\n  error=\"insufficient_scope\",\n  error_description=\"The request requires\n    higher privileges than provided by the\n    access token.\"\nContent-Length: 0" },
+    segs: [mv("pod", "r", "DELETE /orders/7", "token", "Bearer JWT"), mv("r", "pod", "403", "bad")], fx: null },
   { ph: 5, title: "Gegenprobe: nur die HTTPRoute, kein Weg zum API-Server",
     text: "Vom Cluster erreicht Keycloak nur den „Schalter“: Traefik mit der HTTPRoute für die zwei Pfade Discovery-Dokument und JWKS, und auch die nur per GET. Ein anderer Host wird bei Traefik abgewiesen; den Host issuer.wif.local darf außer dem Gateway issuer-discovery keines beanspruchen. Zum API-Server führt kein Netzweg, und Zugangsdaten dafür hat Keycloak nicht – es braucht sie auch nicht. Dienst R braucht nur Keycloak.",
-    il: "Geprüft im Lab", inspect: "GET über ingress-lb       erlaubt\nPUT, POST, DELETE         404\nanderer Pfad              404\nanderer Host (SNI)        kein TLS\nAPI-Server, Node-Port     kein Netzweg",
+    il: "Geprüft im Lab", inspect: "GET über load-balancer       erlaubt\nPUT, POST, DELETE         404\nanderer Pfad              404\nanderer Host (SNI)        kein TLS\nAPI-Server, Node-Port     kein Netzweg",
     segs: [par(mv("kc", "ing", "nur GET", "ok"), blkTo("kc", 752, 330, "left", "kein Weg zum API-Server"), blkTo("r", 752, 630, "left", "kein Weg zum API-Server"))], fx: null },
   { ph: 5, title: "Betrieb: Schlüsselwechsel in zwei Phasen",
     text: "Phase 1 (sa-keys stage): Das „Passamt“ hängt das Prüfmerkmal für den neuen Schlüssel B vorab aus, also ins JWKS; signiert wird weiter mit A. Der Discovery-Pod übernimmt B beim nächsten Abgleich und meldet die neue Key-ID im Log. Phase 2 (sa-keys activate), erst wenn B ausgeliefert wird: Ab jetzt signiert B. Kommt ein „Pass“ mit der neuen Key-ID, lädt Keycloak neu und findet sie schon – bereits der erste wird angenommen. A bleibt für noch gültige Pässe im JWKS und fällt beim nächsten Wechsel weg.",
     il: "Schlüssel im Verlauf", inspect: "Zeitpunkt       signiert  im JWKS\nvorher          A         A\nnach stage      A         A, B\nnach activate   B         B, A\n(jeweils Neustart des API-Servers)",
-    segs: [chk("api", ["stage: B vorab im JWKS", "signiert weiter mit A"], "right"), mv("api", "iss", "JWKS A + B", "key"), chk("iss", ["liefert B aus", "Warnung im Log: neue Key-ID"], "below"), mv("api", "pod", "„Pass“ (B)", "token"), mv("kc", "ing", "GET (neue Key-ID)", "token"), mv("ing", "kc", "JWKS B + A", "key")],
+    obj: { fmt: "JWKS mit zwei Schlüsseln", note: "der „Pass“-Header nennt die neue kid",
+      body: "JWKS nach stage\n{\"keys\": [{\"kid\": \"A…\", \"use\": \"sig\", …},\n          {\"kid\": \"B…\", \"use\": \"sig\", …}]}\n\n„Pass“ nach activate – Header\n{\"alg\": \"RS256\", \"kid\": \"B…\"}\n\nKeycloak kennt B noch nicht, lädt das JWKS\nneu und findet B." },
+    segs: [chk("api", ["stage: B vorab im JWKS", "signiert weiter mit A"], "right"), mv("api", "iss", "A + B", "key", "JWKS"), chk("iss", ["liefert B aus", "Warnung im Log: neue Key-ID"], "below"), mv("api", "pod", "„Pass“ (B)", "token", "JWT"), mv("kc", "ing", "GET (neue Key-ID)", "token"), mv("ing", "kc", "B + A", "key", "JWKS")],
     fx: s => { s.apiKey = 2; s.issJwks = 2; } }
 ];
 
 function freshState() {
-  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], apiKey: 0, issJwks: 0 };
+  return { cert: new Set(), ca: new Set(), jwks: new Set(), files: [], apiKey: 0, issJwks: 0, client: 0 };
 }
 function stateBefore(i) { const s = freshState(); for (let k = 0; k < i; k++) if (STEPS[k].fx) STEPS[k].fx(s); return s; }
 
@@ -270,6 +311,10 @@ function renderPanel() {
   el("count").textContent = "Schritt " + (cur + 1) + " von " + STEPS.length;
   el("title").textContent = st.title;
   el("text").textContent = st.text;
+  el("obj").hidden = !st.obj;
+  el("obj-fmt").textContent = st.obj ? st.obj.fmt : "";
+  el("obj-note").textContent = st.obj ? st.obj.note || "" : "";
+  el("obj-body").textContent = st.obj ? st.obj.body || "" : "";
   el("inspect-label").textContent = st.il || "";
   el("inspect").textContent = st.inspect || "";
   el("btn-prev").disabled = cur === 0;
@@ -318,7 +363,7 @@ function ends(a, b) { const p = edgePoint(a, center(b)), q = edgePoint(b, center
 const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 const clamp01 = v => Math.max(0, Math.min(1, v));
 
-let FONT = "sans-serif";
+let FONT = "sans-serif", MONO = "monospace";
 const sketch = p => {
   let scaleF = 1;
   function size() {
@@ -333,6 +378,7 @@ const sketch = p => {
     p.pixelDensity(EMBED ? 2 : Math.min(2, window.devicePixelRatio || 1));
     p.textFont(FONT);
     document.fonts.load('16px "IBM Plex Sans"').then(() => { if (document.fonts.check('16px "IBM Plex Sans"')) FONT = "IBM Plex Sans"; }).catch(() => {});
+    document.fonts.load('bold 13px "IBM Plex Mono"').then(() => { if (document.fonts.check('bold 13px "IBM Plex Mono"')) MONO = "IBM Plex Mono"; }).catch(() => {});
     readColors();
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
     new MutationObserver(readColors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
@@ -341,15 +387,32 @@ const sketch = p => {
 
   const col = (k, a) => { const c = p.color(C[k === "key" ? "accent" : k] || "#888"); if (a !== undefined) c.setAlpha(a); return c; };
 
-  function pill(x, y, label, tone, filled) {
-    p.textSize(14.5); p.textStyle(p.BOLD);
-    const tw = p.textWidth(label) + 20;
+  // Beschriftung einer Nachricht; fmt = Datentyp (JWT, JWKS, X.509 …) als Kästchen rechts daneben
+  function pillWidths(label, fmt) {
+    p.textFont(FONT); p.textSize(14.5); p.textStyle(p.BOLD);
+    const lw = p.textWidth(label);
+    let fw = 0;
+    if (fmt) { p.textFont(MONO); p.textSize(12.5); p.textStyle(p.BOLD); fw = p.textWidth(fmt) + 12; p.textFont(FONT); }
+    p.textStyle(p.NORMAL);
+    return { lw, fw, total: lw + 20 + (fmt ? fw + 8 : 0) };
+  }
+  function pill(x, y, label, tone, filled, fmt) {
+    const { lw, fw, total } = pillWidths(label, fmt);
     p.noStroke();
     p.fill(filled ? col(tone) : col("surface"));
     if (!filled) { p.stroke(col(tone)); p.strokeWeight(1.5); }
-    p.rectMode(p.CENTER); p.rect(x, y, tw, 26, 13); p.rectMode(p.CORNER);
+    p.rectMode(p.CENTER); p.rect(x, y, total, 26, 13); p.rectMode(p.CORNER);
+    const left = x - total / 2;
     p.noStroke(); p.fill(filled ? col("surface") : col(tone));
-    p.textAlign(p.CENTER, p.CENTER); p.text(label, x, y + 1);
+    p.textSize(14.5); p.textStyle(p.BOLD);
+    p.textAlign(p.LEFT, p.CENTER); p.text(label, left + 10, y + 1);
+    if (fmt) {
+      const fx = left + 10 + lw + 8;
+      p.fill(filled ? col("surface") : col(tone, 38)); p.rect(fx, y - 9, fw, 18, 4);
+      p.fill(col(tone)); p.textFont(MONO); p.textSize(12.5);
+      p.textAlign(p.CENTER, p.CENTER); p.text(fmt, fx + fw / 2, y + 0.5);
+      p.textFont(FONT);
+    }
     p.textStyle(p.NORMAL);
   }
   function badge(x, y, label, tone) {
@@ -384,6 +447,7 @@ const sketch = p => {
     if (n === "kc" && st.jwks.has("kc")) bl.push(["Cluster-JWKS", "accent"]);
     if (n === "kc" && st.files.includes("„Visum“")) bl.push(["Realm-Schlüssel", "accent"]);
     if (n === "r" && st.jwks.has("r")) bl.push(["Realm-JWKS", "accent"]);
+    if (n === "pod" && st.client) bl.push(["bei Keycloak: workload-a", "token"]);
     if (n === "pki") bl.push(["CA-Schlüssel", "trust"]);
     let bx = b.x + 12, by = b.y + (b.s2 ? 74 : 54);
     p.textSize(13); p.textStyle(p.BOLD);
@@ -430,11 +494,9 @@ const sketch = p => {
     p.line(u.x, u.y, hx, hy);
     if (e >= 0.98) arrowHead(v.x, v.y, Math.atan2(v.y - u.y, v.x - u.x), c);
     if (!seg.label) { if (t < 1) { p.noStroke(); p.fill(c); p.circle(hx, hy, 14); } return; }
-    if (t < 1) { pill(hx, hy, seg.label, seg.tone, true); return; }
-    p.textSize(14.5); p.textStyle(p.BOLD);
-    const off = 12 + Math.abs(nx) * (p.textWidth(seg.label) / 2 + 10) + Math.abs(ny) * 13;
-    p.textStyle(p.NORMAL);
-    pill((u.x + v.x) / 2 + nx * off, (u.y + v.y) / 2 + ny * off, seg.label, seg.tone, false);
+    if (t < 1) { pill(hx, hy, seg.label, seg.tone, true, seg.fmt); return; }
+    const off = 12 + Math.abs(nx) * (pillWidths(seg.label, seg.fmt).total / 2) + Math.abs(ny) * 13;
+    pill((u.x + v.x) / 2 + nx * off, (u.y + v.y) / 2 + ny * off, seg.label, seg.tone, false, seg.fmt);
   }
   function drawBlock(seg, t) {
     const target = { x: seg.x, y: seg.y };
@@ -512,7 +574,7 @@ const sketch = p => {
 };
 
 const EMBED = new URLSearchParams(location.search).has("embed");
-if (EMBED) document.body.classList.add("embed");
+if (EMBED) { document.body.classList.add("embed"); document.documentElement.dataset.theme = "light"; }
 function postState() { if (window.parent !== window) window.parent.postMessage({ wif: "state", step: cur, total: STEPS.length }, "*"); }
 window.addEventListener("message", e => {
   const m = e.data || {};

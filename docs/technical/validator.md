@@ -22,7 +22,7 @@ Token **vollständig offline**:
 Er ruft dafür **nie** den Kubernetes-API-Server (kein `TokenReview`) und erreicht ihn auch
 über kein Netz. Die einzige Netzwerkverbindung nach außen ist die OIDC-Discovery + der
 JWKS-Abruf gegen `https://issuer.wif.local` – das Gateway des Discovery-Pods im Cluster, das
-der Validator in `relying-net` über `ingress-lb` erreicht –, beim Start und danach zum
+der Validator in `relying-net` über `load-balancer` erreicht –, beim Start und danach zum
 Cache-Refresh. Beim Schlüsselwechsel steht die neue `kid` im JWKS, bevor der API-Server mit
 ihr signiert; das erste Token mit der neuen `kid` wird ohne Wiederholung angenommen. Tokens
 mit der vorherigen `kid` bleiben gültig, solange deren Schlüssel im JWKS steht (geprüft mit

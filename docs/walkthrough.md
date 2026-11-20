@@ -32,7 +32,7 @@ Systems, weil es dessen Signaturschlüssel kennt.
 | `sa-keys` | Dasselbe Wegwerf-Image | Erzeugt den Schlüssel, mit dem der Cluster Tokens signiert; wechselt ihn auf Zuruf in zwei Phasen (`stage`, `activate`); im Notfall entfernt `retire` den vorherigen Schlüssel sofort. |
 | `server` | k3s — ein vollständiges, aber leichtgewichtiges Kubernetes, das komplett in **einem** Container läuft | Der Cluster samt Gateway-Controller Traefik. Stellt die signierten Tokens aus. |
 | `bootstrap` | Ein Wegwerf-Container mit `kubectl` | Läuft **einmal** beim Start: richtet den Cluster ein (Namespaces, Gateway-Zertifikat, Manifeste). Danach beendet er sich. |
-| `ingress-lb` | Ein nginx im TCP-Modus | Stellvertreter des Load Balancers vor dem Cluster: reicht Port 443 aus `relying-net` an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. "Ingress" meint hier den eingehenden Verkehr, nicht das Kubernetes-Objekt. |
+| `load-balancer` | Ein nginx im TCP-Modus | Stellvertreter des Load Balancers vor dem Cluster: reicht Port 443 aus `relying-net` an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. |
 | `validator` | Ein kleiner Spring-Boot-Dienst (Java) | Der externe Dienst, der die Tokens prüft. **Erreicht vom Cluster nur `https://issuer.wif.local`, nie den API-Server.** |
 | `keycloak` | Keycloak (Autorisierungsserver) | Tauscht ServiceAccount-Tokens gegen Access-Tokens mit Scopes; Teil der Autorisierungs-Demo (`demo authz`). |
 | `keycloak-gateway` | Ein nginx-Webserver | Einziger Weg der Pods zu Keycloak; lässt nur die Endpunkte des Realms `domain-rst` durch. |
@@ -63,7 +63,7 @@ und `stranger` dazu. Diese Tour folgt dem Validator-Pfad; den Pfad über Keycloa
  │  Pod consumer                                  │
  └────┬───────────────────────────▲───────────────┘
       │                           │ TCP 443 durchgereicht (TLS endet im Cluster)
-      │                      ingress-lb (Stellvertreter des Load Balancers)
+      │                      load-balancer (Stellvertreter des Load Balancers)
       │                           ▲
       │                           │ GET Discovery + JWKS, relying-net (172.31.8.0/24)
       │ Bearer-Token, GET /whoami │
@@ -109,12 +109,12 @@ pki-init      Exited (0)       ← Lab-CA und Zertifikate liegen bereit
 sa-keys       Exited (0)       ← Signaturschlüssel des Clusters liegt bereit
 server        Healthy          ← API-Server antwortet
 bootstrap     Exited (0)       ← Namespaces, Gateway-Zertifikat, Manifeste; Discovery-Pod und Traefik laufen
-ingress-lb    Healthy          ← https://issuer.wif.local liefert das JWKS über das Gateway
+load-balancer    Healthy          ← https://issuer.wif.local liefert das JWKS über das Gateway
 validator     Healthy          ← /healthz ok
 ```
 
 Keycloak, `keycloak-gateway` und `service-r` starten parallel dazu; Keycloak wartet ebenfalls
-auf `ingress-lb`.
+auf `load-balancer`.
 
 ### 4a. `pki-init` — die Lab-PKI
 
@@ -180,7 +180,7 @@ bootstrap: done — the discovery pods serve discovery document + JWKS at https:
 ```
 
 Traefik liest im Lab nur Objekte der Gateway API; ein Kubernetes-Objekt `Ingress` gibt es
-nicht. Nur der Name `ingress-lb` verwendet „ingress“ im Sinn von eingehendem Verkehr.
+nicht.
 
 1. **Namespaces anlegen**: `wif-demo` für die Workloads, `wif-issuer-discovery` für den Discovery-Pod.
 2. **Zertifikate verteilen**: das Serverzertifikat des Gateways als Secret `issuer-tls` in
@@ -195,7 +195,7 @@ nicht. Nur der Name `ingress-lb` verwendet „ingress“ im Sinn von eingehendem
 
 `bootstrap` veröffentlicht selbst nichts — das macht der Discovery-Pod.
 
-### 4d. Der Discovery-Pod und `ingress-lb` — die Schlüssel werden ausgeliefert
+### 4d. Der Discovery-Pod und `load-balancer` — die Schlüssel werden ausgeliefert
 
 Der Discovery-Pod (`manifests/10-issuer-discovery.yaml`) hat zwei Container. `sync` liest
 Discovery-Dokument und JWKS mit seinem eigenen, nur dafür berechtigten ServiceAccount vom
@@ -218,11 +218,11 @@ veröffentlicht, liest er aus zwei Kubernetes-Objekten der Gateway API. Das **Ga
 aus `issuer-tls` und lässt nur Routen aus dem eigenen Namespace zu. Die **HTTPRoute**
 `issuer-discovery` lässt nur `GET` auf `/.well-known/openid-configuration` und
 `/openid/v1/jwks` zum Pod durch; alles andere beantwortet Traefik selbst mit `404`
-([ADR 0006](adr/0006-gateway-api-statt-ingress.md)). `ingress-lb` reicht
+([ADR 0006](adr/0006-gateway-api-statt-ingress.md)). `load-balancer` reicht
 TCP-Verbindungen auf Port 443 aus `relying-net` an Traefiks Node-Port durch; TLS endet erst
-im Cluster. `ingress-lb` selbst läuft mit schreibgeschütztem Dateisystem, nur den nötigen
+im Cluster. `load-balancer` selbst läuft mit schreibgeschütztem Dateisystem, nur den nötigen
 Capabilities und `no-new-privileges`. Sobald das JWKS über diesen Weg
-abrufbar ist, meldet der Healthcheck `ingress-lb` als gesund.
+abrufbar ist, meldet der Healthcheck `load-balancer` als gesund.
 
 Es gibt keinen Schreibweg: Niemand lädt Schlüssel hoch, kein Endpunkt nimmt ein JWKS
 entgegen. Wer bestimmen könnte, was der Discovery-Pod ausliefert, könnte Tokens fälschen —
@@ -254,7 +254,7 @@ Beim Start:
    Issuer-URL; sonst startet er nicht. Genau das sagt die Log-Zeile oben.
 4. Von der `jwks_uri` lädt er die Schlüssel (gecacht, 5 Minuten) und ist bereit.
 
-Der Validator hängt nur in `relying-net` (zu `ingress-lb`) und `workload-net` (für die Pods)
+Der Validator hängt nur in `relying-net` (zu `load-balancer`) und `workload-net` (für die Pods)
 und teilt kein Volume mit der Cluster-Seite. Details zur Java-Seite:
 [`technical/validator.md`](technical/validator.md) und
 [`technical/trust-und-tls.md`](technical/trust-und-tls.md).
@@ -266,7 +266,7 @@ und teilt kein Volume mit der Cluster-Seite. Details zur Java-Seite:
 Jetzt der eigentliche Beweis. `demo` (Skript: `tools/demo.sh`) läuft in **einem** Durchlauf durch
 sieben Schritte (0–6). Compose stellt vorher sicher, dass `validator` und seine
 Abhängigkeiten laufen. Der `demo`-Container hängt in `cluster-net` (für `kubectl`) und in
-`relying-net` (für `https://issuer.wif.local` über `ingress-lb` und den Validator).
+`relying-net` (für `https://issuer.wif.local` über `load-balancer` und den Validator).
 
 ### Schritt 0 — Was der Issuer-Endpoint anbietet
 
@@ -419,10 +419,10 @@ PASS: DELETE on the JWKS not routed (the route matches GET only) (404)
 GET https://issuer.wif.local/  (a path the HTTPRoute does not match)
 HTTP 404
 PASS: unrouted path not served (404)
-GET https://other.wif.local/openid/v1/jwks  through ingress-lb (foreign host, SNI other.wif.local)
+GET https://other.wif.local/openid/v1/jwks  through load-balancer (foreign host, SNI other.wif.local)
 HTTP 000
 PASS: TLS handshake for a foreign host refused (strict SNI) (000)
-GET https://kubernetes.default.svc/version  through ingress-lb (API server name)
+GET https://kubernetes.default.svc/version  through load-balancer (API server name)
 HTTP 000
 PASS: no way to the API server through the Gateway (000)
 GET https://issuer.wif.local/openid/v1/jwks  with SNI issuer.wif.local but Host: other.wif.local
@@ -434,7 +434,7 @@ PASS: published JWKS untouched
 Wer das JWKS austauschen könnte, könnte sich beliebige gültige Tokens ausstellen. Deshalb
 versucht das Skript, ein leeres JWKS per `PUT`, `POST` und `DELETE` einzuspielen. Die HTTPRoute
 passt nur auf `GET`, also antwortet Traefik selbst mit `404`; der Pod sieht die Anfrage nie.
-Danach zeigt es, dass über `ingress-lb` nichts anderes erreichbar ist als
+Danach zeigt es, dass über `load-balancer` nichts anderes erreichbar ist als
 die zwei Pfade unter `issuer.wif.local`: kein anderer Pfad, kein fremder Host (Traefik lehnt
 den TLS-Handshake ab, `000` heißt „kein HTTP-Austausch"), kein Weg zum API-Server. Das
 veröffentlichte JWKS enthält danach weiterhin die Schlüssel des Clusters.
@@ -461,7 +461,7 @@ prüft nacheinander:
    Discovery-Pods bei **Ausfall des API-Servers** (`demo resilience`) — beides unten,
 3. die **Netztrennung**: Validator, `service-r` und Keycloak erreichen weder den API-Server
    (`172.31.9.2:6443`, `172.31.7.2:6443`) noch Traefiks Node-Port direkt (`:30443`);
-   Keycloak erreicht `ingress-lb` nur auf seiner `relying-net`-Seite,
+   Keycloak erreicht `load-balancer` nur auf seiner `relying-net`-Seite,
 4. dass ein Validator mit **fremder CA** (`validator-foreign-ca`) nicht startet,
 5. einen **Schlüsselwechsel in zwei Phasen** (unten).
 
@@ -615,8 +615,8 @@ Der Stack läuft noch (`docker compose ps`). Ein paar nützliche Blicke:
 # Discovery-Dokument, wie es der Validator sieht (validator hat curl + die interne CA gemountet)
 docker compose exec validator curl -s --cacert /trust/ca.crt https://issuer.wif.local/.well-known/openid-configuration
 
-# Wer hat sich über ingress-lb mit dem Ingress verbunden?
-docker compose logs ingress-lb
+# Wer hat sich über load-balancer mit Traefik verbunden?
+docker compose logs load-balancer
 
 # Was liefert der Discovery-Pod aus, welche kid kam wann hinzu?
 docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer-discovery -c sync
@@ -635,9 +635,9 @@ Unter Windows (curl mit Schannel) zusätzlich `--ssl-no-revoke` angeben – die 
 veröffentlicht keine Sperrliste. Schannel prüft bei einer IP-Adresse den Zertifikatsnamen
 gegen den CN statt gegen den IP-SAN, deshalb `localhost` statt `127.0.0.1` verwenden.
 
-Im Log von `ingress-lb` siehst du, wer sich mit dem Ingress verbindet: der Validator von
+Im Log von `load-balancer` siehst du, wer sich mit Traefik verbindet: der Validator von
 `172.31.8.10` aus, Keycloak von `172.31.8.30`, jeweils weitergereicht an `172.31.7.2:30443`.
-Pfade stehen dort nicht — `ingress-lb` sieht nur verschlüsselte Daten, TLS endet erst in
+Pfade stehen dort nicht — `load-balancer` sieht nur verschlüsselte Daten, TLS endet erst in
 Traefik. Den API-Server spricht der Validator nie an — er hat gar keine Route dorthin.
 
 ---
