@@ -2,11 +2,11 @@
 # Host-side driver for every lab check. Needs only docker compose on the host:
 #   1. base demo (discovery, pod -> validator, negative token and ingress cases)
 #   1b. authorization server demo (pod -> keycloak -> service R, negative cases)
-#   1c. protection of the issuer namespace (admission, RBAC, NetworkPolicy, pod)
-#   1d. issuer pod without API server and with an implausible state
+#   1c. protection of the issuer discovery namespace (admission, RBAC, NetworkPolicy, pod)
+#   1d. discovery pod without API server and with an implausible state
 #   2. network separation as seen from validator, keycloak and service R
 #   3. validator with a foreign CA refuses to start
-#   4. signing key change in two phases, served by the in-cluster issuer pod
+#   4. signing key change in two phases, served by the in-cluster discovery pod
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -23,10 +23,10 @@ docker compose run --rm demo all
 section "1b. authorization server demo"
 docker compose run --rm demo authz
 
-section "1c. protection of the issuer namespace"
+section "1c. protection of the issuer discovery namespace"
 docker compose run --rm demo hardening
 
-section "1d. issuer pod resilience"
+section "1d. discovery pod resilience"
 docker compose run --rm demo resilience
 
 section "2. network separation (seen from the relying parties)"

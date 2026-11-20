@@ -39,8 +39,8 @@ Systems, weil es dessen Signaturschlüssel kennt.
 | `service-r` | Ein Spring-Boot-Resource-Server (Java) | Dienst R: prüft Access-Tokens von Keycloak und schützt seine Endpunkte nach Scope. |
 | `demo` | Nochmal das Wegwerf-Image mit `kubectl` | Wird nur auf Zuruf gestartet und fährt die Ende-zu-Ende-Prüfung. |
 
-Dazu im Cluster die **Pods** `consumer` — das ist unsere Workload — und `issuer` (zwei
-Replikas im Namespace `wif-issuer`). Der Issuer-Pod spiegelt Discovery-Dokument und JWKS
+Dazu im Cluster die **Pods** `consumer` — das ist unsere Workload — und `issuer-discovery` (zwei
+Replikas im Namespace `wif-issuer-discovery`). Der Discovery-Pod spiegelt Discovery-Dokument und JWKS
 vom API-Server und liefert sie hinter dem Ingress unter `https://issuer.wif.local` aus;
 diese URL steht im `iss`-Feld jedes Tokens. Für die Autorisierungs-Demo kommen `reader`
 und `stranger` dazu. Diese Tour folgt dem Validator-Pfad; den Pfad über Keycloak zu
@@ -52,7 +52,7 @@ und `stranger` dazu. Diese Tour folgt dem Validator-Pfad; den Pfad über Keycloa
  ┌──────────────────────────────────────────┐
  │ server (k3s), API-Server nur hier        │
  │  stellt Tokens aus                       │
- │  ┌ Namespace wif-issuer ───────────────┐ │
+ │  ┌ Namespace wif-issuer-discovery ───────────────┐ │
  │  │ Pod issuer: sync ── GET ─► API-Server│ │
  │  │             web (nur GET)  ◄─┐       │ │
  │  └──────────────────────────────┼──────┘ │
@@ -106,7 +106,7 @@ Healthchecks:
 pki-init      Exited (0)       ← Lab-CA und Zertifikate liegen bereit
 sa-keys       Exited (0)       ← Signaturschlüssel des Clusters liegt bereit
 server        Healthy          ← API-Server antwortet
-bootstrap     Exited (0)       ← Namespaces, Ingress-Zertifikat, Manifeste; Issuer-Pod und Traefik laufen
+bootstrap     Exited (0)       ← Namespaces, Ingress-Zertifikat, Manifeste; Discovery-Pod und Traefik laufen
 ingress-lb    Healthy          ← https://issuer.wif.local liefert das JWKS über den Ingress
 validator     Healthy          ← /healthz ok
 ```
@@ -151,7 +151,7 @@ sind die Flags, mit denen der API-Server gestartet wird (in `compose.yaml`):
 Damit legen wir fest: **Jedes Token, das dieser Cluster ausstellt, trägt
 `iss: https://issuer.wif.local`** — und wer die Schlüssel sucht, soll bei
 `https://issuer.wif.local/openid/v1/jwks` nachsehen. Unter dieser Adresse antwortet nicht
-der API-Server, sondern gleich der Issuer-Pod hinter dem Ingress. Der API-Server und die
+der API-Server, sondern gleich der Discovery-Pod hinter dem Ingress. Der API-Server und die
 Node-Ports lauschen nur auf der Adresse im Netz `cluster-net`; der Validator hängt nicht in
 diesem Netz.
 
@@ -173,30 +173,30 @@ deployment "stranger" successfully rolled out
 bootstrap: done — the issuer pod serves discovery document + JWKS at https://issuer.wif.local
 ```
 
-1. **Namespaces anlegen**: `wif-demo` für die Workloads, `wif-issuer` für den Issuer-Pod.
+1. **Namespaces anlegen**: `wif-demo` für die Workloads, `wif-issuer-discovery` für den Discovery-Pod.
 2. **Zertifikate verteilen**: das Serverzertifikat des Ingress als Secret `issuer-tls` in
-   `wif-issuer`, das Root-Zertifikat der CA als ConfigMap `internal-ca` in `wif-demo`. In
+   `wif-issuer-discovery`, das Root-Zertifikat der CA als ConfigMap `internal-ca` in `wif-demo`. In
    einem echten Cluster übernähme das cert-manager oder die PKI-Anbindung der Plattform.
-3. **Manifeste anwenden** (`kubectl apply -f /manifests`) und warten, bis Issuer-Pod,
+3. **Manifeste anwenden** (`kubectl apply -f /manifests`) und warten, bis Discovery-Pod,
    Traefik und die Workloads laufen. Ein *Manifest* ist eine YAML-Datei, die einen
    gewünschten Zustand beschreibt; `kubectl apply` sorgt dafür, dass der Cluster diesen
    Zustand herstellt. Dazu gehören die Traefik-Konfiguration, die Admission-Regeln, die den
-   Namespace `wif-issuer` schützen, und die NetworkPolicies des Issuer-Pods.
+   Namespace `wif-issuer-discovery` schützen, und die NetworkPolicies des Discovery-Pods.
 
-`bootstrap` veröffentlicht selbst nichts — das macht der Issuer-Pod.
+`bootstrap` veröffentlicht selbst nichts — das macht der Discovery-Pod.
 
-### 4d. Der Issuer-Pod und `ingress-lb` — die Schlüssel werden ausgeliefert
+### 4d. Der Discovery-Pod und `ingress-lb` — die Schlüssel werden ausgeliefert
 
-Der Issuer-Pod (`manifests/10-issuer.yaml`) hat zwei Container. `sync` liest
+Der Discovery-Pod (`manifests/10-issuer-discovery.yaml`) hat zwei Container. `sync` liest
 Discovery-Dokument und JWKS mit seinem eigenen, nur dafür berechtigten ServiceAccount vom
 API-Server und legt eine Kopie ab — aber nur, wenn der Stand plausibel ist. Danach gleicht
 er alle 15 Sekunden ab. `web` liefert die Kopie nur per `GET` aus und wird erst bereit,
 wenn sie da ist. Das Log von `sync`
-(`docker compose exec server kubectl -n wif-issuer logs deploy/issuer -c sync`):
+(`docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer -c sync`):
 
 ```
-issuer-sync: WARNING kid appeared: <kid>
-issuer-sync: serving JWKS sha256=<hash> kids=[ <kid> ]
+issuer-discovery-sync: WARNING kid appeared: <kid>
+issuer-discovery-sync: serving JWKS sha256=<hash> kids=[ <kid> ]
 ```
 
 Jede `kid`, die hinzukommt oder wegfällt, steht so im Log. Ist der API-Server nicht
@@ -211,9 +211,9 @@ Capabilities und `no-new-privileges`. Sobald das JWKS über diesen Weg
 abrufbar ist, meldet der Healthcheck `ingress-lb` als gesund.
 
 Es gibt keinen Schreibweg: Niemand lädt Schlüssel hoch, kein Endpunkt nimmt ein JWKS
-entgegen. Wer bestimmen könnte, was der Issuer-Pod ausliefert, könnte Tokens fälschen —
-deshalb ist `wif-issuer` geschützt wie die Steuerung des Clusters. Begründung:
-[ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md).
+entgegen. Wer bestimmen könnte, was der Discovery-Pod ausliefert, könnte Tokens fälschen —
+deshalb ist `wif-issuer-discovery` geschützt wie die Steuerung des Clusters. Begründung:
+[ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md).
 
 ### 4e. `validator` — der externe Prüfdienst
 
@@ -442,8 +442,8 @@ Auf dem Host (braucht nur `docker compose`) fährt `tools/run-all-checks.sh` den
 prüft nacheinander:
 
 1. die Demo von oben und die Autorisierungs-Demo (`demo authz`),
-2. den **Schutz des Namespace** `wif-issuer` (`demo hardening`) und das Verhalten des
-   Issuer-Pods bei **Ausfall des API-Servers** (`demo resilience`) — beides unten,
+2. den **Schutz des Namespace** `wif-issuer-discovery` (`demo hardening`) und das Verhalten des
+   Discovery-Pods bei **Ausfall des API-Servers** (`demo resilience`) — beides unten,
 3. die **Netztrennung**: Validator, `service-r` und Keycloak erreichen weder den API-Server
    (`172.31.9.2:6443`, `172.31.7.2:6443`) noch Traefiks Node-Port direkt (`:30443`);
    Keycloak erreicht `ingress-lb` nur auf seiner `relying-net`-Seite,
@@ -454,10 +454,10 @@ prüft nacheinander:
 PASS: all lab checks passed
 ```
 
-### `demo hardening` — der Namespace `wif-issuer` ist geschützt
+### `demo hardening` — der Namespace `wif-issuer-discovery` ist geschützt
 
 ```
-== H1. admission: the issuer host is reserved for wif-issuer ==
+== H1. admission: the issuer host is reserved for wif-issuer-discovery ==
 PASS: Ingress for issuer.wif.local in wif-demo: denied
 PASS: wildcard Ingress *.wif.local in wif-demo: denied
 PASS: wildcard Ingress *.local in wif-demo: denied
@@ -470,11 +470,11 @@ PASS: Ingress for another host in wif-demo: admitted
 PASS: the issuer route carries the top routing priority
 PASS: Traefik reads neither its own route CRDs nor the Gateway API
 PASS: Traefik reads routes from Ingress objects
-== H2. admission: images in wif-issuer only by digest ==
-PASS: Deployment with a tag-only image in wif-issuer: denied
-PASS: Deployment with <image>@sha256:<digest> in wif-issuer: admitted
-== H3. RBAC: nobody but cluster admins writes to wif-issuer ==
-PASS: neither a workload nor the issuer's own ServiceAccount may write or read secrets in wif-issuer
+== H2. admission: images in wif-issuer-discovery only by digest ==
+PASS: Deployment with a tag-only image in wif-issuer-discovery: denied
+PASS: Deployment with <image>@sha256:<digest> in wif-issuer-discovery: admitted
+== H3. RBAC: nobody but cluster admins writes to wif-issuer-discovery ==
+PASS: neither a workload nor the issuer's own ServiceAccount may write or read secrets in wif-issuer-discovery
 PASS: the issuer's ServiceAccount may read the JWKS (issuer-discovery role)
 == H4. NetworkPolicy: in only from the ingress controller, out only to the API server ==
 PASS: workloads cannot reach the issuer pod
@@ -493,24 +493,24 @@ zusätzlich eine Tabelle der `kubectl auth can-i`-Antworten (überall `no`).
 Warum H1 so viele Fälle hat: Eine Ingress-Regel ohne Host passt auf jeden Host, auch auf
 `issuer.wif.local`, und Traefik ordnet Routen nach der Länge ihrer Regel. Ein Ingress ohne
 Host mit einer langen Pfad-Regex könnte die Issuer-Route also überholen. Deshalb muss
-außerhalb von `wif-issuer` jede Regel einen eigenen Host nennen, Default-Backends und
+außerhalb von `wif-issuer-discovery` jede Regel einen eigenen Host nennen, Default-Backends und
 Traefik-Router-Annotationen sind verboten, und die Issuer-Route trägt selbst die höchste
 Priorität (`1000000000`).
 
-### `demo resilience` — der Issuer-Pod ohne API-Server
+### `demo resilience` — der Discovery-Pod ohne API-Server
 
 ```
 == R1. API server unreachable: the issuer pods keep serving the last good state ==
 cutting the issuer pods' path to the API server (NetworkPolicy egress := none)
-  issuer-<pod>: issuer-sync: reading from the API server failed, keeping the last good state, retrying in 15s
-  issuer-<pod>: issuer-sync: reading from the API server failed, keeping the last good state, retrying in 15s
+  issuer-<pod>: issuer-discovery-sync: reading from the API server failed, keeping the last good state, retrying in 15s
+  issuer-<pod>: issuer-discovery-sync: reading from the API server failed, keeping the last good state, retrying in 15s
 PASS: the JWKS is served unchanged
 PASS: both issuer pods stay ready
 restoring the path to the API server
 == R2. implausible state: a new pod never becomes ready, the others keep serving ==
 rolling out a pod that expects another issuer, so the API server's state is implausible to it
 new pod: issuer-<pod>
-  issuer-<pod>: issuer-sync: REJECTED state: discovery document does not name issuer https://not-this-cluster
+  issuer-<pod>: issuer-discovery-sync: REJECTED state: discovery document does not name issuer https://not-this-cluster
 PASS: the new pod is not ready (no plausible state yet)
 PASS: the two previous pods keep serving
 PASS: the JWKS is served unchanged
@@ -518,7 +518,7 @@ rolling back
 PASS: the issuer serves the JWKS after the rollback
 ```
 
-R1 entzieht den Issuer-Pods per NetworkPolicy den Weg zum API-Server: Sie liefern den
+R1 entzieht den Discovery-Pods per NetworkPolicy den Weg zum API-Server: Sie liefern den
 letzten gültigen Stand weiter und bleiben bereit. R2 rollt einen Pod aus, dem der Stand des
 API-Servers nicht plausibel erscheint: Er wird nie bereit und bekommt keinen Verkehr, die
 beiden bisherigen Pods liefern unverändert aus. Danach stellt das Skript alles wieder her.
@@ -538,7 +538,7 @@ docker compose run --rm demo post-rotation
 ```
 
 Der API-Server liest die Schlüsseldateien nur beim Start, deshalb jeweils der Neustart. Im
-Lab startet dabei der ganze Knoten neu, also auch die Issuer-Pods.
+Lab startet dabei der ganze Knoten neu, also auch die Discovery-Pods.
 
 ```
 == key change 0/2: token and published keys before the change ==
@@ -553,8 +553,8 @@ published kids now:
   <kid-alt>
   <kid-neu>
 PASS: staged kid served: <kid-neu>
-  issuer-<pod>: issuer-sync: WARNING kid appeared: <kid-neu>
-  issuer-<pod>: issuer-sync: WARNING kid appeared: <kid-neu>
+  issuer-<pod>: issuer-discovery-sync: WARNING kid appeared: <kid-neu>
+  issuer-<pod>: issuer-discovery-sync: WARNING kid appeared: <kid-neu>
 PASS: every issuer pod logged the new kid <kid-neu>
 new token kid: <kid-alt>
 PASS: the API server still signs with the current key
@@ -579,7 +579,7 @@ PASS: the JWKS holds exactly the new and the previous key (no other key, e.g. k3
 ```
 
 Nach `stage` steht der neue Schlüssel schon im JWKS, signiert wird aber weiter mit dem alten.
-Erst wenn der Issuer-Pod ihn ausliefert, macht `activate` ihn zum Signierschlüssel. Deshalb
+Erst wenn der Discovery-Pod ihn ausliefert, macht `activate` ihn zum Signierschlüssel. Deshalb
 nehmen Keycloak und Validator schon das **erste** Token mit der neuen `kid` an — ohne
 Fehlversuch. Das Token von vor dem Wechsel bleibt gültig, weil der vorherige Schlüssel im
 JWKS bleibt. Ist dieser vorherige Schlüssel kompromittiert, entfernt
@@ -599,8 +599,8 @@ docker compose exec validator curl -s --cacert /trust/ca.crt https://issuer.wif.
 # Wer hat sich über ingress-lb mit dem Ingress verbunden?
 docker compose logs ingress-lb
 
-# Was liefert der Issuer-Pod aus, welche kid kam wann hinzu?
-docker compose exec server kubectl -n wif-issuer logs deploy/issuer -c sync
+# Was liefert der Discovery-Pod aus, welche kid kam wann hinzu?
+docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer -c sync
 
 # Das Token direkt aus dem Pod
 POD=$(docker compose exec server kubectl -n wif-demo get pod -l app=consumer -o jsonpath='{.items[0].metadata.name}')
@@ -632,8 +632,8 @@ Traefik. Den API-Server spricht der Validator nie an — er hat gar keine Route 
 - **Audience im Pod ändern:** In `manifests/20-consumer.yaml` die `audience` auf etwas anderes
   setzen, `docker compose down -v && docker compose up -d`. Der Gutfall in Schritt 3
   wird dann zu einem 401 („JWT aud claim rejected").
-- **Signieren, bevor der Schlüssel ausgeliefert wird:** Issuer-Pods anhalten
-  (`docker compose exec server kubectl -n wif-issuer scale deploy/issuer --replicas=0`),
+- **Signieren, bevor der Schlüssel ausgeliefert wird:** Discovery-Pods anhalten
+  (`docker compose exec server kubectl -n wif-issuer-discovery scale deploy/issuer --replicas=0`),
   dann `docker compose run --rm sa-keys stage`, `docker compose run --rm sa-keys activate`
   und `docker compose restart server`. Neue Tokens tragen eine `kid`, die unter
   `https://issuer.wif.local` nicht abrufbar ist — der Validator lehnt sie mit 401 ab. Mit
@@ -661,9 +661,9 @@ Zertifikate, neue Schlüssel).
 - [Kubernetes-Primer — nur die Bausteine, die hier vorkommen](kubernetes-primer.md)
 - [Der Ablauf als Use Case](use-cases.md)
 - [Technik: Architektur des Compose-Stacks](technical/architecture.md)
-- [Technik: PKI, Issuer-Pod und Ingress](technical/bootstrap-und-issuer.md)
+- [Technik: PKI, Discovery-Pod und Ingress](technical/bootstrap-und-issuer.md)
 - [Technik: der Validator im Detail](technical/validator.md)
 - [Technik: Vertrauen & TLS](technical/trust-und-tls.md)
 - [Entscheidung: Offline-JWKS statt TokenReview](adr/0001-offline-jwks-statt-tokenreview.md)
 - [Entscheidung: getrennte Vertrauensbereiche, interne PKI](adr/0003-getrennte-vertrauensbereiche-interne-pki.md)
-- [Entscheidung: Issuer-Pod im Cluster, Pull über einen Ingress](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md)
+- [Entscheidung: Discovery-Pod im Cluster, Pull über einen Ingress](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md)
