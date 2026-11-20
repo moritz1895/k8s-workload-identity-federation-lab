@@ -2,7 +2,7 @@
 <h2>Was im Lab bewusst vereinfacht ist</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:22%">Thema</th><th style="width:36%">Im PoC</th><th style="width:42%">Für einen echten Einsatz</th></tr>
-<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter Traefik (Gateway API) von k3s; load-balancer als Load Balancer</td><td>stabile HTTPS-URL; eigenes Gateway für den Issuer, wie im Lab; ggf. eigener Gateway-Controller</td></tr>
+<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter Traefik (Gateway API) von k3s; davor ein nginx als Load Balancer</td><td>stabile HTTPS-URL; eigenes Gateway für den Issuer, wie im Lab; ggf. eigener Gateway-Controller</td></tr>
 <tr><td>TLS-Vertrauen</td><td>Lab-CA als Stellvertreter der internen PKI</td><td>interne PKI, Root-CA auf allen Systemen verteilt</td></tr>
 <tr><td>JWKS veröffentlichen</td><td>Discovery-Pod holt alle 15 s, prüft Plausibilität, meldet neue kid im Log</td><td>gleiches Muster; Alarm bei unangekündigter kid im Monitoring</td></tr>
 <tr><td>Namespace des Issuers</td><td>eigenes Gateway, nur GET zum Pod; RBAC, Admission-Regeln, NetworkPolicies</td><td>Änderungen nur per GitOps; schützt nicht vor einem Cluster-Admin</td></tr>
