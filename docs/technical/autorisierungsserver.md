@@ -98,7 +98,7 @@ Bei einer Token-Anfrage findet Keycloak über `iss` der Client-Assertion den Ide
 prüft Signatur, `exp`, `nbf` und `aud` (= Realm-Issuer-URL) und sucht den Client mit passendem
 `jwt.credential.sub`. Die Schlüssel lädt Keycloak lazy beim ersten Bedarf über
 `https://issuer.wif.local/.well-known/openid-configuration` → `jwks_uri` (über `ingress-lb`
-in `relying-net` zum Ingress des Discovery-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
+in `relying-net` zum Gateway des Discovery-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
 Verbindung zum API-Server gibt es nicht.
 
 Den Cache steuert das SPI `public-key-storage` (Provider `infinispan`); das Lab setzt beide
@@ -113,7 +113,7 @@ Eine unbekannte `kid` löst einen Neuabruf aus, sofern `min-time-between-request
 letzten Abruf verstrichen ist. Weil der Schlüsselwechsel zweiphasig läuft
 ([bootstrap-und-issuer.md](bootstrap-und-issuer.md#zweiphasiger-schlüsselwechsel)), liefert der
 Discovery-Pod eine neue `kid` schon aus, bevor ein Token sie trägt. Ein kurzer Ausfall des
-Ingress fällt nur auf, wenn genau dann eine neue `kid` auftaucht.
+Gateways fällt nur auf, wenn genau dann eine neue `kid` auftaucht.
 
 Weil der `sub` des ServiceAccount-Tokens die Workload identifiziert, gehört das
 Cluster-RBAC zur Autorisierungsgrenze: Wer im Namespace `wif-demo` Tokens für einen
@@ -366,7 +366,7 @@ mountet die ConfigMap `internal-ca` unter `/etc/internal-ca` und `authz-client` 
 | `service-r` | `workload-net` | 172.31.9.40 | Pods rufen R über HTTPS auf (`:8443`; Host `127.0.0.1:18081`) |
 
 `tools/run-all-checks.sh` (Abschnitt 2) prüft per Bash-`/dev/tcp`, dass Keycloak weder den
-API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Node-Port des Ingress
+API-Server (`172.31.7.2:6443`, `172.31.9.2:6443`) noch den Node-Port von Traefik
 (`172.31.7.2:30443`) noch die `cluster-net`-Seite von `ingress-lb` (`172.31.7.20:443`)
 erreicht, wohl aber `ingress-lb` in `relying-net` (`172.31.8.20:443`).
 Prüfung 20 in `demo.sh authz` prüft die Gegenrichtung aus dem Pod

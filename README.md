@@ -8,11 +8,12 @@ prüft das Token **offline** — Signatur gegen die veröffentlichte JWKS des Au
 
 Cluster, Issuer-Endpoint und Validator liegen in getrennten Vertrauens- und Netzbereichen:
 Ein **Discovery-Pod im Cluster** spiegelt Discovery-Dokument und JWKS des API-Servers und
-liefert sie über einen **Ingress** nur lesend aus. Validator und Keycloak holen sie dort ab
+liefert sie über ein **Gateway** (Gateway API) nur lesend aus. Validator und Keycloak holen sie dort ab
 und erreichen nur diese Route, nicht den API-Server. Sie vertrauen nur dem Root-Zertifikat
 einer **internen PKI** (im Lab eine Lab-CA). Es gibt weder ein Client-Zertifikat noch einen
 Schreibweg für die Schlüssel. Begründung:
-[ADR 0005](docs/adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Veröffentlichung) und
+[ADR 0005](docs/adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Veröffentlichung),
+[ADR 0006](docs/adr/0006-gateway-api-statt-ingress.md) (Gateway API) und
 [ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (PKI, Netze).
 
 Darauf aufbauend trennt das Lab **Authentisierung von Autorisierung**: Ein Keycloak als
@@ -26,7 +27,7 @@ Alles läuft in Containern. Auf dem Host wird **nur Docker + Compose v2** gebrau
 
 ```bash
 cp .env.example .env
-docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, ingress-lb, Validator, Keycloak + Gateway, service-r
+docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, ingress-lb, Validator, Keycloak + keycloak-gateway, service-r
 docker compose run --rm demo          # Ende-zu-Ende-Verifikation (Validator)
 docker compose run --rm demo authz    # Autorisierungsserver + service-r
 tools/run-all-checks.sh               # alles: Demos, Härtung, Ausfall des API-Servers, Netztrennung, fremde CA, Schlüsselwechsel
@@ -55,17 +56,19 @@ docker compose stop keycloak-admin
 
 ```
  cluster-net (172.31.7.0/24)
- ┌──────────────────────────────────────────┐
- │ server (k3s), API-Server nur hier        │
- │  stellt Tokens aus                       │
- │  ┌ Namespace wif-issuer-discovery ───────────────┐ │
- │  │ Pod issuer: sync ── GET ─► API-Server│ │
- │  │             web (nur GET)  ◄─┐       │ │
- │  └──────────────────────────────┼──────┘ │
- │  Traefik (Ingress issuer.wif.local) ─┘   │
- │   Node-Port 30443, nur in cluster-net    │
- │  Pod consumer                            │
- └────┬───────────────────────────▲─────────┘
+ ┌────────────────────────────────────────────────┐
+ │ server (k3s), API-Server nur hier              │
+ │  stellt Tokens aus                             │
+ │  ┌ Namespace wif-issuer-discovery ───────────┐ │
+ │  │ Pod issuer-discovery:                     │ │
+ │  │   sync ── GET ─► API-Server               │ │
+ │  │   web (nur GET) ◄── Traefik               │ │
+ │  │ Gateway + HTTPRoute für issuer.wif.local  │ │
+ │  └───────────────────────────────────────────┘ │
+ │  Traefik (Gateway-Controller, kube-system)     │
+ │   Node-Port 30443, nur in cluster-net          │
+ │  Pod consumer                                  │
+ └────┬───────────────────────────▲───────────────┘
       │                           │ TCP 443 durchgereicht (TLS endet im Cluster)
       │                      ingress-lb (Stellvertreter des Load Balancers)
       │                           ▲
@@ -75,8 +78,9 @@ docker compose stop keycloak-admin
       │ (172.31.9.0/24)           │
       └──────────────────►  validator (Spring Boot), vertraut nur der internen CA
 
- Der Validator erreicht vom Cluster nur die Ingress-Route über ingress-lb, nie den
- API-Server; kein Volume ist zwischen Cluster-Seite und Validator geteilt.
+ Der Validator erreicht vom Cluster nur die Route issuer.wif.local über ingress-lb, nie
+ den API-Server; kein Volume ist zwischen Cluster-Seite und Validator geteilt.
+ ("ingress" in ingress-lb meint den eingehenden Verkehr, nicht das Kubernetes-Objekt.)
 ```
 
 Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von
@@ -125,19 +129,20 @@ Die Grundsatzentscheidungen stehen in den ADRs
 [0002](docs/adr/0002-eigenstaendiger-issuer-endpoint.md),
 [0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md),
 [0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md),
-[0005](docs/adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md)), die Abwägung offline
+[0005](docs/adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md),
+[0006](docs/adr/0006-gateway-api-statt-ingress.md)), die Abwägung offline
 vs. online in [docs/domain.md](docs/domain.md#5-offline-validierung-jwks-vs-online-validierung-tokenreview).
 Bewusst offene Punkte des Labs:
 
 - **Lab-CA statt interner PKI.** `pki-init` erzeugt CA und Zertifikate selbst; real kommt
-  das Root-Zertifikat aus der vorhandenen PKI, das Serverzertifikat des Ingress über
+  das Root-Zertifikat aus der vorhandenen PKI, das Serverzertifikat des Gateways über
   cert-manager oder die PKI-Anbindung der Plattform statt über `bootstrap`.
 - **`ingress-lb` statt echtem Load Balancer.** Ein nginx im TCP-Modus reicht nur Port 443
   an Traefiks Node-Port weiter.
 - **Der Namespace `wif-issuer-discovery` gehört zur Steuerung des Clusters.** Wer dort schreiben oder
   Traefik steuern kann, kann Tokens fälschen. RBAC, Admission-Regeln, NetworkPolicies und
   gehärtete Pods erschweren das, schützen aber nicht vor einem Cluster-Admin.
-- **JWKS nicht zusätzlich signiert.** Gegen einen kompromittierten Ingress-Controller
+- **JWKS nicht zusätzlich signiert.** Gegen einen kompromittierten Gateway-Controller
   schützt nur eine Signatur mit einem zweiten Vertrauensanker bei den Relying Parties.
 - **Überwachung nur über Logs.** Der Discovery-Pod protokolliert jede neue und entfallene
   `kid`; ob sie zu einer geplanten Rotation gehört, entscheidet das Monitoring außerhalb.
@@ -164,7 +169,7 @@ Bewusst offene Punkte des Labs:
 ```
 compose.yaml                     alle Services, die drei Netze cluster-net / relying-net / workload-net
 manifests/                       Namespaces, Traefik-Konfiguration, Admission-Regeln, Discovery-Pod (SA, RBAC,
-                                 Deployment, Ingress, NetworkPolicies), Consumer-Deployment,
+                                 Deployment, Gateway + HTTPRoute, NetworkPolicies), Consumer-Deployment,
                                  reader/stranger + Token-Skript access-token.sh
 validator/                       Spring Boot 4 / Java 25, Nimbus JOSE — der Offline-Prüfdienst
 keycloak/                        Realm-Import des Fachbereichs (realm-domain-rst.json)

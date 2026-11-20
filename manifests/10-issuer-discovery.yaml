@@ -1,6 +1,6 @@
 # In-cluster OIDC issuer discovery endpoint (Kubernetes "service account issuer
 # discovery"). The issuer itself is the API server, which signs the tokens; these pods
-# only serve its discovery document and JWKS read-only behind the ingress host
+# only serve its discovery document and JWKS read-only behind the Gateway host
 # issuer.wif.local, the issuer URL.
 #
 #   sync — reads both documents from the API server with its own ServiceAccount
@@ -243,7 +243,7 @@ spec:
           emptyDir:
             sizeLimit: 8Mi
         # Only the sync container gets a ServiceAccount token; the web container,
-        # which faces the ingress, has none.
+        # which faces the gateway, has none.
         - name: discovery-token
           projected:
             sources:
@@ -269,39 +269,61 @@ spec:
       port: 80
       targetPort: http
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# The issuer's own Gateway: one HTTPS listener for exactly the issuer host, TLS ends
+# here with the certificate of the internal PKI. Only HTTPRoutes from this namespace
+# may attach (allowedRoutes: Same), and no ListenerSet may add listeners to it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
 metadata:
   name: issuer-discovery
   namespace: wif-issuer-discovery
-  annotations:
-    # Above any priority Traefik derives from rule length, so no other route can
-    # outrank this one for the issuer paths.
-    traefik.ingress.kubernetes.io/router.priority: "1000000000"
 spec:
-  ingressClassName: traefik
-  tls:
-    - hosts:
-        - issuer.wif.local
-      secretName: issuer-tls
+  gatewayClassName: traefik
+  listeners:
+    - name: issuer-https
+      protocol: HTTPS
+      port: 8443
+      hostname: issuer.wif.local
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: issuer-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
+  allowedListeners:
+    namespaces:
+      from: None
+---
+# Only GET on the two discovery paths reaches the pods; every other method and
+# path ends at Traefik with 404.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: issuer-discovery
+  namespace: wif-issuer-discovery
+spec:
+  parentRefs:
+    - name: issuer-discovery
+      sectionName: issuer-https
+  hostnames:
+    - issuer.wif.local
   rules:
-    - host: issuer.wif.local
-      http:
-        paths:
-          - path: /.well-known/openid-configuration
-            pathType: Exact
-            backend:
-              service:
-                name: issuer-discovery
-                port:
-                  name: http
-          - path: /openid/v1/jwks
-            pathType: Exact
-            backend:
-              service:
-                name: issuer-discovery
-                port:
-                  name: http
+    - matches:
+        - path:
+            type: Exact
+            value: /.well-known/openid-configuration
+          method: GET
+        - path:
+            type: Exact
+            value: /openid/v1/jwks
+          method: GET
+      backendRefs:
+        - name: issuer-discovery
+          port: 80
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -315,7 +337,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: issuer-discovery-from-ingress-controller
+  name: issuer-discovery-from-gateway
   namespace: wif-issuer-discovery
 spec:
   podSelector:

@@ -1,15 +1,18 @@
-# Admission rules that protect the issuer discovery endpoint. Whoever decides what is served
-# under the JWKS URL can forge ServiceAccount tokens for every ServiceAccount.
+# Admission rules that protect the issuer discovery endpoint. Whoever decides what is
+# served under the JWKS URL can forge ServiceAccount tokens for every ServiceAccount.
 #
-#   issuer-host-reserved — outside wif-issuer-discovery, every Ingress rule names a host other
-#                          than the issuer host (also not via wildcard), there is no
-#                          default backend and no Traefik router annotation. A route
-#                          without a host would match the issuer host too, and router
-#                          annotations (priority, path matcher) could outrank its route.
-#   issuer-discovery-image-digest  — workloads in wif-issuer-discovery run only images pinned by digest
+#   issuer-host-reserved — outside wif-issuer-discovery, every Gateway or ListenerSet
+#                          listener names a hostname, and neither a listener nor a
+#                          route (HTTPRoute, GRPCRoute, TLSRoute) uses the issuer host,
+#                          also not via a wildcard. A listener without a hostname
+#                          accepts every host, the issuer host included.
+#   issuer-discovery-image-digest — workloads in wif-issuer-discovery run only images
+#                          pinned by digest
 #
-# Traefik reads routes only from Ingress objects: its own CRDs and the Gateway API
-# provider are switched off (01-traefik-config.yaml).
+# Traefik reads routes only from the Gateway API: its Ingress provider and its own CRDs
+# are switched off (01-traefik-config.yaml). Routes of other namespaces cannot attach to
+# the issuer's Gateway anyway (allowedRoutes: Same); this policy keeps other Gateways
+# from claiming the issuer host.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -18,10 +21,10 @@ spec:
   failurePolicy: Fail
   matchConstraints:
     resourceRules:
-      - apiGroups: ["networking.k8s.io"]
-        apiVersions: ["v1"]
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["ingresses"]
+        resources: ["gateways", "listenersets", "httproutes", "grpcroutes", "tlsroutes"]
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name
@@ -30,31 +33,23 @@ spec:
   variables:
     - name: issuerHost
       expression: "'issuer.wif.local'"
-    - name: tlsHosts
+    - name: hasListeners
+      expression: "object.kind == 'Gateway' || object.kind == 'ListenerSet'"
+    - name: hostnames
       expression: >-
-        has(object.spec.tls) ? object.spec.tls.filter(t, has(t.hosts)).map(t, t.hosts) : []
+        variables.hasListeners
+          ? object.spec.listeners.filter(l, has(l.hostname)).map(l, l.hostname)
+          : (has(object.spec.hostnames) ? object.spec.hostnames : [])
   validations:
-    - expression: "!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != '')"
-      message: "outside wif-issuer-discovery every Ingress rule must name a host (a rule without a host also matches issuer.wif.local)"
+    - expression: >-
+        !variables.hasListeners
+        || object.spec.listeners.all(l, has(l.hostname) && l.hostname != '')
+      message: "outside wif-issuer-discovery every listener must name a hostname (a listener without one also accepts issuer.wif.local)"
       reason: Forbidden
     - expression: >-
-        !has(object.spec.rules) || object.spec.rules.all(r, !has(r.host)
-          || (r.host != variables.issuerHost
-              && !(r.host.startsWith('*') && variables.issuerHost.endsWith(r.host.substring(1)))))
+        variables.hostnames.all(h, h != variables.issuerHost
+          && !(h.startsWith('*') && variables.issuerHost.endsWith(h.substring(1))))
       message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer-discovery"
-      reason: Forbidden
-    - expression: >-
-        variables.tlsHosts.all(hosts, hosts.all(h, h != variables.issuerHost
-          && !(h.startsWith('*') && variables.issuerHost.endsWith(h.substring(1)))))
-      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer-discovery"
-      reason: Forbidden
-    - expression: "!has(object.spec.defaultBackend)"
-      message: "outside wif-issuer-discovery an Ingress must not define a default backend"
-      reason: Forbidden
-    - expression: >-
-        !has(object.metadata.annotations)
-        || !object.metadata.annotations.exists(k, k.startsWith('traefik.ingress.kubernetes.io/router.'))
-      message: "Traefik router annotations (priority, path matcher, ...) are reserved for namespace wif-issuer-discovery"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

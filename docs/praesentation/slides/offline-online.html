@@ -6,14 +6,14 @@
 <!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
 <div class="host" style="width:800px; height:170px">
 <div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
-<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über den Ingress lesbar</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über Traefik lesbar</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
 <p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
 </div>
 <p class="sh">Stärken</p>
 <ul class="pts">
 <li>keine Laufzeit-Abhängigkeit vom Cluster</li>
-<li>kein Credential beim Prüfer, vom Cluster nur die Ingress-Route erreichbar</li>
+<li>kein Credential beim Prüfer, vom Cluster nur die HTTPRoute erreichbar</li>
 <li>pro Anfrage nur lokale Signaturprüfung</li>
 </ul>
 <p class="sh">Grenzen</p>
