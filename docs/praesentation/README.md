@@ -9,7 +9,7 @@ Einsatz. Der Anhang enthält die Variante ohne Keycloak (Pod → Validator), Net
 Startreihenfolge und die Prüfungen.
 
 Dazu kommt `animation/index.html`: eine eigenständige Seite (p5.js), die den Ende-zu-Ende-Ablauf
-in 16 Schritten animiert, jeder Schritt per Klick – vom Überblick über PKI, Issuer-Pod, „Pass“
+in 16 Schritten animiert, jeder Schritt per Klick – vom Überblick über PKI, Discovery-Pod, „Pass“
 (ServiceAccount-Token) und „Visum“ (Access-Token) bis zum Aufruf von Dienst R und zum
 Schlüsselwechsel in zwei Phasen.
 

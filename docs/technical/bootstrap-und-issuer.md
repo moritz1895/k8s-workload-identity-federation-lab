@@ -1,13 +1,13 @@
-# PKI, Bootstrap und Issuer-Pod
+# PKI, Bootstrap und Discovery-Pod
 
 **Für wen / was lernst du hier:** Du kennst JWT/JWKS, aber nicht Kubernetes-Werkzeuge wie
 `kubectl` oder OpenSSL-Aufrufe. Diese Seite geht die Bausteine durch, die Discovery-Dokument
 und JWKS vom API-Server zu den Relying Parties bringen: die Lab-PKI (`tools/pki-init.sh`), die
 Signaturschlüssel (`tools/sa-keys.sh`), die Cluster-Einrichtung (`tools/bootstrap.sh`), den
-Issuer-Pod (`manifests/10-issuer.yaml`), den Ingress (`manifests/01-traefik-config.yaml`), die
-Härtung des Namespace (`manifests/05-issuer-admission.yaml`) und `ingress-lb`
+Discovery-Pod (`manifests/10-issuer-discovery.yaml`), den Ingress (`manifests/01-traefik-config.yaml`), die
+Härtung des Namespace (`manifests/05-issuer-discovery-admission.yaml`) und `ingress-lb`
 (`tools/nginx-ingress-lb.conf`). Die Entscheidung dahinter:
-[ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md).
+[ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md).
 
 ---
 
@@ -31,13 +31,13 @@ Cluster eine Kopie aus:
                                                               │ HTTP :8080
                                                               ▼
  API-Server :6443 ◄── GET (SA-Token) ── sync ──► emptyDir ──► web (nur GET)
-                       └──────── Pod issuer (2 Replikas, Namespace wif-issuer) ────────┘
+                       └──────── Pod issuer (2 Replikas, Namespace wif-issuer-discovery) ────────┘
 ```
 
 Wer bestimmen kann, was unter der JWKS-URL ausgeliefert wird, kann Tokens für jeden
-ServiceAccount fälschen. Es gibt deshalb keinen Schreibweg von außen: Der Issuer-Pod holt
-sich die Daten selbst beim API-Server, und der Namespace `wif-issuer` ist geschützt wie die
-Steuerung des Clusters ([Härtung](#härtung-von-wif-issuer)).
+ServiceAccount fälschen. Es gibt deshalb keinen Schreibweg von außen: Der Discovery-Pod holt
+sich die Daten selbst beim API-Server, und der Namespace `wif-issuer-discovery` ist geschützt wie die
+Steuerung des Clusters ([Härtung](#härtung-von-wif-issuer-discovery)).
 
 ---
 
@@ -50,7 +50,7 @@ Organisation, deren Root-Zertifikat real bereits auf allen Systemen verteilt ist
 |---|---|---|
 | Root-CA | `pki-ca` (nur `pki-init`) | `ca.crt`, `ca.key` – RSA 3072, 10 Jahre, `CN=WIF Lab Internal Root CA` |
 | Vertrauensanker | `ca-trust` | Kopie von `ca.crt` |
-| Serverzertifikat Issuer-Ingress | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`, `extendedKeyUsage=serverAuth`; `bootstrap` legt es als Secret `issuer-tls` in `wif-issuer` ab |
+| Serverzertifikat Issuer-Ingress | `issuer-tls` | `tls.crt` / `tls.key`, `CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`, `extendedKeyUsage=serverAuth`; `bootstrap` legt es als Secret `issuer-tls` in `wif-issuer-discovery` ab |
 | Serverzertifikat Keycloak | `keycloak-tls` | `tls.crt` / `tls.key`, `CN=keycloak`, SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 1000:0`, `chmod 400`, weil Keycloak als uid 1000 läuft |
 | Serverzertifikat Validator | `validator-tls` | `tls.crt` / `tls.key`, `CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 10001:0`, `chmod 400`, weil der Validator als uid 10001 läuft |
 | Serverzertifikat `service-r` | `service-r-tls` | `tls.crt` / `tls.key`, `CN=service-r.wif.local`, SAN `DNS:service-r.wif.local`, `DNS:service-r`, `DNS:localhost`, `IP:127.0.0.1`; Schlüssel `chown 10001:0`, `chmod 400`, weil `service-r` als uid 10001 läuft |
@@ -97,7 +97,7 @@ jeweils `docker compose restart server`.
 ```bash
 docker compose run --rm sa-keys stage        # neuer Schlüssel vorab veröffentlicht, signiert noch nicht
 docker compose restart server
-# warten, bis der Issuer-Pod die neue kid ausliefert (demo staged prüft das)
+# warten, bis der Discovery-Pod die neue kid ausliefert (demo staged prüft das)
 docker compose run --rm sa-keys activate     # neuer Schlüssel signiert, alter bleibt Prüfschlüssel
 docker compose restart server
 ```
@@ -105,12 +105,12 @@ docker compose restart server
 1. **`stage`:** Der neue öffentliche Schlüssel steht im JWKS des API-Servers; `sync` übernimmt
    ihn innerhalb eines Durchlaufs (15 s) und loggt `WARNING kid appeared: <kid>`. Tokens
    tragen weiter die bisherige `kid`.
-2. **`activate`:** erst, wenn der Issuer-Pod die neue `kid` ausliefert. Ab dann signiert der
+2. **`activate`:** erst, wenn der Discovery-Pod die neue `kid` ausliefert. Ab dann signiert der
    API-Server mit ihr. Weil Validator und Keycloak bei unbekannter `kid` neu laden und der
-   Issuer-Pod sie bereits ausliefert, wird schon das erste Token mit der neuen `kid`
+   Discovery-Pod sie bereits ausliefert, wird schon das erste Token mit der neuen `kid`
    angenommen.
 
-So ist nie ein Token mit einer `kid` unterwegs, die der Issuer-Pod noch nicht ausliefert –
+So ist nie ein Token mit einer `kid` unterwegs, die der Discovery-Pod noch nicht ausliefert –
 auch nicht, wenn die zwei Replikas kurz verschiedene Stände haben. Tokens mit der vorherigen
 `kid` bleiben gültig, bis das nächste `activate` deren Schlüssel entfernt. Zwischen zwei
 `activate` muss mindestens die maximale Token-Laufzeit (600 s für die Client Assertion) plus
@@ -165,7 +165,7 @@ an `--tls-san=k3s-server` ([trust-und-tls.md](trust-und-tls.md)).
 kubectl apply -f /manifests/00-namespace.yaml
 ```
 
-Legt `wif-demo` und `wif-issuer` an (`wif-issuer` mit Pod Security Standard `restricted`).
+Legt `wif-demo` und `wif-issuer-discovery` an (`wif-issuer-discovery` mit Pod Security Standard `restricted`).
 Das muss vor Schritt 3 passieren, weil Secret und ConfigMap dort liegen.
 
 ### Schritt 3 – Ingress-Zertifikat und interne CA
@@ -173,7 +173,7 @@ Das muss vor Schritt 3 passieren, weil Secret und ConfigMap dort liegen.
 `tools/bootstrap.sh:19`
 
 ```bash
-kubectl -n wif-issuer create secret tls issuer-tls \
+kubectl -n wif-issuer-discovery create secret tls issuer-tls \
     --cert=/issuer-tls/tls.crt --key=/issuer-tls/tls.key \
     --dry-run=client -o yaml | kubectl apply --server-side -f -
 kubectl -n wif-demo create configmap internal-ca \
@@ -185,7 +185,7 @@ kubectl -n wif-demo create configmap internal-ca \
 YAML und wendet es dann an – damit ist der Schritt idempotent. `--server-side` hält den
 TLS-Schlüssel aus der Annotation `last-applied-configuration` heraus, die ein
 clientseitiges `apply` ins Objekt schreiben würde. Das Secret `issuer-tls` referenziert der
-Ingress `issuer`; Traefik präsentiert es für `issuer.wif.local`. Die ConfigMap `internal-ca`
+Ingress `issuer-discovery`; Traefik präsentiert es für `issuer.wif.local`. Die ConfigMap `internal-ca`
 brauchen die Demo-Pods (`/etc/internal-ca`), um Validator, Keycloak und `service-r` per TLS zu
 prüfen. In einem echten Cluster übernähme das cert-manager oder die PKI-Anbindung der
 Plattform.
@@ -196,7 +196,7 @@ Plattform.
 
 ```bash
 kubectl apply -f /manifests
-kubectl -n wif-issuer rollout status deployment/issuer --timeout=180s
+kubectl -n wif-issuer-discovery rollout status deployment/issuer-discovery --timeout=180s
 until kubectl -n kube-system get deployment traefik > /dev/null 2>&1; do sleep 3; done
 kubectl -n kube-system rollout status deployment/traefik --timeout=300s
 kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
@@ -206,10 +206,10 @@ kubectl -n wif-demo rollout status deployment/consumer --timeout=180s
 - `00-namespace.yaml` – die beiden Namespaces (erneut, idempotent).
 - `01-traefik-config.yaml` – `HelmChartConfig` für das in k3s mitgelieferte Traefik
   ([Ingress](#ingress-traefik-und-ingress-lb)).
-- `05-issuer-admission.yaml` – die `ValidatingAdmissionPolicy`s
-  `issuer-host-reserved` und `issuer-image-digest` mit ihren Bindings.
-- `10-issuer.yaml` – ServiceAccount, ClusterRoleBinding, ConfigMaps, Deployment, Service,
-  Ingress und NetworkPolicies des Issuer-Pods (siehe unten).
+- `05-issuer-discovery-admission.yaml` – die `ValidatingAdmissionPolicy`s
+  `issuer-host-reserved` und `issuer-discovery-image-digest` mit ihren Bindings.
+- `10-issuer-discovery.yaml` – ServiceAccount, ClusterRoleBinding, ConfigMaps, Deployment, Service,
+  Ingress und NetworkPolicies des Discovery-Pods (siehe unten).
 - `20-consumer.yaml` – ServiceAccount `consumer` und Deployment `consumer` mit zwei
   projizierten Tokens (`sa-token` mit `audience: wif-demo-validator`, `kc-token` mit dem
   Realm-Issuer als Audienz, je `expirationSeconds: 600`) und
@@ -223,22 +223,22 @@ legt k3s selbst per Helm an; `bootstrap` wartet, bis es existiert und bereit ist
 
 ---
 
-## Der Issuer-Pod (`manifests/10-issuer.yaml`)
+## Der Discovery-Pod (`manifests/10-issuer-discovery.yaml`)
 
 | Objekt | Zweck |
 |---|---|
-| ServiceAccount `issuer` (`wif-issuer`) | Identität von `sync` gegenüber dem API-Server; `automountServiceAccountToken: false`. |
+| ServiceAccount `issuer-discovery` (`wif-issuer-discovery`) | Identität von `sync` gegenüber dem API-Server; `automountServiceAccountToken: false`. |
 | ClusterRoleBinding `wif-issuer-discovery` | Bindet die eingebaute ClusterRole `system:service-account-issuer-discovery` – nur `GET` auf die zwei Discovery-Pfade. |
-| ConfigMap `issuer-sync` | Das Skript `sync.sh`. |
-| ConfigMap `issuer-nginx` | nginx-Konfiguration `default.conf` für den Container `web`. |
-| Deployment `issuer` | zwei Replikas, `RollingUpdate` mit `maxUnavailable: 0`, `maxSurge: 1`; Container `sync` und `web` teilen sich das `emptyDir` `oidc` (`/srv/oidc`). |
-| Service `issuer` | Port 80 → `web:8080`. |
-| Ingress `issuer` | Host `issuer.wif.local`, TLS mit Secret `issuer-tls`, nur die zwei Pfade (`pathType: Exact`), Routing-Priorität `1000000000`. |
-| NetworkPolicies | `default-deny`, `issuer-from-ingress-controller`, `issuer-to-api-server`. |
+| ConfigMap `issuer-discovery-sync` | Das Skript `sync.sh`. |
+| ConfigMap `issuer-discovery-nginx` | nginx-Konfiguration `default.conf` für den Container `web`. |
+| Deployment `issuer-discovery` | zwei Replikas, `RollingUpdate` mit `maxUnavailable: 0`, `maxSurge: 1`; Container `sync` und `web` teilen sich das `emptyDir` `oidc` (`/srv/oidc`). |
+| Service `issuer-discovery` | Port 80 → `web:8080`. |
+| Ingress `issuer-discovery` | Host `issuer.wif.local`, TLS mit Secret `issuer-tls`, nur die zwei Pfade (`pathType: Exact`), Routing-Priorität `1000000000`. |
+| NetworkPolicies | `default-deny`, `issuer-discovery-from-ingress-controller`, `issuer-discovery-to-api-server`. |
 
 Beide Images sind per Digest gepinnt (`curlimages/curl:8.23.0@sha256:…`,
 `nginxinc/nginx-unprivileged:1.31.7-alpine@sha256:…`); ohne Digest lässt die Admission
-Policy `issuer-image-digest` sie nicht zu.
+Policy `issuer-discovery-image-digest` sie nicht zu.
 
 ### Container `sync`
 
@@ -252,11 +252,11 @@ Eine Schleife alle `SYNC_INTERVAL_SECONDS` (15):
 2. Unverändert gegenüber dem ausgelieferten Stand → nichts tun.
 3. Sonst **Plausibilitätsprüfung**: Das Discovery-Dokument nennt exakt `EXPECTED_ISSUER`
    (`https://issuer.wif.local`) und `EXPECTED_JWKS_URI`, das JWKS enthält mindestens eine
-   `kid`. Scheitert sie: `issuer-sync: REJECTED state: …`, der alte Stand bleibt.
+   `kid`. Scheitert sie: `issuer-discovery-sync: REJECTED state: …`, der alte Stand bleibt.
 4. **`kid`-Änderungen loggen:** jede neue `kid` als `WARNING kid appeared: <kid>`, jede
    weggefallene als `WARNING kid vanished: <kid>`.
 5. **Atomar übernehmen:** beide Dateien erst als `.tmp` daneben kopieren, dann per `mv`
-   ersetzen. Log: `issuer-sync: serving JWKS sha256=<hash> kids=[ … ]`.
+   ersetzen. Log: `issuer-discovery-sync: serving JWKS sha256=<hash> kids=[ … ]`.
 6. Ist der API-Server nicht lesbar:
    `reading from the API server failed, keeping the last good state, retrying in 15s`.
 
@@ -266,12 +266,12 @@ Bereitschaft (siehe `web`).
 Log ansehen:
 
 ```bash
-docker compose exec server kubectl -n wif-issuer logs deploy/issuer -c sync
+docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer -c sync
 ```
 
 ### Container `web`
 
-nginx ohne Root (`nginx-unprivileged`) mit der ConfigMap `issuer-nginx`:
+nginx ohne Root (`nginx-unprivileged`) mit der ConfigMap `issuer-discovery-nginx`:
 
 ```nginx
 server {
@@ -354,7 +354,7 @@ server {
 - Reicht TCP durch; TLS endet erst bei Traefik im Cluster.
 - Log pro Verbindung: Zeit, Quelle, Ziel, Status, Bytes.
 - **Healthcheck:** `curl --cacert /trust/ca.crt --resolve issuer.wif.local:443:172.31.8.20
-  https://issuer.wif.local/openid/v1/jwks` – gesund, sobald der Issuer-Pod das JWKS über den
+  https://issuer.wif.local/openid/v1/jwks` – gesund, sobald der Discovery-Pod das JWKS über den
   Ingress ausliefert. Erst dann starten `validator` und `keycloak`.
 
 ### Was `demo all` (Prüfung 6) am Endpunkt prüft
@@ -371,17 +371,17 @@ Danach wird das unveränderte JWKS weiter ausgeliefert.
 
 ---
 
-## Härtung von `wif-issuer`
+## Härtung von `wif-issuer-discovery`
 
-Wer in `wif-issuer` schreiben darf, kann Tokens fälschen. Der Namespace ist deshalb so
+Wer in `wif-issuer-discovery` schreiben darf, kann Tokens fälschen. Der Namespace ist deshalb so
 geschützt (geprüft mit `demo hardening`, H1–H5):
 
 | Schutz | Umsetzung |
 |---|---|
-| RBAC | Kein RoleBinding gewährt Rechte in `wif-issuer`; schreiben dürfen nur Cluster-Admins bzw. der GitOps-Prozess. Weder `wif-demo:consumer` noch `wif-issuer:issuer` dürfen ConfigMaps, Pods oder Ingresses anlegen, Deployments ändern oder Secrets lesen. |
-| `issuer-host-reserved` | Außerhalb von `wif-issuer` muss jede Regel eines Ingress einen Host nennen. Weder `rules[].host` noch `tls[].hosts` dürfen `issuer.wif.local` oder eine Wildcard sein, die ihn abdeckt (`*.wif.local`, `*.local`, `*`). `spec.defaultBackend` und jede Annotation `traefik.ingress.kubernetes.io/router.*` (Priorität, `pathmatcher`, …) sind verboten. |
-| Priorität der Issuer-Route | Der Ingress `issuer` trägt `traefik.ingress.kubernetes.io/router.priority: "1000000000"`, mehr als jede Priorität, die Traefik aus der Regellänge ableitet. |
-| `issuer-image-digest` | In `wif-issuer` lässt die Policy Pods, Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs und CronJobs nur zu, wenn jedes Image (auch Init- und Ephemeral-Container) auf `@sha256:<64 hex>` endet. Welches Image es ist, prüft sie nicht. |
+| RBAC | Kein RoleBinding gewährt Rechte in `wif-issuer-discovery`; schreiben dürfen nur Cluster-Admins bzw. der GitOps-Prozess. Weder `wif-demo:consumer` noch `wif-issuer-discovery:issuer-discovery` dürfen ConfigMaps, Pods oder Ingresses anlegen, Deployments ändern oder Secrets lesen. |
+| `issuer-host-reserved` | Außerhalb von `wif-issuer-discovery` muss jede Regel eines Ingress einen Host nennen. Weder `rules[].host` noch `tls[].hosts` dürfen `issuer.wif.local` oder eine Wildcard sein, die ihn abdeckt (`*.wif.local`, `*.local`, `*`). `spec.defaultBackend` und jede Annotation `traefik.ingress.kubernetes.io/router.*` (Priorität, `pathmatcher`, …) sind verboten. |
+| Priorität der Issuer-Route | Der Ingress `issuer-discovery` trägt `traefik.ingress.kubernetes.io/router.priority: "1000000000"`, mehr als jede Priorität, die Traefik aus der Regellänge ableitet. |
+| `issuer-discovery-image-digest` | In `wif-issuer-discovery` lässt die Policy Pods, Deployments, ReplicaSets, StatefulSets, DaemonSets, Jobs und CronJobs nur zu, wenn jedes Image (auch Init- und Ephemeral-Container) auf `@sha256:<64 hex>` endet. Welches Image es ist, prüft sie nicht. |
 | NetworkPolicy | `default-deny` für Ingress und Egress; eingehend nur von Traefik-Pods aus `kube-system` auf 8080; ausgehend nur zu `172.31.7.2:6443`. Die Policies gelten pro Pod: Netzseitig dürfte auch `web` den API-Server erreichen; ihm fehlen nur Token und Konfiguration dafür. |
 | Pod Security | Namespace-Label `pod-security.kubernetes.io/enforce: restricted`; Container wie unter [Pod-Härtung](#pod-härtung). |
 
@@ -407,7 +407,7 @@ Issuer-Route und dass Traefik weder seine CRDs noch die Gateway API liest.
 - Die Plausibilitätsprüfung in `sync` sucht per `grep` (kein `jq` im Image). Sie fängt
   Fehler ab, keine Angriffe; die Quelle ist der API-Server über TLS mit dessen CA.
 
-Siehe [ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse.
+Siehe [ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md), Kompromisse.
 
 ---
 
@@ -418,7 +418,7 @@ Siehe [ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompr
 | API-Server nicht erreichbar | `sync` loggt den Fehler und behält den letzten gültigen Stand; beide Pods bleiben bereit, das JWKS bleibt unverändert. | `demo resilience`, R1 (Egress-Policy geleert) |
 | Implausibler Stand (z. B. falscher `issuer`) | `REJECTED state`; ein neuer Pod wird nie bereit, die bisherigen liefern weiter aus. | `demo resilience`, R2 (`EXPECTED_ISSUER` verfälscht) |
 | Leeres JWKS vom API-Server | wird nicht übernommen; nie ein leeres JWKS ausgeliefert. | Plausibilitätsprüfung |
-| Neustart des API-Servers | Im Lab startet `docker compose restart server` den ganzen Knoten neu, also auch die Issuer-Pods; sie werden erst nach dem ersten Abgleich wieder bereit. In einem echten Cluster laufen sie weiter. | `demo post-rotation` (`await_issuer`) |
+| Neustart des API-Servers | Im Lab startet `docker compose restart server` den ganzen Knoten neu, also auch die Discovery-Pods; sie werden erst nach dem ersten Abgleich wieder bereit. In einem echten Cluster laufen sie weiter. | `demo post-rotation` (`await_issuer`) |
 | Ingress kurz nicht erreichbar | Validator und Keycloak arbeiten mit ihrem Schlüssel-Cache weiter; auffällig nur, wenn genau dann eine neue `kid` auftaucht. | – |
 
 Neue und weggefallene `kid`s erscheinen nur im Log von `sync`. Ob sie zu einem geplanten

@@ -4,7 +4,7 @@
 #   - only the HTTPS entry point is exposed
 #   - only plain Ingress objects define routes: Traefik's own CRDs and the Gateway
 #     API provider are switched off, so the admission policies in
-#     05-issuer-admission.yaml cover every route
+#     05-issuer-discovery-admission.yaml cover every route
 #   - strict SNI: a TLS handshake for a host without a configured certificate fails
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig

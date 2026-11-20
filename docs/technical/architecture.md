@@ -6,7 +6,7 @@ wer mit wem redet, welche Volumes es gibt, in welcher Reihenfolge alles startet 
 einige Container feste IP-Adressen haben. Danach verstehst du die `compose.yaml` Zeile für
 Zeile. Die Entscheidungen hinter dem Aufbau stehen in
 [ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI, getrennte
-Netze) und [ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) (Issuer-Pod
+Netze) und [ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod
 hinter einem Ingress).
 
 ---
@@ -19,8 +19,8 @@ kurzlebiges JWT ausgestellt. Es schickt dieses Token an einen Dienst *außerhalb
 Signatur-Schlüssel des Ausstellers (JWKS) über HTTPS von `https://issuer.wif.local` und
 verifiziert danach jedes Token lokal – Signatur, `iss`, `aud`, `exp`. Er ruft den
 Kubernetes-API-Server nie zurück. Unter `issuer.wif.local` liefert ein Pod im Cluster
-(`issuer`) eine Kopie von Discovery-Dokument und JWKS über einen Ingress aus. Das Ganze nennt
-man **Workload Identity Federation**.
+(`issuer-discovery`) eine Kopie von Discovery-Dokument und JWKS über einen Ingress aus.
+Das Ganze nennt man **Workload Identity Federation**.
 
 Ein paar Begriffe vorweg:
 
@@ -31,8 +31,8 @@ Ein paar Begriffe vorweg:
 | **API-Server** | Die zentrale Kubernetes-Komponente, mit der man redet (`kubectl` spricht mit ihr). Stellt auch die ServiceAccount-Tokens aus. |
 | **Pod** | Kleinste Ausführungseinheit in Kubernetes: ein oder mehrere Container, die zusammen laufen. |
 | **ServiceAccount** | Eine Maschinen-Identität innerhalb des Clusters. Ein Pod läuft "als" ein ServiceAccount und kann sich dafür ein Token ausstellen lassen. |
-| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `01-traefik-config.yaml`, `05-issuer-admission.yaml`, `10-issuer.yaml`, `20-consumer.yaml`, `30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
-| **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-issuer`. |
+| **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `01-traefik-config.yaml`, `05-issuer-discovery-admission.yaml`, `10-issuer-discovery.yaml`, `20-consumer.yaml`, `30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
+| **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-issuer-discovery`. |
 | **Ingress** | Kubernetes-Objekt, das HTTP(S)-Routen von außen zu einem Service im Cluster beschreibt; umgesetzt vom Ingress-Controller (hier das in k3s mitgelieferte Traefik). |
 | **OIDC-Discovery** | Konvention, unter der ein Token-Aussteller seine Metadaten unter `<issuer>/.well-known/openid-configuration` als JSON veröffentlicht – darin steht u. a. die `jwks_uri`. |
 | **JWKS** | JSON Web Key Set: die Liste der öffentlichen Schlüssel, gegen die man Token-Signaturen prüft. |
@@ -47,8 +47,8 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 |---|---|---|---|
 | `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für den Issuer-Ingress (`issuer.wif.local`), `keycloak`, `validator` und `service-r`, fremde CA für den Negativtest. Ohne Netz (`network_mode: none`). | einmalig |
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`), in zwei Phasen wechseln (`stage`, `activate`) oder im Notfall den vorherigen entfernen (`retire`). Ohne Netz. | einmalig / auf Anforderung |
-| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Ingress-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer` (Issuer-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
-| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret `issuer-tls` in `wif-issuer`, ConfigMap `internal-ca` in `wif-demo`, Manifeste anwenden. | einmalig, Exit 0 |
+| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Ingress-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer-discovery` (Discovery-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
+| `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret `issuer-tls` in `wif-issuer-discovery`, ConfigMap `internal-ca` in `wif-demo`, Manifeste anwenden. | einmalig, Exit 0 |
 | `ingress-lb` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor den Ingress-Knoten: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. | dauerhaft |
 | `validator` | `wif-lab/validator` (aus `validator/`) | Der Dienst *außerhalb* des Clusters. Spring Boot 4 / Java 25. Prüft die Tokens offline. | dauerhaft |
 | `validator-foreign-ca` | `wif-lab/validator` | Negativtest: Validator mit fremder CA, muss beim Start scheitern. Profil `negative`. | auf Anforderung |
@@ -173,7 +173,7 @@ Relying Parties erreichen damit vom Cluster nur die Ingress-Route.
 - TCP-Pass-through `172.31.8.20:443` → `172.31.7.2:30443`; TLS endet bei Traefik im Cluster.
 - **`depends_on: server → service_healthy`**.
 - **`healthcheck`:** `curl` mit Lab-CA auf `https://issuer.wif.local/openid/v1/jwks` – gesund,
-  sobald der Issuer-Pod das JWKS über den Ingress ausliefert (`retries: 120`, alle 5 s,
+  sobald der Discovery-Pod das JWKS über den Ingress ausliefert (`retries: 120`, alle 5 s,
   `start_period: 30s`).
 - Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#ingress-traefik-und-ingress-lb).
 
@@ -271,7 +271,7 @@ braucht.
 |---|---|---|---|
 | `pki-ca` | `pki-init` | – | Root-CA: `ca.crt`, `ca.key`. |
 | `ca-trust` | `pki-init` | `bootstrap`, `ingress-lb`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
-| `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer`) | Serverzertifikat `tls.crt` / `tls.key` des Ingress (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
+| `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer-discovery`) | Serverzertifikat `tls.crt` / `tls.key` des Ingress (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `foreign-ca.crt`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
 | `validator-tls` | `pki-init` | `validator`, `validator-foreign-ca` | Serverzertifikat `tls.crt` / `tls.key` (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
@@ -284,7 +284,7 @@ braucht.
 Zwischen Cluster-Seite und Relying Parties gibt es **kein** gemeinsames Volume. Die Daten
 (Discovery-Dokument, JWKS) erreichen Validator und Keycloak nur über HTTPS von
 `issuer.wif.local`, der Vertrauensanker (`ca.crt`) über `ca-trust`. Die Kopie, die der
-Issuer-Pod ausliefert, liegt in einem `emptyDir` im Pod, nicht in einem Docker-Volume.
+Discovery-Pod ausliefert, liegt in einem `emptyDir` im Pod, nicht in einem Docker-Volume.
 
 > **`down -v`:** `docker compose down` allein lässt die Volumes stehen; erst `docker compose
 > down -v` löscht sie. Siehe [build-und-betrieb.md](build-und-betrieb.md).
@@ -330,7 +330,7 @@ cluster-interne DNS (CoreDNS) kennt nur Dinge *im* Cluster. Die Pods lösen die 
 
 Damit diese Einträge stimmen, **müssen** die Adressen fest sein. Weitere feste Adressen:
 `172.31.7.2` (Ziel in `tools/nginx-ingress-lb.conf`, Egress-Ziel der NetworkPolicy
-`issuer-to-api-server`), `172.31.8.20` (Bind-Adresse in `tools/nginx-ingress-lb.conf`,
+`issuer-discovery-to-api-server`), `172.31.8.20` (Bind-Adresse in `tools/nginx-ingress-lb.conf`,
 `INGRESS_LB_ADDR` in `tools/demo.sh`). Außerhalb des Clusters löst `issuer.wif.local` über
 den Compose-Alias von `ingress-lb` in `relying-net` auf. Die Namen unter `wif.local` sind frei
 gewählt.
@@ -381,7 +381,7 @@ Vorhandene CA, Zertifikate und Signaturschlüssel bleiben erhalten.
 ## Weiterlesen
 
 - [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap,
-  Issuer-Pod, Ingress und Härtung im Detail
+  Discovery-Pod, Ingress und Härtung im Detail
 - [validator.md](validator.md) – der Java-Service innen
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak, Realm und `service-r`
 - [trust-und-tls.md](trust-und-tls.md) – die TLS-Vertrauensbeziehungen

@@ -3,8 +3,8 @@
 # Runs inside the `demo` container:
 #   docker compose run --rm demo                 all base checks
 #   docker compose run --rm demo authz           authorization server (keycloak) + service R checks
-#   docker compose run --rm demo hardening       protection of the issuer namespace
-#   docker compose run --rm demo resilience      issuer pod without API server / with an implausible state
+#   docker compose run --rm demo hardening       protection of the issuer discovery namespace
+#   docker compose run --rm demo resilience      discovery pod without API server / with an implausible state
 #   docker compose run --rm demo pre-rotation    mint + store a token before a key change
 #   docker compose run --rm demo staged          after phase 1 (sa-keys stage + API server restart)
 #   docker compose run --rm demo post-rotation   after phase 2 (sa-keys activate + API server restart)
@@ -15,7 +15,7 @@ PHASE="${1:-all}"
 VALIDATOR_URL="${VALIDATOR_URL:-https://validator:8443}"
 AUD="${WIF_AUDIENCE:-wif-demo-validator}"
 NS="wif-demo"
-ISSUER_NS="wif-issuer"
+DISCOVERY_NS="wif-issuer-discovery"
 ISSUER_HOST=issuer.wif.local
 ISSUER=https://$ISSUER_HOST
 INGRESS_LB_ADDR=172.31.8.20
@@ -101,21 +101,21 @@ expect_jwks_served() {
         && pass "$1" || fail "$1: JWKS missing or empty"
 }
 
-issuer_pods() { kubectl -n "$ISSUER_NS" get pods -l app=issuer --sort-by=.metadata.creationTimestamp -o name; }
+discovery_pods() { kubectl -n "$DISCOVERY_NS" get pods -l app=issuer-discovery --sort-by=.metadata.creationTimestamp -o name; }
 
-ready_issuer_pods() {
-    kubectl -n "$ISSUER_NS" get pods -l app=issuer \
+ready_discovery_pods() {
+    kubectl -n "$DISCOVERY_NS" get pods -l app=issuer-discovery \
         -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[?(@.name=="web")].ready}{"\n"}{end}' \
         | awk '$2 == "true" { print $1 }'
 }
 
 base_checks() {
-    section "0. OIDC discovery served by the in-cluster issuer pod through the ingress (internal CA)"
+    section "0. OIDC discovery served by the in-cluster discovery pod through the ingress (internal CA)"
     echo "GET $ISSUER/.well-known/openid-configuration"
     curl -fsS --cacert "$CA" "$ISSUER/.well-known/openid-configuration" \
         | jq '{issuer, jwks_uri, id_token_signing_alg_values_supported}'
 
-    section "1. JWKS served by the issuer pod (mirrored from the API server)"
+    section "1. JWKS served by the discovery pod (mirrored from the API server)"
     curl -fsS --cacert "$CA" "$ISSUER/openid/v1/jwks" | jq '.keys[] | {kid, kty, alg, use}'
 
     section "2. mint an audience-bound token and decode its claims"
@@ -489,7 +489,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: probe
-  namespace: $ISSUER_NS
+  namespace: $DISCOVERY_NS
 spec:
   selector:
     matchLabels: {app: probe}
@@ -511,7 +511,7 @@ can_i() {
 }
 
 hardening_checks() {
-    section "H1. admission: the issuer host is reserved for $ISSUER_NS"
+    section "H1. admission: the issuer host is reserved for $DISCOVERY_NS"
     local long_regex
     long_regex="/(openid/v1/jwks|$(printf 'a%.0s' $(seq 1 120)))"
     ingress_manifest "$NS" "$ISSUER_HOST" | expect_denied "Ingress for $ISSUER_HOST in $NS"
@@ -527,7 +527,7 @@ hardening_checks() {
         | expect_denied "Ingress with a Traefik path matcher annotation in $NS"
     default_backend_manifest | expect_denied "Ingress with a default backend in $NS"
     ingress_manifest "$NS" "other.wif.local" | expect_admitted "Ingress for another host in $NS"
-    [ "$(kubectl -n "$ISSUER_NS" get ingress issuer \
+    [ "$(kubectl -n "$DISCOVERY_NS" get ingress issuer-discovery \
         -o jsonpath='{.metadata.annotations.traefik\.ingress\.kubernetes\.io/router\.priority}')" = "1000000000" ] \
         && pass "the issuer route carries the top routing priority" || fail "the issuer route has no top priority"
     TRAEFIK_ARGS=$(kubectl -n kube-system get deployment traefik -o jsonpath='{.spec.template.spec.containers[0].args}')
@@ -538,66 +538,66 @@ hardening_checks() {
     grep -q 'providers.kubernetesingress' <<< "$TRAEFIK_ARGS" \
         && pass "Traefik reads routes from Ingress objects" || fail "Traefik's Ingress provider is off"
 
-    section "H2. admission: images in $ISSUER_NS only by digest"
+    section "H2. admission: images in $DISCOVERY_NS only by digest"
     issuer_deployment_manifest "nginxinc/nginx-unprivileged:1.29-alpine" \
-        | expect_denied "Deployment with a tag-only image in $ISSUER_NS"
-    DIGEST_IMAGE=$(kubectl -n "$ISSUER_NS" get deployment issuer \
+        | expect_denied "Deployment with a tag-only image in $DISCOVERY_NS"
+    DIGEST_IMAGE=$(kubectl -n "$DISCOVERY_NS" get deployment issuer-discovery \
         -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}')
-    issuer_deployment_manifest "$DIGEST_IMAGE" | expect_admitted "Deployment with $DIGEST_IMAGE in $ISSUER_NS"
+    issuer_deployment_manifest "$DIGEST_IMAGE" | expect_admitted "Deployment with $DIGEST_IMAGE in $DISCOVERY_NS"
 
-    section "H3. RBAC: nobody but cluster admins writes to $ISSUER_NS"
+    section "H3. RBAC: nobody but cluster admins writes to $DISCOVERY_NS"
     local account verb resource answer
-    for account in "$NS:consumer" "$ISSUER_NS:issuer"; do
+    for account in "$NS:consumer" "$DISCOVERY_NS:issuer-discovery"; do
         for verb_resource in "create configmaps" "patch deployments" "create pods" "create ingresses" "get secrets"; do
             read -r verb resource <<< "$verb_resource"
-            answer=$(can_i "$account" "$verb" "$resource" -n "$ISSUER_NS")
-            printf '  %-20s %-18s -n %s: %s\n' "$account" "$verb_resource" "$ISSUER_NS" "$answer"
-            [ "$answer" = "no" ] || fail "$account may $verb_resource in $ISSUER_NS"
+            answer=$(can_i "$account" "$verb" "$resource" -n "$DISCOVERY_NS")
+            printf '  %-20s %-18s -n %s: %s\n' "$account" "$verb_resource" "$DISCOVERY_NS" "$answer"
+            [ "$answer" = "no" ] || fail "$account may $verb_resource in $DISCOVERY_NS"
         done
     done
-    pass "neither a workload nor the issuer's own ServiceAccount may write or read secrets in $ISSUER_NS"
-    [ "$(can_i "$ISSUER_NS:issuer" get /openid/v1/jwks)" = "yes" ] \
-        && pass "the issuer's ServiceAccount may read the JWKS (issuer-discovery role)" \
-        || fail "the issuer's ServiceAccount cannot read the JWKS"
+    pass "neither a workload nor the discovery pod's own ServiceAccount may write or read secrets in $DISCOVERY_NS"
+    [ "$(can_i "$DISCOVERY_NS:issuer-discovery" get /openid/v1/jwks)" = "yes" ] \
+        && pass "the discovery pod's ServiceAccount may read the JWKS (issuer-discovery role)" \
+        || fail "the discovery pod's ServiceAccount cannot read the JWKS"
 
     section "H4. NetworkPolicy: in only from the ingress controller, out only to the API server"
-    local consumer issuer_pod
+    local consumer discovery_pod
     consumer=$(pod_of consumer)
-    echo "consumer -> http://issuer.$ISSUER_NS.svc/openid/v1/jwks"
+    echo "consumer -> http://issuer-discovery.$DISCOVERY_NS.svc/openid/v1/jwks"
     if kubectl -n "$NS" exec "$consumer" -- curl -s -o /dev/null --max-time 4 \
-        "http://issuer.$ISSUER_NS.svc/openid/v1/jwks" 2> /dev/null; then
-        fail "a workload reaches the issuer pod directly"
+        "http://issuer-discovery.$DISCOVERY_NS.svc/openid/v1/jwks" 2> /dev/null; then
+        fail "a workload reaches the discovery pod directly"
     fi
-    pass "workloads cannot reach the issuer pod"
-    issuer_pod=$(issuer_pods | tail -n 1)
-    issuer_pod=${issuer_pod#pod/}
-    echo "$issuer_pod (sync) -> validator at 172.31.9.10:8443"
-    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c sync -- curl -sk -o /dev/null --max-time 4 \
+    pass "workloads cannot reach the discovery pod"
+    discovery_pod=$(discovery_pods | tail -n 1)
+    discovery_pod=${discovery_pod#pod/}
+    echo "$discovery_pod (sync) -> validator at 172.31.9.10:8443"
+    if kubectl -n "$DISCOVERY_NS" exec "$discovery_pod" -c sync -- curl -sk -o /dev/null --max-time 4 \
         https://172.31.9.10:8443/healthz 2> /dev/null; then
-        fail "the issuer pod reaches the validator"
+        fail "the discovery pod reaches the validator"
     fi
-    pass "the issuer pod reaches nothing but the API server"
-    echo "$issuer_pod (sync) -> API server"
-    kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c sync -- sh -c \
+    pass "the discovery pod reaches nothing but the API server"
+    echo "$discovery_pod (sync) -> API server"
+    kubectl -n "$DISCOVERY_NS" exec "$discovery_pod" -c sync -- sh -c \
         'curl -fsS -o /dev/null --max-time 5 --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
             -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
             "https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT/openid/v1/jwks"' \
-        && pass "the issuer pod reaches the API server" || fail "the issuer pod cannot reach the API server"
+        && pass "the discovery pod reaches the API server" || fail "the discovery pod cannot reach the API server"
 
     section "H5. pod hardening"
-    kubectl -n "$ISSUER_NS" get pod "$issuer_pod" -o json | jq -e '
+    kubectl -n "$DISCOVERY_NS" get pod "$discovery_pod" -o json | jq -e '
         .spec.securityContext.runAsNonRoot == true
         and ([.spec.containers[].securityContext
               | .readOnlyRootFilesystem == true
                 and .allowPrivilegeEscalation == false
                 and .capabilities.drop == ["ALL"]
                 and ((.capabilities.add // []) | length) == 0] | all)' > /dev/null \
-        && pass "non-root, read-only root filesystem, no capabilities" || fail "issuer pod is not hardened"
-    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c web -- touch /probe 2> /dev/null; then
+        && pass "non-root, read-only root filesystem, no capabilities" || fail "discovery pod is not hardened"
+    if kubectl -n "$DISCOVERY_NS" exec "$discovery_pod" -c web -- touch /probe 2> /dev/null; then
         fail "web container can write its root filesystem"
     fi
     pass "web container cannot write its root filesystem"
-    if kubectl -n "$ISSUER_NS" exec "$issuer_pod" -c web -- \
+    if kubectl -n "$DISCOVERY_NS" exec "$discovery_pod" -c web -- \
         ls /var/run/secrets/kubernetes.io/serviceaccount > /dev/null 2>&1; then
         fail "web container holds a ServiceAccount token"
     fi
@@ -610,8 +610,8 @@ await_sync_log() {
     local i since=()
     [ -n "${4:-}" ] && since=(--since-time="$4")
     for i in $(seq 1 "$3"); do
-        if kubectl -n "$ISSUER_NS" logs "$1" -c sync "${since[@]}" 2> /dev/null | grep -q "$2"; then
-            kubectl -n "$ISSUER_NS" logs "$1" -c sync "${since[@]}" | grep "$2" | tail -n 1 | sed "s/^/  $1: /"
+        if kubectl -n "$DISCOVERY_NS" logs "$1" -c sync "${since[@]}" 2> /dev/null | grep -q "$2"; then
+            kubectl -n "$DISCOVERY_NS" logs "$1" -c sync "${since[@]}" | grep "$2" | tail -n 1 | sed "s/^/  $1: /"
             return 0
         fi
         sleep 1
@@ -622,17 +622,17 @@ await_sync_log() {
 API_EGRESS='[{"to":[{"ipBlock":{"cidr":"172.31.7.2/32"}}],"ports":[{"port":6443}]}]'
 
 set_api_egress() {
-    kubectl -n "$ISSUER_NS" patch networkpolicy issuer-to-api-server --type=json \
+    kubectl -n "$DISCOVERY_NS" patch networkpolicy issuer-discovery-to-api-server --type=json \
         -p "[{\"op\":\"replace\",\"path\":\"/spec/egress\",\"value\":$1}]" > /dev/null
 }
 
 restore_issuer() {
     set_api_egress "$API_EGRESS"
-    if kubectl -n "$ISSUER_NS" get deployment issuer -o jsonpath='{.spec.template.spec.containers[0].env}' \
+    if kubectl -n "$DISCOVERY_NS" get deployment issuer-discovery -o jsonpath='{.spec.template.spec.containers[0].env}' \
         | grep -q not-this-cluster; then
-        kubectl -n "$ISSUER_NS" rollout undo deployment/issuer > /dev/null
+        kubectl -n "$DISCOVERY_NS" rollout undo deployment/issuer-discovery > /dev/null
     fi
-    kubectl -n "$ISSUER_NS" rollout status deployment/issuer --timeout=120s > /dev/null
+    kubectl -n "$DISCOVERY_NS" rollout status deployment/issuer-discovery --timeout=120s > /dev/null
 }
 
 resilience_checks() {
@@ -640,66 +640,66 @@ resilience_checks() {
     local kids_before pod new_pod i cut_at
     kids_before=$(published_kids)
 
-    section "R1. API server unreachable: the issuer pods keep serving the last good state"
-    echo "cutting the issuer pods' path to the API server (NetworkPolicy egress := none)"
+    section "R1. API server unreachable: the discovery pods keep serving the last good state"
+    echo "cutting the discovery pods' path to the API server (NetworkPolicy egress := none)"
     cut_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     set_api_egress '[]'
-    for pod in $(issuer_pods); do
+    for pod in $(discovery_pods); do
         await_sync_log "${pod#pod/}" "reading from the API server failed" 60 "$cut_at"
     done
     [ "$(published_kids)" = "$kids_before" ] && pass "the JWKS is served unchanged" \
         || fail "the served JWKS changed while the API server was unreachable"
-    [ "$(ready_issuer_pods | wc -l)" = "2" ] && pass "both issuer pods stay ready" \
-        || fail "issuer pods lost readiness"
+    [ "$(ready_discovery_pods | wc -l)" = "2" ] && pass "both discovery pods stay ready" \
+        || fail "discovery pods lost readiness"
     echo "restoring the path to the API server"
     set_api_egress "$API_EGRESS"
 
     section "R2. implausible state: a new pod never becomes ready, the others keep serving"
     echo "rolling out a pod that expects another issuer, so the API server's state is implausible to it"
-    kubectl -n "$ISSUER_NS" set env deployment/issuer -c sync EXPECTED_ISSUER=https://not-this-cluster
+    kubectl -n "$DISCOVERY_NS" set env deployment/issuer-discovery -c sync EXPECTED_ISSUER=https://not-this-cluster
     for i in $(seq 1 60); do
-        [ "$(issuer_pods | wc -l)" -ge 3 ] && break
+        [ "$(discovery_pods | wc -l)" -ge 3 ] && break
         sleep 1
     done
-    new_pod=$(issuer_pods | tail -n 1)
+    new_pod=$(discovery_pods | tail -n 1)
     new_pod=${new_pod#pod/}
     echo "new pod: $new_pod"
     await_sync_log "$new_pod" "REJECTED state" 60
     sleep 10
-    if ready_issuer_pods | grep -qx "$new_pod"; then
+    if ready_discovery_pods | grep -qx "$new_pod"; then
         fail "a pod without a plausible state became ready"
     fi
     pass "the new pod is not ready (no plausible state yet)"
-    [ "$(ready_issuer_pods | wc -l)" = "2" ] && pass "the two previous pods keep serving" \
-        || fail "previous issuer pods lost readiness"
+    [ "$(ready_discovery_pods | wc -l)" = "2" ] && pass "the two previous pods keep serving" \
+        || fail "previous discovery pods lost readiness"
     [ "$(published_kids)" = "$kids_before" ] && pass "the JWKS is served unchanged" \
         || fail "the served JWKS changed during the rollout"
     echo "rolling back"
-    kubectl -n "$ISSUER_NS" rollout undo deployment/issuer
-    kubectl -n "$ISSUER_NS" rollout status deployment/issuer --timeout=120s
+    kubectl -n "$DISCOVERY_NS" rollout undo deployment/issuer-discovery
+    kubectl -n "$DISCOVERY_NS" rollout status deployment/issuer-discovery --timeout=120s
     trap - EXIT
     restore_issuer
-    expect_jwks_served "the issuer serves the JWKS after the rollback"
+    expect_jwks_served "the discovery pods serve the JWKS after the rollback"
 }
 
-# $1 = seconds -> waits until the issuer answers through the ingress. In the lab an
-# API server restart restarts the whole node, and with it the issuer pods.
+# $1 = seconds -> waits until the discovery endpoint answers through the ingress. In the lab an
+# API server restart restarts the whole node, and with it the discovery pods.
 await_issuer() {
     local i
     for i in $(seq 1 "$1"); do
         curl -fsS -o /dev/null --max-time 3 --cacert "$CA" "$ISSUER/openid/v1/jwks" 2> /dev/null && return 0
         sleep 1
     done
-    fail "issuer not served within $1 s"
+    fail "issuer discovery endpoint not served within $1 s"
 }
 
-# $1 = kid -> fails unless every issuer pod logged the kid's appearance
+# $1 = kid -> fails unless every discovery pod logged the kid's appearance
 expect_kid_logged() {
     local pod
-    for pod in $(issuer_pods); do
+    for pod in $(discovery_pods); do
         await_sync_log "${pod#pod/}" "WARNING kid appeared: $1" 60
     done
-    pass "every issuer pod logged the new kid $1"
+    pass "every discovery pod logged the new kid $1"
 }
 
 pre_rotation() {

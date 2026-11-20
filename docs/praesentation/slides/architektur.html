@@ -13,7 +13,7 @@
 <div class="panel" style="left:0px; top:0px; width:1120px; height:540px"></div>
 <p class="ph" style="left:24px; top:14px; width:1072px">Kubernetes-Cluster (k3s)</p>
 <div class="box accent" style="left:40px; top:60px; width:300px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
-<div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Issuer-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
+<div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Discovery-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
 <div class="box" style="left:820px; top:60px; width:260px; height:140px"><p class="t">Ingress</p><p class="d">Traefik, nur 2 Pfade</p></div>
 <div class="box" style="left:40px; top:400px; width:700px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
 <div class="box" style="left:1180px; top:60px; width:180px; height:140px"><p class="t">ingress-lb</p><p class="d">nur TCP 443</p></div>
@@ -32,8 +32,8 @@
 </div>
 <ul class="pts">
 <li>Keycloak darf den API-Server nicht erreichen – darum spiegelt ein Pod im Cluster die öffentlichen Schlüssel und liefert sie über den Ingress aus</li>
-<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Issuer-Pod holt selbst, von außen lässt sich nichts einspielen</li>
+<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Discovery-Pod holt selbst, von außen lässt sich nichts einspielen</li>
 <li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
 </ul>
-<aside>Der Issuer-Pod im Namespace wif-issuer hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
+<aside>Der Discovery-Pod im Namespace wif-issuer-discovery hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer-discovery schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>

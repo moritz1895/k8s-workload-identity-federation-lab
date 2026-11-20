@@ -1,5 +1,7 @@
-# In-cluster OIDC issuer endpoint. Serves the cluster's discovery document and JWKS
-# read-only behind the ingress host issuer.wif.local.
+# In-cluster OIDC issuer discovery endpoint (Kubernetes "service account issuer
+# discovery"). The issuer itself is the API server, which signs the tokens; these pods
+# only serve its discovery document and JWKS read-only behind the ingress host
+# issuer.wif.local, the issuer URL.
 #
 #   sync — reads both documents from the API server with its own ServiceAccount
 #          (read-only discovery role), accepts only plausible states and writes them
@@ -9,12 +11,12 @@
 #
 # Whoever controls what this namespace serves can forge ServiceAccount tokens for every
 # ServiceAccount; it is protected like the control plane (RBAC, admission policies in
-# 05-issuer-admission.yaml, NetworkPolicies below, hardened pods).
+# 05-issuer-discovery-admission.yaml, NetworkPolicies below, hardened pods).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: issuer
-  namespace: wif-issuer
+  name: issuer-discovery
+  namespace: wif-issuer-discovery
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -27,14 +29,14 @@ roleRef:
   name: system:service-account-issuer-discovery
 subjects:
   - kind: ServiceAccount
-    name: issuer
-    namespace: wif-issuer
+    name: issuer-discovery
+    namespace: wif-issuer-discovery
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: issuer-sync
-  namespace: wif-issuer
+  name: issuer-discovery-sync
+  namespace: wif-issuer-discovery
 data:
   sync.sh: |
     #!/bin/sh
@@ -51,7 +53,7 @@ data:
     INTERVAL="${SYNC_INTERVAL_SECONDS:-15}"
     mkdir -p "$WORK" "$OUT/.well-known" "$OUT/openid/v1"
 
-    log() { echo "issuer-sync: $*"; }
+    log() { echo "issuer-discovery-sync: $*"; }
 
     fetch() {
       printf 'Authorization: Bearer %s\n' "$(cat "$SA/token")" > "$WORK/auth-header"
@@ -111,8 +113,8 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: issuer-nginx
-  namespace: wif-issuer
+  name: issuer-discovery-nginx
+  namespace: wif-issuer-discovery
 data:
   default.conf: |
     server {
@@ -138,10 +140,10 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: issuer
-  namespace: wif-issuer
+  name: issuer-discovery
+  namespace: wif-issuer-discovery
   labels:
-    app: issuer
+    app: issuer-discovery
 spec:
   replicas: 2
   strategy:
@@ -151,13 +153,13 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: issuer
+      app: issuer-discovery
   template:
     metadata:
       labels:
-        app: issuer
+        app: issuer-discovery
     spec:
-      serviceAccountName: issuer
+      serviceAccountName: issuer-discovery
       automountServiceAccountToken: false
       enableServiceLinks: false
       securityContext:
@@ -227,10 +229,10 @@ spec:
       volumes:
         - name: script
           configMap:
-            name: issuer-sync
+            name: issuer-discovery-sync
         - name: web-config
           configMap:
-            name: issuer-nginx
+            name: issuer-discovery-nginx
         - name: oidc
           emptyDir:
             sizeLimit: 1Mi
@@ -257,11 +259,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: issuer
-  namespace: wif-issuer
+  name: issuer-discovery
+  namespace: wif-issuer-discovery
 spec:
   selector:
-    app: issuer
+    app: issuer-discovery
   ports:
     - name: http
       port: 80
@@ -270,8 +272,8 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: issuer
-  namespace: wif-issuer
+  name: issuer-discovery
+  namespace: wif-issuer-discovery
   annotations:
     # Above any priority Traefik derives from rule length, so no other route can
     # outrank this one for the issuer paths.
@@ -290,14 +292,14 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: issuer
+                name: issuer-discovery
                 port:
                   name: http
           - path: /openid/v1/jwks
             pathType: Exact
             backend:
               service:
-                name: issuer
+                name: issuer-discovery
                 port:
                   name: http
 ---
@@ -305,7 +307,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: wif-issuer
+  namespace: wif-issuer-discovery
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -313,12 +315,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: issuer-from-ingress-controller
-  namespace: wif-issuer
+  name: issuer-discovery-from-ingress-controller
+  namespace: wif-issuer-discovery
 spec:
   podSelector:
     matchLabels:
-      app: issuer
+      app: issuer-discovery
   policyTypes: ["Ingress"]
   ingress:
     - from:
@@ -336,12 +338,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: issuer-to-api-server
-  namespace: wif-issuer
+  name: issuer-discovery-to-api-server
+  namespace: wif-issuer-discovery
 spec:
   podSelector:
     matchLabels:
-      app: issuer
+      app: issuer-discovery
   policyTypes: ["Egress"]
   egress:
     - to:

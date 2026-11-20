@@ -15,7 +15,7 @@ Entscheidung: [ADR 0004](../adr/0004-keycloak-als-autorisierungsserver-pro-fachb
 
 ```
       workload-net 172.31.9.0/24                         relying-net 172.31.8.0/24
- Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► ingress-lb .8.20:443 ──► Issuer-Pod (issuer.wif.local)
+ Pod consumer ── POST /token (HTTPS) ──► keycloak-gateway ──► keycloak .30:8443 ── Discovery + JWKS ──► ingress-lb .8.20:443 ──► Discovery-Pod (issuer.wif.local)
    (keycloak = 172.31.9.30)              .9.30 / .8.31         Realm domain-rst
       │                                  nur /realms/domain-rst/        ▲
       │                                                                 │ Discovery + JWKS (beim ersten Token)
@@ -98,7 +98,7 @@ Bei einer Token-Anfrage findet Keycloak über `iss` der Client-Assertion den Ide
 prüft Signatur, `exp`, `nbf` und `aud` (= Realm-Issuer-URL) und sucht den Client mit passendem
 `jwt.credential.sub`. Die Schlüssel lädt Keycloak lazy beim ersten Bedarf über
 `https://issuer.wif.local/.well-known/openid-configuration` → `jwks_uri` (über `ingress-lb`
-in `relying-net` zum Ingress des Issuer-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
+in `relying-net` zum Ingress des Discovery-Pods, TLS mit Lab-CA) und hält sie im Cache. Eine
 Verbindung zum API-Server gibt es nicht.
 
 Den Cache steuert das SPI `public-key-storage` (Provider `infinispan`); das Lab setzt beide
@@ -112,7 +112,7 @@ Werte nicht und nutzt die Standards:
 Eine unbekannte `kid` löst einen Neuabruf aus, sofern `min-time-between-requests` seit dem
 letzten Abruf verstrichen ist. Weil der Schlüsselwechsel zweiphasig läuft
 ([bootstrap-und-issuer.md](bootstrap-und-issuer.md#zweiphasiger-schlüsselwechsel)), liefert der
-Issuer-Pod eine neue `kid` schon aus, bevor ein Token sie trägt. Ein kurzer Ausfall des
+Discovery-Pod eine neue `kid` schon aus, bevor ein Token sie trägt. Ein kurzer Ausfall des
 Ingress fällt nur auf, wenn genau dann eine neue `kid` auftaucht.
 
 Weil der `sub` des ServiceAccount-Tokens die Workload identifiziert, gehört das
@@ -159,7 +159,7 @@ Gemessen im Lab mit `tools/demo.sh authz` und dem Schlüsselwechsel (`staged`, `
 | gefälschte Assertion: fremder Issuer | `401 invalid_client` |
 | gefälschte Assertion: `iss=https://issuer.wif.local`, echte `kid`, fremder Schlüssel | `401 invalid_client` |
 | dasselbe ServiceAccount-Token mehrfach als Assertion | akzeptiert; für Kubernetes-Tokens gibt es keine Einmal-Prüfung |
-| erste Assertion mit neuer `kid` nach `sa-keys activate` | ohne Wiederholung akzeptiert; Keycloak lädt das JWKS bei unbekannter `kid` neu, der Issuer-Pod liefert die `kid` seit `sa-keys stage` aus |
+| erste Assertion mit neuer `kid` nach `sa-keys activate` | ohne Wiederholung akzeptiert; Keycloak lädt das JWKS bei unbekannter `kid` neu, der Discovery-Pod liefert die `kid` seit `sa-keys stage` aus |
 
 Die Wiederverwendbarkeit ist Voraussetzung für den Cache in der Workload: Das kubelet tauscht
 `kc-token` (600 s) erst nach rund acht Minuten aus, bis dahin liest jede Erneuerung dieselbe

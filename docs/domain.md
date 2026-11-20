@@ -97,7 +97,7 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
   │   API-Server  ── stellt Tokens aus, signiert mit dem ServiceAccount-Signaturschlüssel        │
   │        ▲                                                                                     │
   │        │ GET Discovery-Doc + JWKS (nur Leserolle)                                            │
-  │   Pod "issuer" (Namespace wif-issuer):  sync ──► Kopie ──► web (nur GET)                     │
+  │   Pod "issuer" (Namespace wif-issuer-discovery):  sync ──► Kopie ──► web (nur GET)                     │
   │                                                             ▲                                │
   │   ServiceAccount "consumer"  ── die Identität, auf die das Token ausgestellt wird            │
   │   Pod "consumer"  ── bekommt das Token in eine Datei gelegt, schickt es per HTTPS raus       │
@@ -120,7 +120,7 @@ Der Grenzbeamte muss nirgendwo anrufen. Er prüft das Dokument **offline** anhan
    └─────────────────────────────┘
 
    Der Validator spricht NIEMALS mit dem API-Server und kann ihn über kein Netz erreichen.
-   Vom Cluster erreicht er nur die Ingress-Route des Issuer-Pods.
+   Vom Cluster erreicht er nur die Ingress-Route des Discovery-Pods.
 ```
 
 ### Der Cluster / der API-Server
@@ -160,7 +160,7 @@ Der Pod selbst enthält nur ein `curl`-Image, das nichts tut außer zu warten. D
 "Anfrage an den externen Dienst" löst das Demo-Skript
 ([`tools/demo.sh`](../tools/demo.sh)) aus.
 
-### Der Issuer-Endpoint (Issuer-Pod hinter dem Ingress)
+### Der Issuer-Endpoint (Discovery-Pod hinter dem Ingress)
 
 **Issuer** heißt "Aussteller". Der `iss`-Claim im Token nennt die URL des Ausstellers. Damit
 die Prüfung offline funktionieren kann, muss unter dieser URL ein kleines Stück öffentliche
@@ -174,8 +174,8 @@ Metadaten liegen:
 - das **JWKS** unter der im Discovery-Dokument genannten `jwks_uri`
   (hier `/openid/v1/jwks`) - die öffentlichen Signaturschlüssel des Clusters.
 
-In diesem Lab liefert ein **Pod im Cluster** (Deployment `issuer` im Namespace
-`wif-issuer`, zwei Replikas) genau diese zwei Dokumente unter der Issuer-URL
+In diesem Lab liefert ein **Pod im Cluster** (Deployment `issuer-discovery` im Namespace
+`wif-issuer-discovery`, zwei Replikas) genau diese zwei Dokumente unter der Issuer-URL
 `https://issuer.wif.local` aus - **getrennt vom API-Server**. Er besteht aus zwei
 Containern:
 
@@ -196,22 +196,22 @@ Schreibweg**: Kein Endpunkt nimmt ein JWKS entgegen, und keine Komponente brauch
 Zertifikat, um Schlüssel zu veröffentlichen.
 
 Wer bestimmen kann, was unter der JWKS-URL ausgeliefert wird, kann beliebige Tokens
-ausstellen, die der Validator akzeptiert. Deshalb ist der Namespace `wif-issuer` geschützt
+ausstellen, die der Validator akzeptiert. Deshalb ist der Namespace `wif-issuer-discovery` geschützt
 wie die Steuerung des Clusters: kein RoleBinding, Admission-Regeln, NetworkPolicies
 (eingehend nur von Traefik, ausgehend nur zum API-Server) und gehärtete Pods (ohne Root,
 schreibgeschütztes Root-Dateisystem, keine Capabilities). Die Admission-Regeln reservieren
-den Host `issuer.wif.local` für `wif-issuer`: Außerhalb davon muss jede Ingress-Regel
+den Host `issuer.wif.local` für `wif-issuer-discovery`: Außerhalb davon muss jede Ingress-Regel
 einen eigenen Host nennen, der weder `issuer.wif.local` ist noch ihn per Wildcard abdeckt;
 ein Default-Backend und Traefik-Router-Annotationen (Priorität, Pfad-Matcher) sind
 verboten. Denn eine Regel ohne Host passt auf jeden Host, und Traefik ordnet Routen nach
 der Länge ihrer Regel - eine lange Pfad-Regex könnte sonst die Issuer-Route überholen. Die
-Issuer-Route selbst trägt die höchste Routing-Priorität. In `wif-issuer` laufen nur Images
+Issuer-Route selbst trägt die höchste Routing-Priorität. In `wif-issuer-discovery` laufen nur Images
 mit festem Digest. Warum
 der Issuer-Endpoint ein eigener Dienst ist, steht in
 [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md), warum ein Pod im Cluster per Pull
-über einen Ingress in [ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md).
-Definiert in [`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml) und
-[`manifests/05-issuer-admission.yaml`](../manifests/05-issuer-admission.yaml).
+über einen Ingress in [ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md).
+Definiert in [`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml) und
+[`manifests/05-issuer-discovery-admission.yaml`](../manifests/05-issuer-discovery-admission.yaml).
 
 ### Der Schlüsselwechsel in zwei Phasen
 
@@ -222,12 +222,12 @@ API-Servers ([`tools/sa-keys.sh`](../tools/sa-keys.sh)):
 1. **`sa-keys stage`**: Der neue öffentliche Schlüssel wird **vorab veröffentlicht**, also
    ins JWKS aufgenommen. Signiert wird weiter mit dem bisherigen Schlüssel; noch braucht
    kein Token den neuen.
-2. **`sa-keys activate`**: Erst wenn der Issuer-Pod den neuen Schlüssel ausliefert, wird er
+2. **`sa-keys activate`**: Erst wenn der Discovery-Pod den neuen Schlüssel ausliefert, wird er
    zum **Signierschlüssel**. Ab hier prüfen die Relying Parties mit beiden: mit dem neuen
    die neuen Tokens, mit dem bisherigen die noch gültigen alten. Ältere fallen weg.
 
 Die Relying Parties bekommen neue Schlüssel nur mit Verzögerung (Abgleich des
-Issuer-Pods, Zwischenspeicher bei Keycloak und Validator). Durch die Vorab-Veröffentlichung
+Discovery-Pods, Zwischenspeicher bei Keycloak und Validator). Durch die Vorab-Veröffentlichung
 ist nie ein Token mit einer `kid` unterwegs, die sie nicht abrufen können; schon das erste
 Token mit dem neuen Schlüssel wird akzeptiert. Zwischen zwei
 `activate` liegt mindestens die maximale Token-Laufzeit plus die Zeit, die die Relying
@@ -338,14 +338,14 @@ Token-Signatur prüfen. Und weil er nur Tokens mit dem einen erwarteten `iss` (P
 der einen erwarteten `aud` akzeptiert, kann sich kein fremder Aussteller einschleichen.
 
 Dass der Issuer-Endpoint die **richtigen** Schlüssel ausliefert, sichert der Cluster selbst:
-Der Issuer-Pod übernimmt nur, was der API-Server liefert, es gibt keinen Schreibweg von
-außen, und der Namespace `wif-issuer` sowie die Route für `issuer.wif.local` sind gegen
+Der Discovery-Pod übernimmt nur, was der API-Server liefert, es gibt keinen Schreibweg von
+außen, und der Namespace `wif-issuer-discovery` sowie die Route für `issuer.wif.local` sind gegen
 Änderungen durch andere als Cluster-Admins geschützt.
 
 > **Kurz:** Der Validator vertraut (a) der internen CA und (b) einem konkreten
 > Issuer-Namen. Aus diesen beiden Ankern plus der veröffentlichten JWKS ergibt sich alles
 > Weitere - ganz ohne Rückfrage beim Cluster. Die Echtheit der JWKS selbst hängt daran, dass
-> nur die Steuerung des Clusters bestimmt, was der Issuer-Pod ausliefert.
+> nur die Steuerung des Clusters bestimmt, was der Discovery-Pod ausliefert.
 
 ### PKIX in einem Satz
 
@@ -414,7 +414,7 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **ingress-lb** | Im Lab der Stellvertreter des Load Balancers vor den Ingress-Knoten: reicht nur TCP 443 an Traefik weiter. Der einzige Weg der Relying Parties in den Cluster. |
 | **`iss` (Issuer)** | Claim: URL des Ausstellers. Hier `https://issuer.wif.local`. |
 | **Issuer / Issuer-Endpoint** | Der Aussteller bzw. die URL, unter der seine öffentlichen Metadaten (Discovery-Dokument, JWKS) liegen. |
-| **Issuer-Pod** | Deployment `issuer` im Namespace `wif-issuer`: spiegelt Discovery-Dokument und JWKS vom API-Server und liefert sie nur lesend hinter dem Ingress `issuer.wif.local` aus. |
+| **Discovery-Pod** | Deployment `issuer-discovery` im Namespace `wif-issuer-discovery`: spiegelt Discovery-Dokument und JWKS vom API-Server und liefert sie nur lesend hinter dem Ingress `issuer.wif.local` aus. Er stellt keine Tokens aus; Issuer ist der API-Server. |
 | **`jti` (JWT ID)** | Eindeutige Kennung eines einzelnen Tokens. Grundlage für eine Sperrliste, falls doch Widerruf nötig ist. |
 | **JWKS (JSON Web Key Set)** | Öffentlich veröffentlichte Menge von Schlüsseln, gegen die JWT-Signaturen geprüft werden. |
 | **`kid` (Key ID)** | Kennung eines Schlüssels. Steht im JWS-Header des Tokens und im JWKS, damit der Prüfer den richtigen Schlüssel findet. |
@@ -422,8 +422,8 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 | **Kubernetes** | System zum Betreiben von Container-Workloads auf einem Cluster. |
 | **`kubernetes.io`-Claim** | Zusatz-Claim im ServiceAccount-Token mit Namespace, Pod- und ServiceAccount-Angaben. |
 | **k3s** | Leichtgewichtige Kubernetes-Distribution; hier läuft der ganze Cluster als ein einzelner Container. |
-| **Namespace** | Benannter Bereich im Cluster zur Gruppierung von Objekten. Hier `wif-demo` (Workloads) und `wif-issuer` (Issuer-Pod). |
-| **NetworkPolicy** | Kubernetes-Regel, welche Pods mit wem reden dürfen. Der Issuer-Pod nimmt nur Verbindungen von Traefik an und spricht nur mit dem API-Server. |
+| **Namespace** | Benannter Bereich im Cluster zur Gruppierung von Objekten. Hier `wif-demo` (Workloads) und `wif-issuer-discovery` (Discovery-Pod). |
+| **NetworkPolicy** | Kubernetes-Regel, welche Pods mit wem reden dürfen. Der Discovery-Pod nimmt nur Verbindungen von Traefik an und spricht nur mit dem API-Server. |
 | **`nbf` (Not Before)** | Claim: Zeitpunkt, vor dem das Token noch nicht gültig ist. |
 | **Node** | Ein einzelner Rechner (physisch oder virtuell) im Cluster, auf dem Pods laufen. |
 | **OIDC (OpenID Connect)** | Standard für Identitäts-Tokens, aufbauend auf OAuth 2.0. Definiert u. a. das Discovery-Dokument. |
@@ -456,4 +456,4 @@ Dieses Lab zeigt bewusst die **Offline-Hälfte**. Die Begründung steht in
 - [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - warum ein eigener Issuer-Endpoint.
 - [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) - interne PKI, getrennte Netze.
 - [ADR 0004](adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md) - Keycloak als Autorisierungsserver pro Fachbereich.
-- [ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) - Issuer-Pod im Cluster, Pull über einen Ingress, Schlüsselwechsel in zwei Phasen.
+- [ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) - Discovery-Pod im Cluster, Pull über einen Ingress, Schlüsselwechsel in zwei Phasen.

@@ -251,7 +251,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="host" style="height:700px">
 <div class="box" style="left:0px; top:0px; width:320px; height:100px"><p class="t">Pod „consumer“</p><p class="d">Token: aud = Realm</p></div>
 <div class="box accent" style="left:448px; top:0px; width:320px; height:100px"><p class="t">Keycloak</p><p class="d">Realm domain-rst</p></div>
-<div class="box" style="left:896px; top:0px; width:320px; height:100px"><p class="t">Issuer-Pod</p><p class="d">JWKS des Clusters, über den Ingress</p></div>
+<div class="box" style="left:896px; top:0px; width:320px; height:100px"><p class="t">Discovery-Pod</p><p class="d">JWKS des Clusters, über den Ingress</p></div>
 <div class="box ok" style="left:1344px; top:0px; width:320px; height:100px"><p class="t">Dienst R</p><p class="d">service-r</p></div>
 <x-connector class="ln life" x1="160" y1="100" x2="160" y2="696" head="none"></x-connector>
 <x-connector class="ln life" x1="608" y1="100" x2="608" y2="696" head="none"></x-connector>
@@ -312,7 +312,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="panel" style="left:0px; top:0px; width:1120px; height:540px"></div>
 <p class="ph" style="left:24px; top:14px; width:1072px">Kubernetes-Cluster (k3s)</p>
 <div class="box accent" style="left:40px; top:60px; width:300px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
-<div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Issuer-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
+<div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Discovery-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
 <div class="box" style="left:820px; top:60px; width:260px; height:140px"><p class="t">Ingress</p><p class="d">Traefik, nur 2 Pfade</p></div>
 <div class="box" style="left:40px; top:400px; width:700px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
 <div class="box" style="left:1180px; top:60px; width:180px; height:140px"><p class="t">ingress-lb</p><p class="d">nur TCP 443</p></div>
@@ -331,10 +331,10 @@ section.cover { justify-content: center; gap: 28px; }
 </div>
 <ul class="pts">
 <li>Keycloak darf den API-Server nicht erreichen – darum spiegelt ein Pod im Cluster die öffentlichen Schlüssel und liefert sie über den Ingress aus</li>
-<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Issuer-Pod holt selbst, von außen lässt sich nichts einspielen</li>
+<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Discovery-Pod holt selbst, von außen lässt sich nichts einspielen</li>
 <li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
 </ul>
-<aside>Der Issuer-Pod im Namespace wif-issuer hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
+<aside>Der Discovery-Pod im Namespace wif-issuer-discovery hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer-discovery schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>
 
 <section id="vertrauen">
@@ -377,7 +377,7 @@ section.cover { justify-content: center; gap: 28px; }
 <!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
 <div class="host" style="width:800px; height:170px">
 <div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
-<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Issuer-Pod</p><p class="d">über den Ingress lesbar</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über den Ingress lesbar</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
 <p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
 </div>
@@ -459,9 +459,9 @@ section.cover { justify-content: center; gap: 28px; }
 <h2>Was im Lab bewusst vereinfacht ist</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:22%">Thema</th><th style="width:36%">Im PoC</th><th style="width:42%">Für einen echten Einsatz</th></tr>
-<tr><td>Issuer-Endpoint</td><td>Issuer-Pod hinter dem Traefik von k3s; ingress-lb als Load Balancer</td><td>stabile HTTPS-URL; eigener Ingress-Controller oder Entrypoint nur für den Issuer</td></tr>
+<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter dem Traefik von k3s; ingress-lb als Load Balancer</td><td>stabile HTTPS-URL; eigener Ingress-Controller oder Entrypoint nur für den Issuer</td></tr>
 <tr><td>TLS-Vertrauen</td><td>Lab-CA als Stellvertreter der internen PKI</td><td>interne PKI, Root-CA auf allen Systemen verteilt</td></tr>
-<tr><td>JWKS veröffentlichen</td><td>Issuer-Pod holt alle 15 s, prüft Plausibilität, meldet neue kid im Log</td><td>gleiches Muster; Alarm bei unangekündigter kid im Monitoring</td></tr>
+<tr><td>JWKS veröffentlichen</td><td>Discovery-Pod holt alle 15 s, prüft Plausibilität, meldet neue kid im Log</td><td>gleiches Muster; Alarm bei unangekündigter kid im Monitoring</td></tr>
 <tr><td>Namespace des Issuers</td><td>RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted</td><td>Änderungen nur per GitOps; schützt nicht vor einem Cluster-Admin</td></tr>
 <tr><td>Schlüsselwechsel</td><td>zwei Phasen: erst veröffentlichen, dann signieren; vorheriger Schlüssel bleibt bis zum nächsten Wechsel</td><td>zwischen zwei Wechseln mindestens Token-Laufzeit + Cache-Dauer</td></tr>
 <tr><td>Widerruf</td><td>ausgestellte Tokens gelten bis exp</td><td>kurze Laufzeit, ggf. jti-Sperrliste oder hybride Online-Prüfung</td></tr>
@@ -499,7 +499,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="box accent" style="left:0px; top:0px; width:320px; height:80px"><p class="t">API-Server</p></div>
 <div class="box" style="left:448px; top:0px; width:320px; height:80px"><p class="t">Pod „consumer“</p></div>
 <div class="box ok" style="left:896px; top:0px; width:320px; height:80px"><p class="t">Validator</p></div>
-<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">Issuer-Pod (Ingress)</p></div>
+<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">Discovery-Pod (Ingress)</p></div>
 <x-connector class="ln life" x1="160" y1="80" x2="160" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
@@ -546,7 +546,7 @@ section.cover { justify-content: center; gap: 28px; }
 <h2>Anhang: Verbindungen, Netze und TLS</h2>
 <table class="tbl">
 <tr class="head"><th style="width:36%">Verbindung</th><th style="width:20%">Netz</th><th style="width:44%">Absicherung</th></tr>
-<tr><td>Issuer-Pod → API-Server (Discovery + JWKS)</td><td>im Cluster</td><td>TLS mit der Cluster-CA; ServiceAccount, der nur diese zwei Pfade lesen darf</td></tr>
+<tr><td>Discovery-Pod → API-Server (Discovery + JWKS)</td><td>im Cluster</td><td>TLS mit der Cluster-CA; ServiceAccount, der nur diese zwei Pfade lesen darf</td></tr>
 <tr><td>Keycloak, Validator → ingress-lb → Ingress (Port 443)</td><td>relying-net, cluster-net</td><td>TLS bis zum Ingress, Serverzertifikat der internen CA; ingress-lb reicht nur TCP durch</td></tr>
 <tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; Gateway leitet nur /realms/domain-rst/ weiter</td></tr>
 <tr><td>Pod → Dienst R (/orders)</td><td>workload-net</td><td>TLS; Bearer: Access-Token</td></tr>
@@ -559,7 +559,7 @@ section.cover { justify-content: center; gap: 28px; }
 <li>Kein Client-Zertifikat: Die Schlüssel des Clusters sind öffentlich, geschützt wird, wer bestimmt, was ausgeliefert wird</li>
 <li>run-all-checks.sh prüft die Netztrennung aus Sicht von Keycloak, Dienst R und Validator</li>
 </ul>
-<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
+<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer-discovery lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
 </section>
 
 <section id="aufbau">
@@ -580,13 +580,13 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="card">
 <p class="num">3</p>
 <h3>bootstrap</h3>
-<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an, darunter den Issuer-Pod</li><li>Ingress-Zertifikat, Traefik-Einstellungen, Härtung von wif-issuer</li></ul>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an, darunter den Discovery-Pod</li><li>Ingress-Zertifikat, Traefik-Einstellungen, Härtung von wif-issuer-discovery</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">4</p>
 <h3>ingress-lb</h3>
-<ul class="cl"><li>einziger Weg der Prüfer in den Cluster, nur TCP 443</li><li>bereit, sobald der Issuer-Pod das JWKS über den Ingress ausliefert</li></ul>
+<ul class="cl"><li>einziger Weg der Prüfer in den Cluster, nur TCP 443</li><li>bereit, sobald der Discovery-Pod das JWKS über den Ingress ausliefert</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
@@ -600,7 +600,7 @@ section.cover { justify-content: center; gap: 28px; }
 <li>Reihenfolge über Compose-Abhängigkeiten: Ein Dienst startet erst, wenn seine Vorgänger bereit bzw. erfolgreich beendet sind</li>
 <li>Keycloak startet erst, wenn das JWKS über ingress-lb abrufbar ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
 </ul>
-<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach gleicht der Issuer-Pod im Cluster Discovery-Dokument und JWKS alle 15 Sekunden mit dem API-Server ab, auch bei einem Schlüsselwechsel. k3s bringt Traefik als Ingress-Controller mit; bootstrap passt ihn an und spielt die Admission-Regeln ein, bis dahin gibt es im Lab nur den Admin. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
+<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach gleicht der Discovery-Pod im Cluster Discovery-Dokument und JWKS alle 15 Sekunden mit dem API-Server ab, auch bei einem Schlüsselwechsel. k3s bringt Traefik als Ingress-Controller mit; bootstrap passt ihn an und spielt die Admission-Regeln ein, bis dahin gibt es im Lab nur den Admin. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
 </section>
 
 <section id="fehlerfaelle-authz">
@@ -630,19 +630,19 @@ section.cover { justify-content: center; gap: 28px; }
 <tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
 <tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">403</td></tr>
 <tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header am Ingress</td><td>demo</td><td class="fail">abgewiesen</td></tr>
-<tr><td>H1</td><td>Ingress für issuer.wif.local außerhalb von wif-issuer, Regel ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
-<tr><td>H2</td><td>Image ohne festen Digest in wif-issuer</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
-<tr><td>R1</td><td>API-Server für den Issuer-Pod nicht erreichbar</td><td>demo resilience</td><td class="pass">letzter Stand</td></tr>
+<tr><td>H1</td><td>Ingress für issuer.wif.local außerhalb von wif-issuer-discovery, Regel ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
+<tr><td>H2</td><td>Image ohne festen Digest in wif-issuer-discovery</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
+<tr><td>R1</td><td>API-Server für den Discovery-Pod nicht erreichbar</td><td>demo resilience</td><td class="pass">letzter Stand</td></tr>
 <tr><td>N1</td><td>Keycloak, Dienst R, Validator → API-Server, Node-Port</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
 <tr><td>N2</td><td>Validator mit fremder CA</td><td>run-all-checks.sh</td><td class="fail">startet nicht</td></tr>
 <tr><td>W1</td><td>Phase 1: neuer Schlüssel vorab im JWKS, signiert noch nicht</td><td>run-all-checks.sh</td><td class="pass">neue kid</td></tr>
 <tr><td>W2</td><td>Phase 2: erster „Pass“ mit neuem Schlüssel, alter „Pass“</td><td>run-all-checks.sh</td><td class="pass">200</td></tr>
 </table>
 <ul class="pts">
-<li>Kein Schreibweg: Der Endpunkt liefert nur per GET, und den Namespace wif-issuer ändern nur Cluster-Admins</li>
+<li>Kein Schreibweg: Der Endpunkt liefert nur per GET, und den Namespace wif-issuer-discovery ändern nur Cluster-Admins</li>
 <li>Beim Wechsel in zwei Phasen kommt nie ein „Pass“ an, dessen Schlüssel noch nicht ausgeliefert wird</li>
 </ul>
-<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Ingress und Images, RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Issuer-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zum Ingress, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Issuer-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
+<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Ingress und Images, RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Discovery-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zum Ingress, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Discovery-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
 </section>
 
 <div id="hud"></div>

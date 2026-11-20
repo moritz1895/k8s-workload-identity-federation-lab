@@ -1,12 +1,12 @@
-# Admission rules that protect the issuer endpoint. Whoever decides what is served
+# Admission rules that protect the issuer discovery endpoint. Whoever decides what is served
 # under the JWKS URL can forge ServiceAccount tokens for every ServiceAccount.
 #
-#   issuer-host-reserved — outside wif-issuer, every Ingress rule names a host other
+#   issuer-host-reserved — outside wif-issuer-discovery, every Ingress rule names a host other
 #                          than the issuer host (also not via wildcard), there is no
 #                          default backend and no Traefik router annotation. A route
 #                          without a host would match the issuer host too, and router
 #                          annotations (priority, path matcher) could outrank its route.
-#   issuer-image-digest  — workloads in wif-issuer run only images pinned by digest
+#   issuer-discovery-image-digest  — workloads in wif-issuer-discovery run only images pinned by digest
 #
 # Traefik reads routes only from Ingress objects: its own CRDs and the Gateway API
 # provider are switched off (01-traefik-config.yaml).
@@ -26,7 +26,7 @@ spec:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
-          values: ["wif-issuer"]
+          values: ["wif-issuer-discovery"]
   variables:
     - name: issuerHost
       expression: "'issuer.wif.local'"
@@ -35,26 +35,26 @@ spec:
         has(object.spec.tls) ? object.spec.tls.filter(t, has(t.hosts)).map(t, t.hosts) : []
   validations:
     - expression: "!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != '')"
-      message: "outside wif-issuer every Ingress rule must name a host (a rule without a host also matches issuer.wif.local)"
+      message: "outside wif-issuer-discovery every Ingress rule must name a host (a rule without a host also matches issuer.wif.local)"
       reason: Forbidden
     - expression: >-
         !has(object.spec.rules) || object.spec.rules.all(r, !has(r.host)
           || (r.host != variables.issuerHost
               && !(r.host.startsWith('*') && variables.issuerHost.endsWith(r.host.substring(1)))))
-      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer"
+      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer-discovery"
       reason: Forbidden
     - expression: >-
         variables.tlsHosts.all(hosts, hosts.all(h, h != variables.issuerHost
           && !(h.startsWith('*') && variables.issuerHost.endsWith(h.substring(1)))))
-      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer"
+      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer-discovery"
       reason: Forbidden
     - expression: "!has(object.spec.defaultBackend)"
-      message: "outside wif-issuer an Ingress must not define a default backend"
+      message: "outside wif-issuer-discovery an Ingress must not define a default backend"
       reason: Forbidden
     - expression: >-
         !has(object.metadata.annotations)
         || !object.metadata.annotations.exists(k, k.startsWith('traefik.ingress.kubernetes.io/router.'))
-      message: "Traefik router annotations (priority, path matcher, ...) are reserved for namespace wif-issuer"
+      message: "Traefik router annotations (priority, path matcher, ...) are reserved for namespace wif-issuer-discovery"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -68,7 +68,7 @@ spec:
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: issuer-image-digest
+  name: issuer-discovery-image-digest
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -87,7 +87,7 @@ spec:
         resources: ["jobs", "cronjobs"]
     namespaceSelector:
       matchLabels:
-        kubernetes.io/metadata.name: wif-issuer
+        kubernetes.io/metadata.name: wif-issuer-discovery
   variables:
     - name: podSpec
       expression: >-
@@ -101,13 +101,13 @@ spec:
         + (has(variables.podSpec.ephemeralContainers) ? variables.podSpec.ephemeralContainers.map(c, c.image) : [])
   validations:
     - expression: "variables.images.all(i, i.matches('@sha256:[0-9a-f]{64}$'))"
-      messageExpression: "'images in wif-issuer must be pinned by digest: ' + variables.images.filter(i, !i.matches('@sha256:[0-9a-f]{64}$')).join(', ')"
+      messageExpression: "'images in wif-issuer-discovery must be pinned by digest: ' + variables.images.filter(i, !i.matches('@sha256:[0-9a-f]{64}$')).join(', ')"
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: issuer-image-digest
+  name: issuer-discovery-image-digest
 spec:
-  policyName: issuer-image-digest
+  policyName: issuer-discovery-image-digest
   validationActions: ["Deny"]

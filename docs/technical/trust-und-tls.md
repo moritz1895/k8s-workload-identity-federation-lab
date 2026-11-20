@@ -6,7 +6,7 @@ Diese Seite erklärt diese Begriffe kurz, zeigt dann die TLS-Vertrauensbeziehung
 Lab (A–C und I für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
 im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidungen dahinter:
 [ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI) und
-[ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) (Issuer-Pod hinter einem
+[ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod hinter einem
 Ingress).
 
 ---
@@ -75,10 +75,10 @@ maßgeschneiderte `SSLSocketFactory`, benutzt sie für ihre Verbindungen genau d
 
 ---
 
-## Beziehung A – bootstrap/demo/Issuer-Pod → Kubernetes-API-Server
+## Beziehung A – bootstrap/demo/Discovery-Pod → Kubernetes-API-Server
 
 **Wer:** die Container `bootstrap` und `demo` (via `kubectl`) sowie der Container `sync` im
-Issuer-Pod.
+Discovery-Pod.
 **Wohin:** `https://k3s-server:6443` bzw. im Cluster
 `https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT`.
 
@@ -107,7 +107,7 @@ sieht nur verschlüsselte Daten und hält kein Zertifikat.
 **TLS-Endpunkt:** Traefik im Cluster. Es präsentiert für `issuer.wif.local` das Secret
 `issuer-tls` (ausgestellt von der internen CA, SAN `DNS:issuer.wif.local`) und reicht die
 Anfrage per HTTP an den Container `web` (Port 8080) weiter. Diesen letzten Abschnitt im
-Cluster schützt die NetworkPolicy `issuer-from-ingress-controller`: Nur Traefik-Pods aus
+Cluster schützt die NetworkPolicy `issuer-discovery-from-ingress-controller`: Nur Traefik-Pods aus
 `kube-system` erreichen Port 8080.
 
 **Strict SNI** (`manifests/01-traefik-config.yaml`, TLS-Option `default`, mindestens TLS 1.2):
@@ -123,12 +123,12 @@ Für einen Hostnamen ohne Zertifikat scheitert schon der Handshake. Ergebnis im 
 
 Die Issuer-Route trägt die Routing-Priorität `1000000000`; andere Namespaces dürfen weder den
 Host noch Router-Annotationen setzen
-([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer)). Traefik teilt
+([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer-discovery)). Traefik teilt
 sich einen Zertifikatsspeicher mit allen Ingress-Objekten: Ein fremdes Zertifikat für
 `issuer.wif.local` kann die Auswahl stören – die Echtheit nicht, denn die Relying Parties
 vertrauen nur der internen CA, wohl aber die Verfügbarkeit. Wer Traefik kontrolliert, hält das
 Serverzertifikat und entscheidet über das Routing – Traefik gehört damit zum Vertrauenspfad
-([ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
+([ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
 
 ---
 
@@ -302,17 +302,17 @@ Nicht verwechseln: Es gibt hier **zwei** voneinander unabhängige Vertrauenskett
 1. **TLS-Transportvertrauen** – "rede ich mit dem echten `issuer.wif.local`?" → über
    `/trust/ca.crt` und den Truststore mit der internen CA (Beziehung C).
 2. **Token-Signaturvertrauen** – "ist dieses JWT mit einem Cluster-Schlüssel signiert?" → über
-   die öffentlichen Schlüssel im JWKS, das der Issuer-Pod vom API-Server übernimmt. Das
+   die öffentlichen Schlüssel im JWKS, das der Discovery-Pod vom API-Server übernimmt. Das
    sind die ServiceAccount-Signaturschlüssel aus `sa-keys` (RSA, `RS256`). Siehe
    [validator.md](validator.md).
 
 Das TLS-Zertifikat schützt nur den Transportweg der Metadaten. Dass im JWKS die richtigen
 Schlüssel stehen, sichert der Cluster selbst: Es gibt keinen Schreibweg von außen, `sync`
-liest nur beim API-Server und übernimmt nur plausible Stände, und der Namespace `wif-issuer`
+liest nur beim API-Server und übernimmt nur plausible Stände, und der Namespace `wif-issuer-discovery`
 ist durch RBAC, Admission Policies und NetworkPolicies geschützt
-([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer)). Wer dort oder an
+([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer-discovery)). Wer dort oder an
 Traefik schreiben darf, kann trotzdem ausliefern, was er will; das JWKS ist nicht zusätzlich
-signiert ([ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
+signiert ([ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
 
 ---
 
@@ -320,7 +320,7 @@ signiert ([ADR 0005](../adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md), K
 
 - [validator.md](validator.md) – die vollständige Nimbus-Validierungskette und die Endpunkte
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak und `service-r`
-- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Issuer-Pod, Ingress und
+- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Discovery-Pod, Ingress und
   Härtung im Detail
 - [architecture.md](architecture.md) – Volumes und Netze
 - [build-und-betrieb.md](build-und-betrieb.md) – weitere häufige Fehlerbilder
