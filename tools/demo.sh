@@ -110,7 +110,7 @@ ready_discovery_pods() {
 }
 
 base_checks() {
-    section "0. OIDC discovery served by the in-cluster discovery pod through the ingress (internal CA)"
+    section "0. OIDC discovery served by the in-cluster discovery pod through the Gateway (internal CA)"
     echo "GET $ISSUER/.well-known/openid-configuration"
     curl -fsS --cacert "$CA" "$ISSUER/.well-known/openid-configuration" \
         | jq '{issuer, jwks_uri, id_token_signing_alg_values_supported}'
@@ -147,17 +147,17 @@ base_checks() {
     echo '{"keys":[]}' > /tmp/fake-jwks.json
     for method in PUT POST DELETE; do
         echo "$method $ISSUER/openid/v1/jwks"
-        expect_status 403 "$(ingress_status -X "$method" -H 'Content-Type: application/json' \
-            --data-binary @/tmp/fake-jwks.json "$ISSUER/openid/v1/jwks")" "$method on the JWKS rejected"
+        expect_status 404 "$(ingress_status -X "$method" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/fake-jwks.json "$ISSUER/openid/v1/jwks")" "$method on the JWKS not routed (the route matches GET only)"
     done
-    echo "GET $ISSUER/  (a path the ingress does not route)"
+    echo "GET $ISSUER/  (a path the HTTPRoute does not match)"
     expect_status 404 "$(ingress_status "$ISSUER/")" "unrouted path not served"
     echo "GET https://other.wif.local/openid/v1/jwks  through ingress-lb (foreign host, SNI other.wif.local)"
     expect_status 000 "$(ingress_status --resolve "other.wif.local:443:$INGRESS_LB_ADDR" -k \
         https://other.wif.local/openid/v1/jwks)" "TLS handshake for a foreign host refused (strict SNI)"
     echo "GET https://kubernetes.default.svc/version  through ingress-lb (API server name)"
     expect_status 000 "$(ingress_status --resolve "kubernetes.default.svc:443:$INGRESS_LB_ADDR" -k \
-        https://kubernetes.default.svc/version)" "no way to the API server through the ingress"
+        https://kubernetes.default.svc/version)" "no way to the API server through the Gateway"
     echo "GET $ISSUER/openid/v1/jwks  with SNI $ISSUER_HOST but Host: other.wif.local"
     MISROUTED=$(ingress_status -H 'Host: other.wif.local' "$ISSUER/openid/v1/jwks")
     echo "HTTP $MISROUTED"
@@ -437,50 +437,52 @@ expect_admitted() {
     pass "$1: admitted"
 }
 
-# $1 = namespace, $2 = host (empty: rule without a host), $3 = optional annotations
-# (YAML flow map), $4 = optional path type, $5 = optional path
-ingress_manifest() {
-    local host_line=""
-    [ -n "$2" ] && host_line="host: \"$2\""
+# $1 = namespace, $2 = listener hostname (empty: listener without a hostname)
+gateway_manifest() {
+    local hostname_line=""
+    [ -n "$2" ] && hostname_line="hostname: \"$2\""
     cat <<MANIFEST
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
 metadata:
   name: probe
   namespace: $1
-  annotations: ${3:-{\}}
 spec:
-  ingressClassName: traefik
-  rules:
-    - http:
-        paths:
-          - path: "${5:-/openid/v1/jwks}"
-            pathType: ${4:-Exact}
-            backend:
-              service:
-                name: probe
-                port:
-                  number: 80
-      $host_line
+  gatewayClassName: traefik
+  listeners:
+    - name: probe
+      protocol: HTTP
+      port: 8000
+      $hostname_line
 MANIFEST
 }
 
-default_backend_manifest() {
+# $1 = namespace, $2 = route hostname (empty: none), $3 = parent namespace, $4 = parent name
+route_manifest() {
+    local hostnames_line=""
+    [ -n "$2" ] && hostnames_line="hostnames: [\"$2\"]"
     cat <<MANIFEST
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: probe
-  namespace: $NS
+  namespace: $1
 spec:
-  ingressClassName: traefik
-  defaultBackend:
-    service:
-      name: probe
-      port:
-        number: 80
+  parentRefs:
+    - namespace: $3
+      name: $4
+  $hostnames_line
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /openid/v1/jwks
+      backendRefs:
+        - name: probe
+          port: 80
 MANIFEST
 }
+
 
 # $1 = image
 issuer_deployment_manifest() {
@@ -511,32 +513,45 @@ can_i() {
 }
 
 hardening_checks() {
-    section "H1. admission: the issuer host is reserved for $DISCOVERY_NS"
-    local long_regex
-    long_regex="/(openid/v1/jwks|$(printf 'a%.0s' $(seq 1 120)))"
-    ingress_manifest "$NS" "$ISSUER_HOST" | expect_denied "Ingress for $ISSUER_HOST in $NS"
-    ingress_manifest "$NS" "*.wif.local" | expect_denied "wildcard Ingress *.wif.local in $NS"
-    ingress_manifest "$NS" "*.local" | expect_denied "wildcard Ingress *.local in $NS"
-    ingress_manifest "$NS" "" | expect_denied "Ingress rule without a host in $NS (matches every host)"
-    ingress_manifest "$NS" "" '{traefik.ingress.kubernetes.io/router.pathmatcher: PathRegexp}' \
-        ImplementationSpecific "$long_regex" \
-        | expect_denied "host-less Ingress with a long path regex in $NS (would outrank by rule length)"
-    ingress_manifest "$NS" "other.wif.local" '{traefik.ingress.kubernetes.io/router.priority: "100000"}' \
-        | expect_denied "Ingress with a raised routing priority in $NS"
-    ingress_manifest "$NS" "other.wif.local" '{traefik.ingress.kubernetes.io/router.pathmatcher: PathRegexp}' \
-        | expect_denied "Ingress with a Traefik path matcher annotation in $NS"
-    default_backend_manifest | expect_denied "Ingress with a default backend in $NS"
-    ingress_manifest "$NS" "other.wif.local" | expect_admitted "Ingress for another host in $NS"
-    [ "$(kubectl -n "$DISCOVERY_NS" get ingress issuer-discovery \
-        -o jsonpath='{.metadata.annotations.traefik\.ingress\.kubernetes\.io/router\.priority}')" = "1000000000" ] \
-        && pass "the issuer route carries the top routing priority" || fail "the issuer route has no top priority"
+    section "H1. the issuer host belongs to the issuer's own Gateway"
+    local condition
+    condition=$(kubectl -n "$DISCOVERY_NS" get gateway issuer-discovery \
+        -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}')
+    [ "$condition" = "True" ] && pass "the issuer's Gateway is programmed by Traefik" \
+        || fail "the issuer's Gateway is not programmed ($condition)"
+    gateway_manifest "$NS" "$ISSUER_HOST" | expect_denied "Gateway listener for $ISSUER_HOST in $NS"
+    gateway_manifest "$NS" "*.wif.local" | expect_denied "Gateway listener for *.wif.local in $NS"
+    gateway_manifest "$NS" "*.local" | expect_denied "Gateway listener for *.local in $NS"
+    gateway_manifest "$NS" "" | expect_denied "Gateway listener without a hostname in $NS (accepts every host)"
+    route_manifest "$NS" "$ISSUER_HOST" "$NS" probe | expect_denied "HTTPRoute for $ISSUER_HOST in $NS"
+    route_manifest "$NS" "*.wif.local" "$NS" probe | expect_denied "HTTPRoute for *.wif.local in $NS"
+    gateway_manifest "$NS" "other.wif.local" | expect_admitted "Gateway listener for another host in $NS"
+
+    echo "a route in $NS tries to attach to the issuer's Gateway (created for real, then removed)"
+    trap 'kubectl -n "$NS" delete httproute probe --ignore-not-found > /dev/null' EXIT
+    route_manifest "$NS" "" "$DISCOVERY_NS" issuer-discovery | kubectl apply -f - > /dev/null
+    condition=""
+    for i in $(seq 1 30); do
+        condition=$(kubectl -n "$NS" get httproute probe \
+            -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].reason}' 2> /dev/null || true)
+        [ -n "$condition" ] && break
+        sleep 1
+    done
+    echo "Accepted reason: ${condition:-<none>}"
+    [ "$condition" = "NotAllowedByListeners" ] \
+        && pass "the issuer's Gateway refuses routes from other namespaces" \
+        || fail "route of $NS was not refused by the issuer's Gateway"
+    kubectl -n "$NS" delete httproute probe > /dev/null
+    trap - EXIT
+    expect_jwks_served "the issuer still serves its own JWKS"
+
     TRAEFIK_ARGS=$(kubectl -n kube-system get deployment traefik -o jsonpath='{.spec.template.spec.containers[0].args}')
-    if grep -qE 'providers.kubernetescrd|providers.kubernetesgateway' <<< "$TRAEFIK_ARGS"; then
-        fail "Traefik still reads its own route CRDs or the Gateway API"
+    if grep -qE 'providers.kubernetescrd|providers.kubernetesingress' <<< "$TRAEFIK_ARGS"; then
+        fail "Traefik still reads Ingress objects or its own route CRDs"
     fi
-    pass "Traefik reads neither its own route CRDs nor the Gateway API"
-    grep -q 'providers.kubernetesingress' <<< "$TRAEFIK_ARGS" \
-        && pass "Traefik reads routes from Ingress objects" || fail "Traefik's Ingress provider is off"
+    pass "Traefik reads neither Ingress objects nor its own route CRDs"
+    grep -q 'providers.kubernetesgateway' <<< "$TRAEFIK_ARGS" \
+        && pass "Traefik reads routes from the Gateway API" || fail "Traefik's Gateway API provider is off"
 
     section "H2. admission: images in $DISCOVERY_NS only by digest"
     issuer_deployment_manifest "nginxinc/nginx-unprivileged:1.29-alpine" \
@@ -548,7 +563,7 @@ hardening_checks() {
     section "H3. RBAC: nobody but cluster admins writes to $DISCOVERY_NS"
     local account verb resource answer
     for account in "$NS:consumer" "$DISCOVERY_NS:issuer-discovery"; do
-        for verb_resource in "create configmaps" "patch deployments" "create pods" "create ingresses" "get secrets"; do
+        for verb_resource in "create configmaps" "patch deployments" "create pods" "create httproutes" "create gateways" "get secrets"; do
             read -r verb resource <<< "$verb_resource"
             answer=$(can_i "$account" "$verb" "$resource" -n "$DISCOVERY_NS")
             printf '  %-20s %-18s -n %s: %s\n' "$account" "$verb_resource" "$DISCOVERY_NS" "$answer"
@@ -560,7 +575,7 @@ hardening_checks() {
         && pass "the discovery pod's ServiceAccount may read the JWKS (issuer-discovery role)" \
         || fail "the discovery pod's ServiceAccount cannot read the JWKS"
 
-    section "H4. NetworkPolicy: in only from the ingress controller, out only to the API server"
+    section "H4. NetworkPolicy: in only from the gateway controller, out only to the API server"
     local consumer discovery_pod
     consumer=$(pod_of consumer)
     echo "consumer -> http://issuer-discovery.$DISCOVERY_NS.svc/openid/v1/jwks"
@@ -601,7 +616,7 @@ hardening_checks() {
         ls /var/run/secrets/kubernetes.io/serviceaccount > /dev/null 2>&1; then
         fail "web container holds a ServiceAccount token"
     fi
-    pass "the web container, which faces the ingress, holds no ServiceAccount token"
+    pass "the web container, which faces the gateway, holds no ServiceAccount token"
 }
 
 # $1 = pod, $2 = pattern, $3 = seconds, $4 = optional RFC 3339 time: only log lines
@@ -682,7 +697,7 @@ resilience_checks() {
     expect_jwks_served "the discovery pods serve the JWKS after the rollback"
 }
 
-# $1 = seconds -> waits until the discovery endpoint answers through the ingress. In the lab an
+# $1 = seconds -> waits until the discovery endpoint answers through the Gateway. In the lab an
 # API server restart restarts the whole node, and with it the discovery pods.
 await_issuer() {
     local i

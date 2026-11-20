@@ -155,7 +155,7 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
 
 - `run` startet einen einmaligen `demo`-Container und aktiviert dessen Profil automatisch.
 - `--rm` entfernt den Container nach dem Lauf.
-- `all` (Standard): Discovery + JWKS über den Ingress anzeigen, Token prägen und dekodieren,
+- `all` (Standard): Discovery + JWKS über das Gateway anzeigen, Token prägen und dekodieren,
   Happy-Path aus dem Pod (HTTP 200), Negativfälle falsche Audience / manipulierte Signatur
   (HTTP 401), Issuer-Endpunkt nur lesbar und nur für den eigenen Host (`PUT`/`POST`/`DELETE`
   `403`, fremder SNI ohne Handshake). Mit `DEMO_EXPIRY=1 docker compose run --rm demo` kommt
@@ -166,9 +166,9 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
   ~6-minütiger Ablauf-Test des Access-Tokens. Siehe
   [../features/keycloak-autorisierungsserver.md](../features/keycloak-autorisierungsserver.md#12-testfälle).
 - `hardening`: Schutz von `wif-issuer-discovery` (H1–H5): Admission Policies per
-  `kubectl apply --dry-run=server` (Issuer-Host, Wildcards, Regeln ohne Host, Router-Annotationen,
-  Default-Backend, Images ohne Digest), Priorität der Issuer-Route, Traefik ohne CRD- und
-  Gateway-Provider, RBAC per `kubectl auth can-i`, NetworkPolicies, Pod-Härtung.
+  `kubectl apply --dry-run=server` (Gateway-Listener und HTTPRoutes für den Issuer-Host,
+  Wildcards, Listener ohne Hostname, Images ohne Digest), Gateway `Programmed`, fremde
+  HTTPRoute mit `NotAllowedByListeners` abgewiesen, Traefik nur mit Gateway-Provider, RBAC per `kubectl auth can-i`, NetworkPolicies, Pod-Härtung.
 - `resilience`: Discovery-Pod ohne API-Server (R1) und mit implausiblem Stand (R2); stellt
   NetworkPolicy und Deployment danach wieder her.
 - `pre-rotation` / `staged` / `post-rotation`: die drei Prüfpunkte des Schlüsselwechsels,
@@ -323,20 +323,20 @@ zueinander.
 
 ### `ingress-lb` wird nicht `healthy`
 
-`ingress-lb` wird erst gesund, wenn der Discovery-Pod das JWKS über den Ingress ausliefert. Bleibt
+`ingress-lb` wird erst gesund, wenn der Discovery-Pod das JWKS über das Gateway ausliefert. Bleibt
 es `starting`:
 
 ```bash
 docker compose logs bootstrap                                               # Exit 0? Rollouts ok?
-docker compose exec server kubectl -n wif-issuer-discovery get pods                   # issuer bereit?
-docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer -c sync # REJECTED? API-Server lesbar?
+docker compose exec server kubectl -n wif-issuer-discovery get pods,gateway          # Pods bereit? Gateway Programmed?
+docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer-discovery -c sync # REJECTED? API-Server lesbar?
 docker compose exec server kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik
 docker compose logs ingress-lb                                              # kommen Verbindungen an?
 ```
 
 Typische Ursachen: `bootstrap` ist gescheitert (kein Secret `issuer-tls`, Manifest abgelehnt),
 Traefik läuft noch nicht, `sync` lehnt den Stand als implausibel ab (`REJECTED state`, z. B.
-weil `service-account-issuer` nicht `https://issuer.wif.local` ist), oder das Ingress-Zertifikat
+weil `service-account-issuer` nicht `https://issuer.wif.local` ist), oder das Gateway-Zertifikat
 passt nicht zur CA in `ca-trust` (siehe vorheriger Abschnitt).
 
 ### Der Validator ist dauerhaft `unhealthy`

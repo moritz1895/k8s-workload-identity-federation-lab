@@ -1,7 +1,7 @@
 # ADR 0005: Discovery-Pod im Cluster – Schlüssel per Pull über einen Ingress
 
 **Datum:** 2026-11-19
-**Status:** Angenommen; löst [ADR 0003](0003-getrennte-vertrauensbereiche-interne-pki.md) im Veröffentlichungsweg (Push per mTLS) ab
+**Status:** Angenommen; löst [ADR 0003](0003-getrennte-vertrauensbereiche-interne-pki.md) im Veröffentlichungsweg (Push per mTLS) ab; Beschreibung und Schutz der Route abgelöst durch [ADR 0006](0006-gateway-api-statt-ingress.md)
 
 ## Für wen ist das / was lernst du hier
 
@@ -52,17 +52,17 @@ besteht aus zwei Containern, die sich ein `emptyDir` teilen:
   ganzen Pod und ließe den Weg zum API-Server auch für `web` zu. Bereit (Readiness) ist er erst, wenn das JWKS einmal abgeglichen
   ist. Ein neu gestarteter Pod nimmt also erst Verkehr an, wenn er einen gültigen Stand hat.
 
-**Erreichbar über einen Ingress.**
-Das in k3s mitgelieferte Traefik veröffentlicht nur die beiden Pfade unter dem Host
-`issuer.wif.local`. Das Serverzertifikat stammt aus der internen PKI. Traefik lehnt
-TLS-Verbindungen für Hosts ohne eigenes Zertifikat ab (strict SNI) und liest Routen nur
-aus `Ingress`-Objekten; seine eigenen CRDs (`IngressRoute` u. a.) sind abgeschaltet.
-API-Server-Parameter: `service-account-issuer=https://issuer.wif.local`,
+**Erreichbar über ein Gateway.**
+Das in k3s mitgelieferte Traefik veröffentlicht als Gateway-Controller nur die beiden
+Pfade unter dem Host `issuer.wif.local`, beschrieben mit der Gateway API (`Gateway` +
+`HTTPRoute`, siehe [ADR 0006](0006-gateway-api-statt-ingress.md)). Das Serverzertifikat
+stammt aus der internen PKI. Traefik lehnt TLS-Verbindungen für Hosts ohne eigenes
+Zertifikat ab (strict SNI). API-Server-Parameter: `service-account-issuer=https://issuer.wif.local`,
 `service-account-jwks-uri=https://issuer.wif.local/openid/v1/jwks`.
 
-**Netze.** Die Relying Parties (Validator, Keycloak) erreichen nur die Ingress-Route,
-nicht den API-Server. Im Lab steht dafür `ingress-lb`, ein nginx im TCP-Modus, als
-Stellvertreter für den Load Balancer vor den Ingress-Knoten: Er hört in `relying-net` auf
+**Netze.** Die Relying Parties (Validator, Keycloak) erreichen nur die Route
+`issuer.wif.local`, nicht den API-Server. Im Lab steht dafür `ingress-lb`, ein nginx im
+TCP-Modus, als Stellvertreter für den Load Balancer vor dem Cluster: Er hört in `relying-net` auf
 Port 443 und reicht nur dorthin an Traefiks Node-Port weiter. TLS endet im Cluster.
 kube-proxy öffnet Node-Ports nur auf der Adresse in `cluster-net`
 (`--nodeport-addresses`).
@@ -71,14 +71,11 @@ kube-proxy öffnet Node-Ports nur auf der Adresse in `cluster-net`
 
 - RBAC: Kein RoleBinding gewährt Rechte im Namespace; schreiben dürfen nur Cluster-Admins
   bzw. der GitOps-Prozess.
-- `ValidatingAdmissionPolicy` `issuer-host-reserved`: Außerhalb von `wif-issuer-discovery` muss
-  jede Ingress-Regel einen Host nennen, und zwar nicht `issuer.wif.local` (auch nicht per
-  Wildcard). Ein Default-Backend und Traefik-Annotationen für den Router (Priorität,
-  Pfad-Matcher u. a.) sind dort verboten. Eine Regel ohne Host passt sonst auf jeden Host,
-  und Traefik ordnet Routen nach der Länge ihrer Regel: Ein langer regulärer Ausdruck
-  könnte die Route des Issuers überholen.
-- Die Ingress-Route des Issuers trägt die Priorität 1 000 000 000, also mehr, als Traefik
-  aus der Länge irgendeiner Regel ableitet.
+- Eigenes Gateway `issuer-discovery`, an das sich nur Routen aus `wif-issuer-discovery`
+  hängen dürfen, und `ValidatingAdmissionPolicy` `issuer-host-reserved`: Außerhalb von
+  `wif-issuer-discovery` nennt jeder Listener einen Hostnamen, und weder Listener noch
+  Routen verwenden `issuer.wif.local` oder eine Wildcard, die ihn abdeckt. Einzelheiten in
+  [ADR 0006](0006-gateway-api-statt-ingress.md).
 - `ValidatingAdmissionPolicy` `issuer-discovery-image-digest`: In `wif-issuer-discovery` laufen nur Images mit
   festem Digest.
 - NetworkPolicy: eingehend nur von Traefik, ausgehend nur zum API-Server.
@@ -124,7 +121,8 @@ unterschieben.
 
 ## Verfügbarkeit: Keycloak und Validator
 
-Neue Schlüssel bekommen die Relying Parties nur, solange die Ingress-Route erreichbar ist.
+Neue Schlüssel bekommen die Relying Parties nur, solange die Route `issuer.wif.local`
+erreichbar ist.
 
 - **Keycloak** speichert die Schlüssel des Identity Providers zwischen und lädt neu, wenn
   eine unbekannte `kid` ankommt. Dafür gelten zwei Werte des SPI
@@ -134,7 +132,7 @@ Neue Schlüssel bekommen die Relying Parties nur, solange die Ingress-Route erre
     abgelehnt.
   - `max-cache-time`: Standard 86 400 s (24 h). So lange gelten die Schlüssel ohne neuen
     Abruf.
-  Ein kurzer Ausfall des Ingress fällt also nur auf, wenn genau dann eine neue `kid`
+  Ein kurzer Ausfall der Route fällt also nur auf, wenn genau dann eine neue `kid`
   auftaucht. Ein Wechsel in zwei Phasen sorgt dafür, dass das außerhalb eines geplanten
   Fensters nicht passiert.
 - **Validator** (Nimbus): JWKS-Cache 5 Minuten, ein unbekanntes `kid` löst einen
@@ -157,14 +155,10 @@ Neue Schlüssel bekommen die Relying Parties nur, solange die Ingress-Route erre
 - **Der Namespace `wif-issuer-discovery` wird zum Teil der Steuerung des Clusters.** Wer dort
   schreiben darf, kann Tokens fälschen. Die Härtung oben macht das sichtbar und erschwert
   es, schützt aber nicht vor einem Cluster-Admin.
-- **Ingress-Controller im Vertrauenspfad.** Traefik hält das Serverzertifikat und
+- **Gateway-Controller im Vertrauenspfad.** Traefik hält das Serverzertifikat und
   entscheidet über das Routing. Wer Traefik kontrolliert, kann ebenfalls ausliefern, was
-  er will. Traefik teilt sich außerdem einen Zertifikatsspeicher mit allen anderen
-  Ingress-Objekten: Ein Zertifikat für `issuer.wif.local` aus einem anderen Namespace
-  kann die Auswahl stören. Die Echtheit bleibt gewahrt, weil die Relying Parties nur der
-  internen CA vertrauen, die Verfügbarkeit nicht. Ein eigener Traefik oder ein eigener
-  Entrypoint nur für `wif-issuer-discovery` würde das ausschließen und die Admission-Regeln für
-  andere Namespaces überflüssig machen; im Lab bewusst nicht umgesetzt.
+  er will. Wie die Route beschrieben und gegen andere Namespaces geschützt wird, steht in
+  [ADR 0006](0006-gateway-api-statt-ingress.md).
 - **Härtung greift erst nach `bootstrap`.** k3s installiert Traefik beim Start mit den
   Standardwerten; Traefik-Konfiguration und Admission-Regeln kommen erst mit `bootstrap`.
   Bis dahin gibt es im Lab nur den Admin.
@@ -175,7 +169,7 @@ Neue Schlüssel bekommen die Relying Parties nur, solange die Ingress-Route erre
 - **Image-Regel prüft nur den Digest**, nicht, welches Image es ist.
 - **Alarm nur über Logs.** Jede neue oder entfallene `kid` wird protokolliert. Ob sie zu
   einer geplanten Rotation gehört, muss das Monitoring außerhalb entscheiden.
-- **Verfügbarkeit hängt am Ingress.** Siehe oben; Keycloak und Validator überbrücken
+- **Verfügbarkeit hängt am Gateway.** Siehe oben; Keycloak und Validator überbrücken
   kurze Ausfälle mit ihrem Cache.
 - **Im Lab startet ein Neustart des API-Servers den ganzen Knoten neu**, also auch die
   Discovery-Pods. In einem echten Cluster laufen die Pods während eines Neustarts des
@@ -199,4 +193,4 @@ Neue Schlüssel bekommen die Relying Parties nur, solange die Ingress-Route erre
 ## Weiterlesen
 
 - [0003-getrennte-vertrauensbereiche-interne-pki.md](0003-getrennte-vertrauensbereiche-interne-pki.md) – interne PKI und Netztrennung.
-- [../technical/bootstrap-und-issuer.md](../technical/bootstrap-und-issuer.md) – Discovery-Pod, Ingress und Härtung im Detail.
+- [../technical/bootstrap-und-issuer.md](../technical/bootstrap-und-issuer.md) – Discovery-Pod, Gateway und Härtung im Detail.

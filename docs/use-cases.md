@@ -25,10 +25,11 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
   │  API-Server :6443 und Traefik-Node-Port :30443,   │
   │  beide nur auf 172.31.7.2                         │
   │                                                   │
-  │  ┌ Namespace wif-issuer-discovery ───────────────────────┐  │
-  │  │ Pod issuer (2 Replikas)                     │  │
+  │  ┌ Namespace wif-issuer-discovery ─────────────┐  │
+  │  │ Discovery-Pod issuer-discovery (2 Replikas) │  │
   │  │   sync ── GET alle 15 s ──► API-Server      │  │
-  │  │   web (nur GET) ◄── Traefik, Ingress        │  │
+  │  │   web (nur GET) ◄── Traefik, Gateway und    │  │
+  │  │                     HTTPRoute               │  │
   │  │                     issuer.wif.local        │  │
   │  └─────────────────────────────────────────────┘  │
   │  ┌──────────────────┐                             │
@@ -57,7 +58,7 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
               └──── validator.wif.local -> 172.31.9.10 (hostAliases)
 
    WICHTIG: Der Validator sendet NIE eine Anfrage an den API-Server (server) und kann ihn
-            über kein Netz erreichen. Vom Cluster erreicht er nur die Ingress-Route
+            über kein Netz erreichen. Vom Cluster erreicht er nur die Route
             https://issuer.wif.local über ingress-lb.
 ```
 
@@ -70,7 +71,7 @@ Begriffe werden hier nicht noch einmal erklärt - falls etwas unklar ist, siehe
 - **Workload** - der `consumer`-Pod im Cluster (in `demo.sh` handelnd über `kubectl exec`).
 - **kubelet** - besorgt und erneuert das Token für den Pod.
 - **Validator** - der externe Spring-Boot-Dienst, der das Token prüft.
-- **Discovery-Pod** - liefert dem Validator über den Ingress Discovery-Dokument und JWKS.
+- **Discovery-Pod** - liefert dem Validator über das Gateway Discovery-Dokument und JWKS.
 
 ### Auslöser
 
@@ -201,7 +202,7 @@ Bei einem abgelehnten Token:
   Schlüssel nie von einem anderen Host, der bloß ein Zertifikat derselben CA hat. Geprüft in
   `JwksUriPolicyTest`, nicht in `demo.sh`.
 - **Fremde CA.** Vertraut der Validator einer anderen CA als der, die das Serverzertifikat
-  des Issuer-Ingress ausgestellt hat, scheitert die Discovery mit
+  des Discovery-Gateways ausgestellt hat, scheitert die Discovery mit
   `PKIX path building failed` und der Validator beendet sich mit einem Fehlercode. Geprüft
   mit dem Service `validator-foreign-ca` (Profil `negative`,
   `WIF_ISSUER_CA=/pki-demo/foreign-ca.crt`) in `run-all-checks.sh`, Abschnitt 3.
@@ -218,10 +219,10 @@ Bei einem abgelehnten Token:
 - **Docker Compose** - startet die Container in Abhängigkeitsreihenfolge.
 - **pki-init** - Einmal-Container, der die Lab-PKI anlegt ([`tools/pki-init.sh`](../tools/pki-init.sh)).
 - **sa-keys** - Einmal-Container für die ServiceAccount-Signaturschlüssel ([`tools/sa-keys.sh`](../tools/sa-keys.sh)).
-- **server** - der k3s-Cluster samt Ingress-Controller Traefik.
+- **server** - der k3s-Cluster samt Gateway-Controller Traefik.
 - **bootstrap** - Einmal-Container, der den Cluster einrichtet ([`tools/bootstrap.sh`](../tools/bootstrap.sh)).
 - **Discovery-Pod** - Deployment `issuer-discovery` im Cluster, das die Metadaten ausliefert (Use Case 3).
-- **ingress-lb** - Stellvertreter des Load Balancers vor dem Ingress (schreibgeschütztes
+- **ingress-lb** - Stellvertreter des Load Balancers vor dem Cluster ("ingress" = eingehender Verkehr; schreibgeschütztes
   Dateisystem, nur die nötigen Capabilities, `no-new-privileges`).
 - **validator** und **keycloak** - starten zuletzt.
 
@@ -240,7 +241,7 @@ Bei einem abgelehnten Token:
 
 1. **pki-init legt die Lab-PKI an** (`network_mode: none`). Fehlt noch eine CA, erzeugt es
    die Root-CA `WIF Lab Internal Root CA` und stellt davon die Serverzertifikate aus: für
-   den Issuer-Ingress (SAN `DNS:issuer.wif.local`), für Keycloak, `service-r` und den
+   das Discovery-Gateway (SAN `DNS:issuer.wif.local`), für Keycloak, `service-r` und den
    Validator. Für Negativtests legt es eine fremde CA an. Jedes Artefakt liegt in einem
    eigenen Volume (`pki-ca`, `ca-trust`, `issuer-tls`, `keycloak-tls`, `service-r-tls`,
    `validator-tls`, `pki-demo`); den CA-Schlüssel sieht nur `pki-init`. Bestehendes
@@ -261,10 +262,10 @@ Bei einem abgelehnten Token:
 4. **bootstrap läuft einmal durch** (`depends_on: server healthy, pki-init completed`):
    1. Admin-Kubeconfig kopieren und die Server-Adresse auf `k3s-server:6443` umschreiben.
    2. Namespaces `wif-demo` und `wif-issuer-discovery` anlegen.
-   3. Secret `issuer-tls` (Serverzertifikat des Ingress + Schlüssel) in `wif-issuer-discovery` und
+   3. Secret `issuer-tls` (Serverzertifikat des Gateways + Schlüssel) in `wif-issuer-discovery` und
       ConfigMap `internal-ca` (Root-Zertifikat) in `wif-demo` anlegen.
    4. `kubectl apply -f /manifests` (Traefik-Konfiguration, Admission-Regeln, Discovery-Pod
-      samt Ingress und NetworkPolicies, Workloads), dann auf die Rollouts von `issuer-discovery`,
+      samt Gateway, HTTPRoute und NetworkPolicies, Workloads), dann auf die Rollouts von `issuer-discovery`,
       Traefik, `consumer`, `reader` und `stranger` warten.
    5. Beenden (`restart: "no"`). Alle Schritte sind idempotent.
 
@@ -313,7 +314,7 @@ Bei einem abgelehnten Token:
 - **Discovery-Pod** - Deployment `issuer-discovery` im Namespace `wif-issuer-discovery` (zwei Replikas) mit den
   Containern `sync` und `web` ([`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml)).
 - **API-Server** - Quelle der Metadaten.
-- **Traefik** - Ingress-Controller, veröffentlicht die beiden Pfade unter `issuer.wif.local`.
+- **Traefik** - Gateway-Controller, veröffentlicht die beiden Pfade unter `issuer.wif.local`.
 - **Relying Parties** - Validator und Keycloak, lesen über `ingress-lb`.
 
 ### Auslöser
@@ -330,7 +331,7 @@ Bei einem abgelehnten Token:
   `web` hat keines.
 - Die NetworkPolicies erlauben dem Pod nur eingehend Traefik (Port 8080) und ausgehend den
   API-Server (`172.31.7.2:6443`).
-- Secret `issuer-tls` liegt in `wif-issuer-discovery`; der Ingress `issuer-discovery` verweist darauf.
+- Secret `issuer-tls` liegt in `wif-issuer-discovery`; der Listener des Gateways `issuer-discovery` verweist darauf.
 
 ### Hauptablauf
 
@@ -350,15 +351,16 @@ Bei einem abgelehnten Token:
    nach dem ersten erfolgreichen Abgleich bereit.
 7. Traefik leitet nur `https://issuer.wif.local/.well-known/openid-configuration` und
    `https://issuer.wif.local/openid/v1/jwks` an den Service `issuer-discovery` weiter. TLS endet in
-   Traefik, mit dem Zertifikat aus `issuer-tls`. Die Route trägt die Routing-Priorität
-   `1000000000`, höher als jede, die Traefik aus der Länge einer Regel ableitet.
+   Traefik, mit dem Zertifikat aus `issuer-tls`, am Listener des Gateways `issuer-discovery`
+   (nur für `issuer.wif.local`). Die HTTPRoute passt nur auf `GET`; jede andere Methode und
+   jeder andere Pfad endet bei Traefik mit `404` und erreicht den Pod nie.
 
 ### Fehlerfälle
 
 | # | Situation | Auslöser im Lab | Ergebnis |
 |---|---|---|---|
-| **I1** | `PUT`, `POST` oder `DELETE` auf das JWKS | `demo.sh` Abschnitt 6 | HTTP **403**; JWKS unverändert |
-| **I2** | Pfad, den der Ingress nicht veröffentlicht (`/`) | `demo.sh` Abschnitt 6 | HTTP **404** |
+| **I1** | `PUT`, `POST` oder `DELETE` auf das JWKS | `demo.sh` Abschnitt 6 | HTTP **404** (die Route passt nur auf `GET`, der Pod sieht die Anfrage nie); JWKS unverändert |
+| **I2** | Pfad, den die HTTPRoute nicht veröffentlicht (`/`) | `demo.sh` Abschnitt 6 | HTTP **404** |
 | **I3** | TLS-Handshake über `ingress-lb` für einen fremden Host (SNI `other.wif.local`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch, Handshake abgelehnt (strict SNI) |
 | **I4** | API-Server-Name über `ingress-lb` (SNI `kubernetes.default.svc`) | `demo.sh` Abschnitt 6 | kein HTTP-Austausch; kein Weg zum API-Server |
 | **I5** | SNI `issuer.wif.local`, aber `Host: other.wif.local` | `demo.sh` Abschnitt 6 | HTTP **404** oder **421** |
@@ -374,9 +376,9 @@ das mit `kubectl apply --dry-run=server`, `kubectl auth can-i` und Aufrufen aus 
 
 | # | Versuch | Ergebnis |
 |---|---|---|
-| **H1** | Ingress in `wif-demo` für `issuer.wif.local`, für `*.wif.local` oder `*.local`, mit einer Regel ohne Host, ohne Host mit langer Pfad-Regex (würde die Issuer-Route über die Regellänge überholen), mit Routing-Priorität oder Pfad-Matcher-Annotation, mit Default-Backend | abgewiesen (`ValidatingAdmissionPolicy` `issuer-host-reserved`); ein Ingress für einen anderen Host wird zugelassen. Die Issuer-Route trägt die höchste Routing-Priorität. Traefik liest weder eigene Routen-CRDs noch die Gateway API, nur `Ingress`-Objekte. |
+| **H1** | Das Gateway `issuer-discovery` ist von Traefik übernommen (`Programmed`). In `wif-demo`: Gateway-Listener für `issuer.wif.local`, `*.wif.local`, `*.local` oder ohne Hostnamen (nähme jeden Host an); HTTPRoute für `issuer.wif.local` oder `*.wif.local`. Eine echte HTTPRoute aus `wif-demo`, die sich an das Gateway `issuer-discovery` hängen will | Listener und Routen abgewiesen (`ValidatingAdmissionPolicy` `issuer-host-reserved`); ein Listener für einen anderen Host wird zugelassen. Die fremde HTTPRoute weist das Gateway mit `NotAllowedByListeners` ab; das JWKS wird weiter ausgeliefert. Traefik liest nur die Gateway API, weder `Ingress`-Objekte noch eigene Routen-CRDs. |
 | **H2** | Deployment in `wif-issuer-discovery` mit Image nur per Tag | abgewiesen (`issuer-discovery-image-digest`); mit festem Digest zugelassen |
-| **H3** | ServiceAccounts `wif-demo:consumer` und `wif-issuer-discovery:issuer-discovery` wollen in `wif-issuer-discovery` ConfigMaps, Pods oder Ingresses anlegen, Deployments ändern oder Secrets lesen | jeweils `no`; `issuer` darf nur das JWKS lesen |
+| **H3** | ServiceAccounts `wif-demo:consumer` und `wif-issuer-discovery:issuer-discovery` wollen in `wif-issuer-discovery` ConfigMaps, Pods, HTTPRoutes oder Gateways anlegen, Deployments ändern oder Secrets lesen | jeweils `no`; `issuer-discovery` darf nur das JWKS lesen |
 | **H4** | Workload ruft den Discovery-Pod direkt auf; Discovery-Pod ruft den Validator auf | keine Verbindung; nur der Weg zum API-Server ist offen |
 | **H5** | Härtung der Pods | ohne Root, schreibgeschütztes Root-Dateisystem, keine Capabilities; `web` hat kein ServiceAccount-Token |
 
@@ -449,7 +451,7 @@ sobald sie ihre Schlüssel neu geladen haben. `run-all-checks.sh` führt `retire
 | 3 (TLS) | `tls_only_checks` für den Validator: Zertifikat, Klartext auf 8080 und 8443, nur öffentliche CAs | `CN=validator.wif.local` von der Lab-Root-CA; kein Listener auf 8080; kein `200`; curl Exit-Code 60 |
 | 4 | Token mit `--audience not-this-service` | **HTTP 401**, `JWT aud claim rejected` |
 | 5 | erstes Zeichen der Signatur ersetzt (das letzte base64url-Zeichen trägt nur 2 Datenbits) | **HTTP 401**, `Signed JWT rejected: Invalid signature` |
-| 6 | I1-I5 aus Use Case 3 | **403** je Methode, **404**, kein Handshake (2×), **404/421**; JWKS unverändert |
+| 6 | I1-I5 aus Use Case 3 | **404** je Methode, **404**, kein Handshake (2×), **404/421**; JWKS unverändert |
 | 7 (nur `DEMO_EXPIRY=1`) | 10-Minuten-Token, dann pollen bis Ablauf | Statuswechsel **200 → 401** |
 
 Schlägt eine Erwartung fehl, bricht `demo.sh` mit rotem `FAIL:` und Exit-Code 1 ab. Am Ende:
@@ -488,6 +490,7 @@ ausgeliefert wird.
 - [Kubernetes-Primer](kubernetes-primer.md) - jeder benutzte Kubernetes-Baustein.
 - [ADR 0001](adr/0001-offline-jwks-statt-tokenreview.md),
   [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md),
-  [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) und
-  [ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) - die zentralen
+  [ADR 0003](adr/0003-getrennte-vertrauensbereiche-interne-pki.md),
+  [ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) und
+  [ADR 0006](adr/0006-gateway-api-statt-ingress.md) - die zentralen
   Design-Entscheidungen.

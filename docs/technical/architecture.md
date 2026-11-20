@@ -6,8 +6,8 @@ wer mit wem redet, welche Volumes es gibt, in welcher Reihenfolge alles startet 
 einige Container feste IP-Adressen haben. Danach verstehst du die `compose.yaml` Zeile für
 Zeile. Die Entscheidungen hinter dem Aufbau stehen in
 [ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI, getrennte
-Netze) und [ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod
-hinter einem Ingress).
+Netze), [ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod)
+und [ADR 0006](../adr/0006-gateway-api-statt-ingress.md) (Gateway API).
 
 ---
 
@@ -18,8 +18,9 @@ kurzlebiges JWT ausgestellt. Es schickt dieses Token an einen Dienst *außerhalb
 (den "Validator"). Der Validator prüft das Token **offline**: Er lädt die öffentlichen
 Signatur-Schlüssel des Ausstellers (JWKS) über HTTPS von `https://issuer.wif.local` und
 verifiziert danach jedes Token lokal – Signatur, `iss`, `aud`, `exp`. Er ruft den
-Kubernetes-API-Server nie zurück. Unter `issuer.wif.local` liefert ein Pod im Cluster
-(`issuer-discovery`) eine Kopie von Discovery-Dokument und JWKS über einen Ingress aus.
+Kubernetes-API-Server nie zurück. Aussteller ist der API-Server; unter seiner Issuer-URL `https://issuer.wif.local` liefert
+ein Pod im Cluster (der Discovery-Pod `issuer-discovery`) eine Kopie von Discovery-Dokument
+und JWKS über ein Gateway der Gateway API aus.
 Das Ganze nennt man **Workload Identity Federation**.
 
 Ein paar Begriffe vorweg:
@@ -33,7 +34,7 @@ Ein paar Begriffe vorweg:
 | **ServiceAccount** | Eine Maschinen-Identität innerhalb des Clusters. Ein Pod läuft "als" ein ServiceAccount und kann sich dafür ein Token ausstellen lassen. |
 | **Manifest** | YAML-Datei, die Kubernetes-Objekte beschreibt (hier: `manifests/00-namespace.yaml`, `01-traefik-config.yaml`, `05-issuer-discovery-admission.yaml`, `10-issuer-discovery.yaml`, `20-consumer.yaml`, `30-authz-workloads.yaml`). Wird mit `kubectl apply` angewendet. |
 | **Namespace** | Logischer Ordner im Cluster zur Gruppierung von Objekten. Hier: `wif-demo` und `wif-issuer-discovery`. |
-| **Ingress** | Kubernetes-Objekt, das HTTP(S)-Routen von außen zu einem Service im Cluster beschreibt; umgesetzt vom Ingress-Controller (hier das in k3s mitgelieferte Traefik). |
+| **Gateway API** | Kubernetes-API für Routen von außen in den Cluster: Ein **Gateway** legt Listener fest (Port, Hostname, Zertifikat, wer Routen anhängen darf), eine **HTTPRoute** führt Host und Pfad zu einem Service. Umgesetzt vom Gateway-Controller, hier dem in k3s mitgelieferten Traefik. Nicht zu verwechseln mit `keycloak-gateway`, einem nginx-Proxy vor Keycloak. |
 | **OIDC-Discovery** | Konvention, unter der ein Token-Aussteller seine Metadaten unter `<issuer>/.well-known/openid-configuration` als JSON veröffentlicht – darin steht u. a. die `jwks_uri`. |
 | **JWKS** | JSON Web Key Set: die Liste der öffentlichen Schlüssel, gegen die man Token-Signaturen prüft. |
 
@@ -45,11 +46,11 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 
 | Service | Image | Zweck | Läuft wie lange |
 |---|---|---|---|
-| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für den Issuer-Ingress (`issuer.wif.local`), `keycloak`, `validator` und `service-r`, fremde CA für den Negativtest. Ohne Netz (`network_mode: none`). | einmalig |
+| `pki-init` | `wif-lab/tools` (aus `tools/`) | Lab-PKI: Root-CA, Serverzertifikate für das Issuer-Gateway (`issuer.wif.local`), `keycloak`, `validator` und `service-r`, fremde CA für den Negativtest. Ohne Netz (`network_mode: none`). | einmalig |
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`), in zwei Phasen wechseln (`stage`, `activate`) oder im Notfall den vorherigen entfernen (`retire`). Ohne Netz. | einmalig / auf Anforderung |
-| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Ingress-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer-discovery` (Discovery-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
+| `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Gateway-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer-discovery` (Discovery-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
 | `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret `issuer-tls` in `wif-issuer-discovery`, ConfigMap `internal-ca` in `wif-demo`, Manifeste anwenden. | einmalig, Exit 0 |
-| `ingress-lb` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor den Ingress-Knoten: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. | dauerhaft |
+| `ingress-lb` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor dem Cluster: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. „Ingress“ meint den eingehenden Verkehr, nicht das Kubernetes-Objekt. | dauerhaft |
 | `validator` | `wif-lab/validator` (aus `validator/`) | Der Dienst *außerhalb* des Clusters. Spring Boot 4 / Java 25. Prüft die Tokens offline. | dauerhaft |
 | `validator-foreign-ca` | `wif-lab/validator` | Negativtest: Validator mit fremder CA, muss beim Start scheitern. Profil `negative`. | auf Anforderung |
 | `keycloak` | `quay.io/keycloak/keycloak:26.8.2` | Autorisierungsserver des Fachbereichs (Realm `domain-rst`): tauscht ServiceAccount-Tokens gegen Access-Tokens. Siehe [autorisierungsserver.md](autorisierungsserver.md). | dauerhaft |
@@ -71,8 +72,8 @@ Host – alles steckt in den Containern.
  │ server  .2  (Alias k3s-server)     │                │                               │
  │  API-Server nur auf .2:6443        │  ┌──────────┐  │ validator  .10                │
  │  Traefik Node-Port nur .2:30443 ◄──┼──┤ingress-lb│◄─┼── GET Discovery + JWKS        │
- │   └─ Ingress issuer.wif.local      │  │.7.20     │  │   (https://issuer.wif.local)  │
- │       └─ Pod issuer (sync + web)   │  │ .8.20:443│  │ keycloak .30 (ebenso)         │
+ │   └─ Gateway issuer.wif.local      │  │.7.20     │  │   (https://issuer.wif.local)  │
+ │       └─ Discovery-Pod (sync+web)  │  │ .8.20:443│  │ keycloak .30 (ebenso)         │
  │                                    │  └──────────┘  │                               │
  │ bootstrap, demo                    │                │ demo, validator-foreign-ca    │
  └───────────────┬────────────────────┘                └──────────────▲────────────────┘
@@ -96,7 +97,7 @@ Autorisierungs-Pfad (Details in [autorisierungsserver.md](autorisierungsserver.m
 `ingress-lb` ist das einzige Bauteil, das `relying-net` mit `cluster-net` verbindet: Es
 lauscht nur auf `172.31.8.20:443` und leitet ausschließlich an `172.31.7.2:30443` weiter. Der
 API-Server und der Node-Port lauschen nur auf der `cluster-net`-Adresse des Servers. Die
-Relying Parties erreichen damit vom Cluster nur die Ingress-Route.
+Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-Pods.
 
 ---
 
@@ -173,9 +174,9 @@ Relying Parties erreichen damit vom Cluster nur die Ingress-Route.
 - TCP-Pass-through `172.31.8.20:443` → `172.31.7.2:30443`; TLS endet bei Traefik im Cluster.
 - **`depends_on: server → service_healthy`**.
 - **`healthcheck`:** `curl` mit Lab-CA auf `https://issuer.wif.local/openid/v1/jwks` – gesund,
-  sobald der Discovery-Pod das JWKS über den Ingress ausliefert (`retries: 120`, alle 5 s,
+  sobald der Discovery-Pod das JWKS über das Gateway ausliefert (`retries: 120`, alle 5 s,
   `start_period: 30s`).
-- Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#ingress-traefik-und-ingress-lb).
+- Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#gateway-traefik-gateway-httproute-und-ingress-lb).
 
 ### `validator` – der Dienst außerhalb des Clusters
 
@@ -271,7 +272,7 @@ braucht.
 |---|---|---|---|
 | `pki-ca` | `pki-init` | – | Root-CA: `ca.crt`, `ca.key`. |
 | `ca-trust` | `pki-init` | `bootstrap`, `ingress-lb`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
-| `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer-discovery`) | Serverzertifikat `tls.crt` / `tls.key` des Ingress (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
+| `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer-discovery`) | Serverzertifikat `tls.crt` / `tls.key` des Gateways (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `foreign-ca.crt`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
 | `validator-tls` | `pki-init` | `validator`, `validator-foreign-ca` | Serverzertifikat `tls.crt` / `tls.key` (`CN=validator.wif.local`, SAN `DNS:validator.wif.local`, `DNS:validator`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 10001 (Modus 400). |
@@ -350,12 +351,12 @@ server       healthy (kubectl get --raw /readyz)
               ├────────────────────────────────────────┐
               ▼   (+ pki-init completed)               ▼
 bootstrap    Namespaces, Secret, ConfigMap,       ingress-lb  startet, Healthcheck
-             Manifeste, Rollouts issuer,                      noch rot
-             traefik, consumer, reader,                │
-             stranger, Exit 0                          │
+             Manifeste, Rollouts discovery,                   noch rot
+             traefik, Gateway Programmed,              │
+             consumer, reader, stranger, Exit 0        │
               │                                        │
               ▼                                        │
-Pod issuer   sync holt den ersten Stand, web ready ──► │ healthy (JWKS über den Ingress)
+Discovery-Pod  sync holt den ersten Stand, web ready ► │ healthy (JWKS über das Gateway)
                                                        ▼
 validator    entrypoint.sh wartet auf /trust/ca.crt, OIDC-Discovery, JWKSource
              healthy (curl --cacert … https://localhost:8443/healthz)
@@ -381,7 +382,7 @@ Vorhandene CA, Zertifikate und Signaturschlüssel bleiben erhalten.
 ## Weiterlesen
 
 - [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap,
-  Discovery-Pod, Ingress und Härtung im Detail
+  Discovery-Pod, Gateway und Härtung im Detail
 - [validator.md](validator.md) – der Java-Service innen
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak, Realm und `service-r`
 - [trust-und-tls.md](trust-und-tls.md) – die TLS-Vertrauensbeziehungen

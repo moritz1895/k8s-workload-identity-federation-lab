@@ -251,7 +251,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="host" style="height:700px">
 <div class="box" style="left:0px; top:0px; width:320px; height:100px"><p class="t">Pod „consumer“</p><p class="d">Token: aud = Realm</p></div>
 <div class="box accent" style="left:448px; top:0px; width:320px; height:100px"><p class="t">Keycloak</p><p class="d">Realm domain-rst</p></div>
-<div class="box" style="left:896px; top:0px; width:320px; height:100px"><p class="t">Discovery-Pod</p><p class="d">JWKS des Clusters, über den Ingress</p></div>
+<div class="box" style="left:896px; top:0px; width:320px; height:100px"><p class="t">Discovery-Pod</p><p class="d">JWKS des Clusters, über Traefik</p></div>
 <div class="box ok" style="left:1344px; top:0px; width:320px; height:100px"><p class="t">Dienst R</p><p class="d">service-r</p></div>
 <x-connector class="ln life" x1="160" y1="100" x2="160" y2="696" head="none"></x-connector>
 <x-connector class="ln life" x1="608" y1="100" x2="608" y2="696" head="none"></x-connector>
@@ -270,7 +270,7 @@ section.cover { justify-content: center; gap: 28px; }
 <p class="lbl fragment" data-fragment-index="4" style="left:1072px; top:450px; width:416px">5 · GET /orders mit Bearer Access-Token</p>
 <p class="lbl fragment" data-fragment-index="6" style="left:624px; top:640px; width:416px">7 · 200, 401 oder 403</p>
 </div>
-<aside>Die Schritte erscheinen beim Präsentieren nacheinander per Klick. 1: Die Workload ruft den Token-Endpunkt über keycloak-gateway auf (Grant client_credentials, kein Client-Secret); ihr ServiceAccount-Token dient als Client-Nachweis, im Standard „Client-Assertion“ genannt. 2 und 3: Keycloak findet über iss den Identity-Provider lab-cluster, lädt bei Bedarf die JWKS über den Ingress des Clusters (https://issuer.wif.local), prüft das Token und sucht den Client, dem genau dieser sub zugeordnet ist (workload-a). 4: Das Access-Token enthält nur Scopes, die dem Client im Realm zugeordnet sind; die Workload cacht es, bis die Restlaufzeit unter 60 Sekunden fällt. Woher aud = service-r kommt: Jeder Scope r:… trägt im Realm einen Audience-Mapper auf service-r; die Workload fragt pro Dienst ein eigenes Token mit dessen Scopes an. 6: Dienst R holt die Realm-JWKS beim ersten Token und cacht sie; jeder Scope wird zur Authority SCOPE_&lt;scope&gt;. 7: 401 bei ungültigem Token, 403 bei fehlendem Scope. Die animierte Seite „WIF-Ablauf Schritt für Schritt“ zeigt das noch kleinteiliger.</aside>
+<aside>Die Schritte erscheinen beim Präsentieren nacheinander per Klick. 1: Die Workload ruft den Token-Endpunkt über keycloak-gateway auf (Grant client_credentials, kein Client-Secret); ihr ServiceAccount-Token dient als Client-Nachweis, im Standard „Client-Assertion“ genannt. 2 und 3: Keycloak findet über iss den Identity-Provider lab-cluster, lädt bei Bedarf die JWKS über Traefik im Cluster (https://issuer.wif.local), prüft das Token und sucht den Client, dem genau dieser sub zugeordnet ist (workload-a). 4: Das Access-Token enthält nur Scopes, die dem Client im Realm zugeordnet sind; die Workload cacht es, bis die Restlaufzeit unter 60 Sekunden fällt. Woher aud = service-r kommt: Jeder Scope r:… trägt im Realm einen Audience-Mapper auf service-r; die Workload fragt pro Dienst ein eigenes Token mit dessen Scopes an. 6: Dienst R holt die Realm-JWKS beim ersten Token und cacht sie; jeder Scope wird zur Authority SCOPE_&lt;scope&gt;. 7: 401 bei ungültigem Token, 403 bei fehlendem Scope. Die animierte Seite „WIF-Ablauf Schritt für Schritt“ zeigt das noch kleinteiliger.</aside>
 </section>
 
 <section id="gesamtablauf" data-anim style="padding:64px 128px; gap:24px">
@@ -313,7 +313,7 @@ section.cover { justify-content: center; gap: 28px; }
 <p class="ph" style="left:24px; top:14px; width:1072px">Kubernetes-Cluster (k3s)</p>
 <div class="box accent" style="left:40px; top:60px; width:300px; height:140px"><p class="t">API-Server</p><p class="d">signiert Tokens mit privatem Schlüssel</p></div>
 <div class="box" style="left:420px; top:60px; width:320px; height:140px"><p class="t">Discovery-Pod</p><p class="d">spiegelt Discovery + JWKS, nur GET</p></div>
-<div class="box" style="left:820px; top:60px; width:260px; height:140px"><p class="t">Ingress</p><p class="d">Traefik, nur 2 Pfade</p></div>
+<div class="box" style="left:820px; top:60px; width:260px; height:140px"><p class="t">Traefik</p><p class="d">Gateway + HTTPRoute, nur GET</p></div>
 <div class="box" style="left:40px; top:400px; width:700px; height:120px"><p class="t">Pod „consumer“</p><p class="d">Token liegt als Datei im Container</p></div>
 <div class="box" style="left:1180px; top:60px; width:180px; height:140px"><p class="t">ingress-lb</p><p class="d">nur TCP 443</p></div>
 <div class="box accent" style="left:1420px; top:60px; width:244px; height:460px"><p class="t">Keycloak</p><p class="d">Fachbereich, prüft den „Pass“</p></div>
@@ -325,16 +325,16 @@ section.cover { justify-content: center; gap: 28px; }
 <x-connector class="ln" x1="740" y1="460" x2="1420" y2="460"></x-connector>
 <p class="lbl" style="left:206px; top:270px; width:280px">Token, 10 min</p>
 <p class="lbl" style="left:344px; top:210px; width:400px">GET mit eigenem ServiceAccount</p>
-<p class="lbl" style="left:820px; top:210px; width:560px">GET Discovery + JWKS, TLS endet am Ingress</p>
+<p class="lbl" style="left:820px; top:210px; width:560px">GET Discovery + JWKS, TLS endet bei Traefik</p>
 <p class="lbl" style="left:1136px; top:390px; width:280px">POST /token, TLS</p>
 <p class="warn" style="left:780px; top:290px; width:600px">kein Netzweg von Keycloak zum API-Server</p>
 </div>
 <ul class="pts">
-<li>Keycloak darf den API-Server nicht erreichen – darum spiegelt ein Pod im Cluster die öffentlichen Schlüssel und liefert sie über den Ingress aus</li>
-<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Discovery-Pod holt selbst, von außen lässt sich nichts einspielen</li>
-<li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu ein Gateway davor)</li>
+<li>Keycloak darf den API-Server nicht erreichen – darum spiegelt ein Pod im Cluster die öffentlichen Schlüssel und liefert sie über Traefik aus</li>
+<li>Kein Client-Zertifikat mehr und kein Schreibweg: Der Discovery-Pod holt selbst, nur GET erreicht ihn</li>
+<li>Pods erreichen bei Keycloak nur die Realm-Pfade, nicht die Verwaltung (im Lab sitzt dazu keycloak-gateway davor)</li>
 </ul>
-<aside>Der Discovery-Pod im Namespace wif-issuer-discovery hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik veröffentlicht unter issuer.wif.local nur diese zwei Pfade, mit einem Serverzertifikat der internen PKI. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten und reicht nur TCP durch. Wer im Namespace wif-issuer-discovery schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
+<aside>Der Discovery-Pod im Namespace wif-issuer-discovery hat zwei Container: sync liest alle 15 Sekunden Discovery-Dokument und JWKS beim API-Server, mit einem ServiceAccount, der nur die Rolle system:service-account-issuer-discovery hat. Er übernimmt nur einen plausiblen Stand und behält bei Ausfall des API-Servers den letzten gültigen. web, ein nginx ohne Token, liefert die Kopie nur per GET aus. Traefik ist der Gateway-Controller: Das Gateway issuer-discovery hat einen HTTPS-Listener für issuer.wif.local mit einem Serverzertifikat der internen PKI und nimmt nur Routen aus dem eigenen Namespace an; die HTTPRoute lässt nur GET auf die zwei Pfade durch, alles andere endet bei Traefik mit 404. ingress-lb steht im Lab für den Load Balancer vor den Knoten des Clusters und reicht nur TCP durch. Wer im Namespace wif-issuer-discovery schreiben darf, könnte Tokens fälschen; deshalb ist er wie die Steuerung des Clusters geschützt (RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted). Der Pod erreicht Keycloak nur über keycloak-gateway, das ausschließlich die Realm-Pfade weiterleitet.</aside>
 </section>
 
 <section id="vertrauen">
@@ -347,7 +347,7 @@ section.cover { justify-content: center; gap: 28px; }
 -->
 <div class="host" style="height:480px">
 <div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: Aussteller</p><p class="d">Issuer des Clusters, im Realm eingetragen</p></div>
-<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">der Ingress des Clusters muss ein Zertifikat dieser CA vorweisen – kein Abschalten der Prüfung</p></div>
+<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">Traefik muss für issuer.wif.local ein Zertifikat dieser CA vorweisen – kein Abschalten der Prüfung</p></div>
 <div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss ein eingetragener Aussteller sein</p></div>
 <div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">Steckbrief des Ausstellers: wo liegen die Schlüssel?</p></div>
 <div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
@@ -377,14 +377,14 @@ section.cover { justify-content: center; gap: 28px; }
 <!-- host 800x170: V 0,40,260,120 (right mid 260,100) ; T 540,40,260,120 (left mid 540,100) ; label 276,30,248 -->
 <div class="host" style="width:800px; height:170px">
 <div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
-<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über den Ingress lesbar</p></div>
+<div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über Traefik lesbar</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
 <p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
 </div>
 <p class="sh">Stärken</p>
 <ul class="pts">
 <li>keine Laufzeit-Abhängigkeit vom Cluster</li>
-<li>kein Credential beim Prüfer, vom Cluster nur die Ingress-Route erreichbar</li>
+<li>kein Credential beim Prüfer, vom Cluster nur die HTTPRoute erreichbar</li>
 <li>pro Anfrage nur lokale Signaturprüfung</li>
 </ul>
 <p class="sh">Grenzen</p>
@@ -435,7 +435,7 @@ section.cover { justify-content: center; gap: 28px; }
 <p class="cmt"># Token-Austausch und Zugriff auf Dienst R</p>
 <p class="cmd">docker compose run --rm demo authz</p>
 <div class="gap"></div>
-<p class="cmt"># Veröffentlichung über den Ingress, nur lesend</p>
+<p class="cmt"># Veröffentlichung über Traefik, nur GET</p>
 <p class="cmd">docker compose run --rm demo</p>
 <div class="gap"></div>
 <p class="cmt"># alles, inkl. Härtung, Netztrennung, Schlüsselwechsel</p>
@@ -447,7 +447,7 @@ section.cover { justify-content: center; gap: 28px; }
 <li>consumer tauscht sein ServiceAccount-Token gegen ein Access-Token</li>
 <li>consumer → Dienst R: 200</li>
 <li>Recht fehlt: 403; unbekannte Workload: abgelehnt</li>
-<li>Keycloak-Administration über das Gateway nicht erreichbar</li>
+<li>Keycloak-Administration über keycloak-gateway nicht erreichbar</li>
 <li>Issuer-Endpunkt nur lesend: PUT, POST, DELETE abgelehnt, fremder Host abgewiesen</li>
 </ol>
 </div>
@@ -459,11 +459,11 @@ section.cover { justify-content: center; gap: 28px; }
 <h2>Was im Lab bewusst vereinfacht ist</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:22%">Thema</th><th style="width:36%">Im PoC</th><th style="width:42%">Für einen echten Einsatz</th></tr>
-<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter dem Traefik von k3s; ingress-lb als Load Balancer</td><td>stabile HTTPS-URL; eigener Ingress-Controller oder Entrypoint nur für den Issuer</td></tr>
+<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter Traefik (Gateway API) von k3s; ingress-lb als Load Balancer</td><td>stabile HTTPS-URL; eigenes Gateway für den Issuer, wie im Lab; ggf. eigener Gateway-Controller</td></tr>
 <tr><td>TLS-Vertrauen</td><td>Lab-CA als Stellvertreter der internen PKI</td><td>interne PKI, Root-CA auf allen Systemen verteilt</td></tr>
 <tr><td>JWKS veröffentlichen</td><td>Discovery-Pod holt alle 15 s, prüft Plausibilität, meldet neue kid im Log</td><td>gleiches Muster; Alarm bei unangekündigter kid im Monitoring</td></tr>
-<tr><td>Namespace des Issuers</td><td>RBAC, Admission-Regeln, NetworkPolicies, Pod Security restricted</td><td>Änderungen nur per GitOps; schützt nicht vor einem Cluster-Admin</td></tr>
-<tr><td>Schlüsselwechsel</td><td>zwei Phasen: erst veröffentlichen, dann signieren; vorheriger Schlüssel bleibt bis zum nächsten Wechsel</td><td>zwischen zwei Wechseln mindestens Token-Laufzeit + Cache-Dauer</td></tr>
+<tr><td>Namespace des Issuers</td><td>eigenes Gateway, nur GET zum Pod; RBAC, Admission-Regeln, NetworkPolicies</td><td>Änderungen nur per GitOps; schützt nicht vor einem Cluster-Admin</td></tr>
+<tr><td>Schlüsselwechsel</td><td>zwei Phasen: erst veröffentlichen, dann signieren</td><td>zwischen zwei Wechseln mindestens Token-Laufzeit + Cache-Dauer</td></tr>
 <tr><td>Widerruf</td><td>ausgestellte Tokens gelten bis exp</td><td>kurze Laufzeit, ggf. jti-Sperrliste oder hybride Online-Prüfung</td></tr>
 <tr><td>Transport zum Dienst</td><td>TLS (einseitig) mit Zertifikat der Lab-CA</td><td>TLS mit Zertifikat der internen PKI; optional mTLS oder sender-gebundene Tokens (DPoP)</td></tr>
 <tr><td>Keycloak</td><td>Einzelknoten, Datei-Datenbank, Realm per JSON-Import</td><td>gemeinsamer HA-Keycloak; Realm als Code per CI, 4-Augen-Review, Audit</td></tr>
@@ -471,7 +471,7 @@ section.cover { justify-content: center; gap: 28px; }
 <ul class="pts">
 <li>Das Muster selbst ist produktionsnah – vereinfacht sind Betrieb und Verteilung der Metadaten</li>
 <li>Keycloak ist austauschbar; die Alternative Spring Authorization Server bräuchte eine eigene Prüfung des ServiceAccount-Tokens</li>
-<li>Die Entscheidungen sind als ADRs 0001–0005 im Repo dokumentiert</li>
+<li>Die Entscheidungen sind als ADRs 0001–0006 im Repo dokumentiert</li>
 </ul>
 <aside>Hier lohnt sich die Diskussion mit den Kolleginnen und Kollegen: Wo würden wir Discovery-Dokument und JWKS in unserer Umgebung veröffentlichen, und wie gehen wir mit Rotation und Widerruf um?</aside>
 </section>
@@ -499,7 +499,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="box accent" style="left:0px; top:0px; width:320px; height:80px"><p class="t">API-Server</p></div>
 <div class="box" style="left:448px; top:0px; width:320px; height:80px"><p class="t">Pod „consumer“</p></div>
 <div class="box ok" style="left:896px; top:0px; width:320px; height:80px"><p class="t">Validator</p></div>
-<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">Discovery-Pod (Ingress)</p></div>
+<div class="box" style="left:1344px; top:0px; width:320px; height:80px"><p class="t">Discovery-Pod (Traefik)</p></div>
 <x-connector class="ln life" x1="160" y1="80" x2="160" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="608" y1="80" x2="608" y2="556" head="none"></x-connector>
 <x-connector class="ln life" x1="1056" y1="80" x2="1056" y2="556" head="none"></x-connector>
@@ -509,7 +509,7 @@ section.cover { justify-content: center; gap: 28px; }
 <x-connector class="ln fragment" data-fragment-index="1" x1="160" y1="270" x2="608" y2="270"></x-connector>
 <x-connector class="ln fragment" data-fragment-index="2" x1="608" y1="360" x2="1056" y2="360"></x-connector>
 <x-connector class="ln dash fragment" data-fragment-index="4" x1="1056" y1="540" x2="608" y2="540"></x-connector>
-<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS über den Ingress laden (TLS)</p>
+<p class="lbl fragment" data-fragment-index="0" style="left:1072px; top:100px; width:416px">0 · beim Start: Discovery + JWKS über Traefik laden (TLS)</p>
 <p class="lbl fragment" data-fragment-index="1" style="left:176px; top:200px; width:416px">1 · kubelet holt Token, legt es als Datei im Pod ab</p>
 <p class="lbl fragment" data-fragment-index="2" style="left:624px; top:290px; width:416px">2 · GET /whoami über HTTPS mit Bearer-Token</p>
 <p class="lbl fragment" data-fragment-index="4" style="left:624px; top:498px; width:260px">4 · 200 oder 401</p>
@@ -547,8 +547,8 @@ section.cover { justify-content: center; gap: 28px; }
 <table class="tbl">
 <tr class="head"><th style="width:36%">Verbindung</th><th style="width:20%">Netz</th><th style="width:44%">Absicherung</th></tr>
 <tr><td>Discovery-Pod → API-Server (Discovery + JWKS)</td><td>im Cluster</td><td>TLS mit der Cluster-CA; ServiceAccount, der nur diese zwei Pfade lesen darf</td></tr>
-<tr><td>Keycloak, Validator → ingress-lb → Ingress (Port 443)</td><td>relying-net, cluster-net</td><td>TLS bis zum Ingress, Serverzertifikat der internen CA; ingress-lb reicht nur TCP durch</td></tr>
-<tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; Gateway leitet nur /realms/domain-rst/ weiter</td></tr>
+<tr><td>Keycloak, Validator → ingress-lb → Traefik (Port 443)</td><td>relying-net, cluster-net</td><td>TLS bis Traefik, Serverzertifikat der internen CA; ingress-lb reicht nur TCP durch</td></tr>
+<tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; keycloak-gateway leitet nur /realms/domain-rst/ weiter</td></tr>
 <tr><td>Pod → Dienst R (/orders)</td><td>workload-net</td><td>TLS; Bearer: Access-Token</td></tr>
 <tr><td>Dienst R → Keycloak (Realm-JWKS)</td><td>relying-net</td><td>TLS, Serverzertifikat der internen CA</td></tr>
 <tr><td>Pod → Validator (Variante, /whoami)</td><td>workload-net</td><td>TLS; Bearer: ServiceAccount-Token</td></tr>
@@ -559,7 +559,7 @@ section.cover { justify-content: center; gap: 28px; }
 <li>Kein Client-Zertifikat: Die Schlüssel des Clusters sind öffentlich, geschützt wird, wer bestimmt, was ausgeliefert wird</li>
 <li>run-all-checks.sh prüft die Netztrennung aus Sicht von Keycloak, Dienst R und Validator</li>
 </ul>
-<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer-discovery lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
+<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Knoten des Clusters: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer-discovery lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
 </section>
 
 <section id="aufbau">
@@ -568,7 +568,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="card">
 <p class="num">1</p>
 <h3>pki-init, sa-keys</h3>
-<ul class="cl"><li>Lab-CA und Serverzertifikate, auch für den Ingress</li><li>Signaturschlüssel des Clusters</li></ul>
+<ul class="cl"><li>Lab-CA und Serverzertifikate, auch für issuer.wif.local</li><li>Signaturschlüssel des Clusters</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
@@ -580,13 +580,13 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="card">
 <p class="num">3</p>
 <h3>bootstrap</h3>
-<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an, darunter den Discovery-Pod</li><li>Ingress-Zertifikat, Traefik-Einstellungen, Härtung von wif-issuer-discovery</li></ul>
+<ul class="cl"><li>legt Namespaces, ServiceAccounts und Pods an, darunter den Discovery-Pod</li><li>Gateway + HTTPRoute mit Zertifikat, Traefik-Einstellungen, Härtung von wif-issuer-discovery</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
 <p class="num">4</p>
 <h3>ingress-lb</h3>
-<ul class="cl"><li>einziger Weg der Prüfer in den Cluster, nur TCP 443</li><li>bereit, sobald der Discovery-Pod das JWKS über den Ingress ausliefert</li></ul>
+<ul class="cl"><li>einziger Weg der Prüfer in den Cluster, nur TCP 443</li><li>bereit, sobald der Discovery-Pod das JWKS über Traefik ausliefert</li></ul>
 </div>
 <x-connector class="fc"></x-connector>
 <div class="card">
@@ -600,7 +600,7 @@ section.cover { justify-content: center; gap: 28px; }
 <li>Reihenfolge über Compose-Abhängigkeiten: Ein Dienst startet erst, wenn seine Vorgänger bereit bzw. erfolgreich beendet sind</li>
 <li>Keycloak startet erst, wenn das JWKS über ingress-lb abrufbar ist; die Cluster-Schlüssel lädt es bei Bedarf und cacht sie</li>
 </ul>
-<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach gleicht der Discovery-Pod im Cluster Discovery-Dokument und JWKS alle 15 Sekunden mit dem API-Server ab, auch bei einem Schlüsselwechsel. k3s bringt Traefik als Ingress-Controller mit; bootstrap passt ihn an und spielt die Admission-Regeln ein, bis dahin gibt es im Lab nur den Admin. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
+<aside>Ein docker compose up baut das komplette Lab. pki-init und sa-keys laufen einmal und beenden sich, ebenso bootstrap. Danach gleicht der Discovery-Pod im Cluster Discovery-Dokument und JWKS alle 15 Sekunden mit dem API-Server ab, auch bei einem Schlüsselwechsel. k3s bringt Traefik mit; bootstrap stellt ihn auf die Gateway API um und spielt die Admission-Regeln ein, bis dahin gibt es im Lab nur den Admin. service-r braucht beim Start nur sein Zertifikat; die Discovery bei Keycloak macht es erst beim ersten Token.</aside>
 </section>
 
 <section id="fehlerfaelle-authz">
@@ -628,9 +628,9 @@ section.cover { justify-content: center; gap: 28px; }
 <h2>Anhang: Prüfungen zu Veröffentlichung, Netzen und Rotation</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
-<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">403</td></tr>
-<tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header am Ingress</td><td>demo</td><td class="fail">abgewiesen</td></tr>
-<tr><td>H1</td><td>Ingress für issuer.wif.local außerhalb von wif-issuer-discovery, Regel ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
+<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">404 bei Traefik</td></tr>
+<tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header bei Traefik</td><td>demo</td><td class="fail">abgewiesen</td></tr>
+<tr><td>H1</td><td>Fremdes Gateway oder HTTPRoute für issuer.wif.local, Listener ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
 <tr><td>H2</td><td>Image ohne festen Digest in wif-issuer-discovery</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
 <tr><td>R1</td><td>API-Server für den Discovery-Pod nicht erreichbar</td><td>demo resilience</td><td class="pass">letzter Stand</td></tr>
 <tr><td>N1</td><td>Keycloak, Dienst R, Validator → API-Server, Node-Port</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
@@ -639,10 +639,10 @@ section.cover { justify-content: center; gap: 28px; }
 <tr><td>W2</td><td>Phase 2: erster „Pass“ mit neuem Schlüssel, alter „Pass“</td><td>run-all-checks.sh</td><td class="pass">200</td></tr>
 </table>
 <ul class="pts">
-<li>Kein Schreibweg: Der Endpunkt liefert nur per GET, und den Namespace wif-issuer-discovery ändern nur Cluster-Admins</li>
+<li>Kein Schreibweg: Nur GET erreicht den Pod, und den Namespace wif-issuer-discovery ändern nur Cluster-Admins</li>
 <li>Beim Wechsel in zwei Phasen kommt nie ein „Pass“ an, dessen Schlüssel noch nicht ausgeliefert wird</li>
 </ul>
-<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Ingress und Images, RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Discovery-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zum Ingress, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Discovery-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
+<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Gateways, Routen und Images, das Gateway weist Routen aus anderen Namespaces ab (NotAllowedByListeners), RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Discovery-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zu Traefik, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Discovery-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
 </section>
 
 <div id="hud"></div>

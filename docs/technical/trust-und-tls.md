@@ -5,9 +5,9 @@ Serverzertifikat vs. CA, SAN, SNI, Hostname-Verification, PKIX-Pfadbildung, Trus
 Diese Seite erklärt diese Begriffe kurz, zeigt dann die TLS-Vertrauensbeziehungen im
 Lab (A–C und I für den Validator-Pfad, D–H für Keycloak und `service-r`) und wie `JwksTrustConfig`
 im Validator einen Truststore baut, der nur der internen CA vertraut. Die Entscheidungen dahinter:
-[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI) und
-[ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod hinter einem
-Ingress).
+[ADR 0003](../adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (interne PKI),
+[ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Discovery-Pod) und
+[ADR 0006](../adr/0006-gateway-api-statt-ingress.md) (Gateway API).
 
 ---
 
@@ -30,7 +30,7 @@ ich angesprochen habe?* Diese **Hostname-Verification** vergleicht den angefragt
 (z. B. `issuer.wif.local`) mit der Liste der **Subject Alternative Names (SAN)** im Zertifikat. Der
 alte `Subject`/`CN`-Eintrag wird von modernen Clients (auch Java) dafür **ignoriert**.
 
-Deshalb stellt `pki-init` das Ingress-Zertifikat mit `subjectAltName=DNS:issuer.wif.local` aus:
+Deshalb stellt `pki-init` das Gateway-Zertifikat mit `subjectAltName=DNS:issuer.wif.local` aus:
 ohne diesen SAN-Eintrag würde der Validator den Handshake mit *"No subject alternative DNS
 name matching issuer.wif.local found"* abbrechen.
 
@@ -104,11 +104,13 @@ mit dem API-Server und erreichen ihn über kein Netz.
 die TCP-Verbindung unverändert an Traefiks Node-Port `172.31.7.2:30443` durch. `ingress-lb`
 sieht nur verschlüsselte Daten und hält kein Zertifikat.
 
-**TLS-Endpunkt:** Traefik im Cluster. Es präsentiert für `issuer.wif.local` das Secret
-`issuer-tls` (ausgestellt von der internen CA, SAN `DNS:issuer.wif.local`) und reicht die
-Anfrage per HTTP an den Container `web` (Port 8080) weiter. Diesen letzten Abschnitt im
-Cluster schützt die NetworkPolicy `issuer-discovery-from-ingress-controller`: Nur Traefik-Pods aus
-`kube-system` erreichen Port 8080.
+**TLS-Endpunkt:** Traefik im Cluster, der Gateway-Controller. Der Listener `issuer-https` des
+Gateways `issuer-discovery` (`tls.mode: Terminate`) präsentiert für `issuer.wif.local` das
+Secret `issuer-tls` (ausgestellt von der internen CA, SAN `DNS:issuer.wif.local`). Traefik
+reicht die Anfrage per HTTP an den Container `web` (Port 8080) weiter. Diesen letzten Abschnitt
+im Cluster schützt nur die NetworkPolicy `issuer-discovery-from-gateway`: Nur Traefik-Pods aus
+`kube-system` erreichen Port 8080. TLS bis zum Pod brächte `BackendTLSPolicy` der Gateway API;
+das Lab nutzt sie nicht.
 
 **Strict SNI** (`manifests/01-traefik-config.yaml`, TLS-Option `default`, mindestens TLS 1.2):
 Für einen Hostnamen ohne Zertifikat scheitert schon der Handshake. Ergebnis im Lab
@@ -116,19 +118,19 @@ Für einen Hostnamen ohne Zertifikat scheitert schon der Handshake. Ergebnis im 
 
 | Anfrage über `ingress-lb` | Ergebnis |
 |---|---|
-| SNI `issuer.wif.local` | Handshake mit dem Ingress-Zertifikat |
+| SNI `issuer.wif.local` | Handshake mit dem Gateway-Zertifikat |
 | SNI `other.wif.local` | kein Handshake |
 | SNI `kubernetes.default.svc` | kein Handshake – kein Weg zum API-Server |
 | SNI `issuer.wif.local`, `Host: other.wif.local` | `404` bzw. `421`, keine Route |
 
-Die Issuer-Route trägt die Routing-Priorität `1000000000`; andere Namespaces dürfen weder den
-Host noch Router-Annotationen setzen
+Das Gateway `issuer-discovery` nimmt nur Routen aus dem eigenen Namespace an, und kein
+anderes Gateway darf den Host beanspruchen
 ([bootstrap-und-issuer.md](bootstrap-und-issuer.md#härtung-von-wif-issuer-discovery)). Traefik teilt
-sich einen Zertifikatsspeicher mit allen Ingress-Objekten: Ein fremdes Zertifikat für
+sich einen Zertifikatsspeicher mit allen Gateways: Ein fremdes Zertifikat für
 `issuer.wif.local` kann die Auswahl stören – die Echtheit nicht, denn die Relying Parties
 vertrauen nur der internen CA, wohl aber die Verfügbarkeit. Wer Traefik kontrolliert, hält das
 Serverzertifikat und entscheidet über das Routing – Traefik gehört damit zum Vertrauenspfad
-([ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md), Kompromisse).
+([ADR 0006](../adr/0006-gateway-api-statt-ingress.md), Kompromisse).
 
 ---
 
@@ -279,8 +281,8 @@ bzw. der Container beendet sich), im Log:
 ... PKIX path building failed
 ```
 
-**Ursache:** Das Serverzertifikat, das der Ingress für `issuer.wif.local` vorzeigt, stammt nicht von der CA in
-`WIF_ISSUER_CA`. Genau das zeigt der Negativtest `validator-foreign-ca`
+**Ursache:** Das Serverzertifikat, das das Gateway für `issuer.wif.local` vorzeigt, stammt nicht von der
+CA in `WIF_ISSUER_CA`. Genau das zeigt der Negativtest `validator-foreign-ca`
 (`WIF_ISSUER_CA=/pki-demo/foreign-ca.crt`).
 
 | Ursache | Behebung |
@@ -320,7 +322,7 @@ signiert ([ADR 0005](../adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md)
 
 - [validator.md](validator.md) – die vollständige Nimbus-Validierungskette und die Endpunkte
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak und `service-r`
-- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Discovery-Pod, Ingress und
+- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – Lab-PKI, Discovery-Pod, Gateway und
   Härtung im Detail
 - [architecture.md](architecture.md) – Volumes und Netze
 - [build-und-betrieb.md](build-und-betrieb.md) – weitere häufige Fehlerbilder

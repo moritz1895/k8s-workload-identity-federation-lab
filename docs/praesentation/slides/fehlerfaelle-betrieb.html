@@ -2,9 +2,9 @@
 <h2>Anhang: Prüfungen zu Veröffentlichung, Netzen und Rotation</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
-<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">403</td></tr>
-<tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header am Ingress</td><td>demo</td><td class="fail">abgewiesen</td></tr>
-<tr><td>H1</td><td>Ingress für issuer.wif.local außerhalb von wif-issuer-discovery, Regel ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
+<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">404 bei Traefik</td></tr>
+<tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header bei Traefik</td><td>demo</td><td class="fail">abgewiesen</td></tr>
+<tr><td>H1</td><td>Fremdes Gateway oder HTTPRoute für issuer.wif.local, Listener ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
 <tr><td>H2</td><td>Image ohne festen Digest in wif-issuer-discovery</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
 <tr><td>R1</td><td>API-Server für den Discovery-Pod nicht erreichbar</td><td>demo resilience</td><td class="pass">letzter Stand</td></tr>
 <tr><td>N1</td><td>Keycloak, Dienst R, Validator → API-Server, Node-Port</td><td>run-all-checks.sh</td><td class="fail">kein Netzweg</td></tr>
@@ -13,8 +13,8 @@
 <tr><td>W2</td><td>Phase 2: erster „Pass“ mit neuem Schlüssel, alter „Pass“</td><td>run-all-checks.sh</td><td class="pass">200</td></tr>
 </table>
 <ul class="pts">
-<li>Kein Schreibweg: Der Endpunkt liefert nur per GET, und den Namespace wif-issuer-discovery ändern nur Cluster-Admins</li>
+<li>Kein Schreibweg: Nur GET erreicht den Pod, und den Namespace wif-issuer-discovery ändern nur Cluster-Admins</li>
 <li>Beim Wechsel in zwei Phasen kommt nie ein „Pass“ an, dessen Schlüssel noch nicht ausgeliefert wird</li>
 </ul>
-<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Ingress und Images, RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Discovery-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zum Ingress, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Discovery-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
+<aside>H1 bis H5 prüft demo hardening: Admission-Regeln für Gateways, Routen und Images, das Gateway weist Routen aus anderen Namespaces ab (NotAllowedByListeners), RBAC, NetworkPolicy und gehärtete Pods. R1: Auch mit gesperrtem Weg zum API-Server bleiben die Discovery-Pods bereit und liefern das unveränderte JWKS; einen nicht plausiblen Stand übernehmen sie nie. N2: Mit einer fremden CA scheitert schon die Verbindung zu Traefik, der Dienst startet nicht. W1 und W2: Zwischen sa-keys stage und sa-keys activate wartet run-all-checks.sh, bis jeder Discovery-Pod die neue kid ausliefert. Danach nehmen Validator und Keycloak schon den ersten „Pass“ mit dem neuen Schlüssel an, ohne Wiederholung; Tokens mit dem alten Schlüssel gelten weiter.</aside>
 </section>

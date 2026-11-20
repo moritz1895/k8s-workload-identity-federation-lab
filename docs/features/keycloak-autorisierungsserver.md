@@ -58,7 +58,7 @@ Fehlerfälle automatisch.
 | **Workload A** | Ruft Dienste des Fachbereichs auf. Weist sich mit seinem ServiceAccount-Token aus, holt ein Access-Token und hält es im Cache. | Pod `consumer`, ServiceAccount `wif-demo:consumer` |
 | **Workload B (nur lesend)** | Wie A, aber im Realm nur für Lesezugriff berechtigt. | Pod `reader`, ServiceAccount `wif-demo:reader` |
 | **Unbekannte Workload** | Hat ein gültiges ServiceAccount-Token, ist im Realm aber nicht registriert. | Pod `stranger`, ServiceAccount `wif-demo:stranger` |
-| **Cluster (Identitätsaussteller)** | Stellt ServiceAccount-Tokens aus; Schlüssel öffentlich über den Discovery-Pod hinter dem Ingress. | `server` (k3s), `iss=https://issuer.wif.local` |
+| **Cluster (Identitätsaussteller)** | Stellt ServiceAccount-Tokens aus; Schlüssel öffentlich über den Discovery-Pod hinter dem Gateway. | `server` (k3s), `iss=https://issuer.wif.local` |
 | **Autorisierungsserver des Fachbereichs** | Prüft das ServiceAccount-Token, ordnet es einem Client zu und stellt ein Access-Token mit den zugeordneten Scopes aus. | `keycloak`, Realm `domain-rst` |
 | **Fachbereichs-Administration** | Legt fest, welche Workload welche Scopes bekommt (Client → Scope). | Realm-Import-Datei im Repo |
 | **Ressourcendienst R** | Prüft das Access-Token und schützt seine Endpunkte nach Scope. | neuer Dienst `service-r` |
@@ -267,7 +267,7 @@ erreicht den API-Server nicht. Der Issuer-Hostname ist fest
 `pki-init` stellt zusätzlich ein Serverzertifikat `CN=keycloak`, SAN `DNS:keycloak`,
 `DNS:localhost`, `IP:127.0.0.1` aus (Volume `keycloak-tls`, Schlüssel gehört uid 1000);
 Keycloak, `keycloak-gateway` und `keycloak-admin` zeigen es. Keycloak spricht nur HTTPS
-(`KC_HTTP_ENABLED=false`) und vertraut dem Issuer-Ingress über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
+(`KC_HTTP_ENABLED=false`) und vertraut dem Discovery-Gateway über `KC_TRUSTSTORE_PATHS=/trust/ca.crt`
 (zusätzlich zu seinem Default-Truststore). `bootstrap` legt die ConfigMap `internal-ca`
 zusätzlich im Namespace `wif-demo` an, damit die Pods Keycloak über TLS prüfen können.
 `pki-init` stellt außerdem ein Serverzertifikat `CN=service-r.wif.local` (SAN
@@ -556,7 +556,7 @@ Geklärt (gemessen im Lab mit Keycloak 26.8.2, Details in
   Identity-Provider: `providerId: kubernetes`, `config.issuer`. Client:
   `clientAuthenticatorType: federated-jwt`, Attribute `jwt.credential.issuer` (= Alias des
   Identity-Providers) und `jwt.credential.sub`. Keycloak lädt die Cluster-Schlüssel lazy über
-  `<issuer>/.well-known/openid-configuration`, also vom Discovery-Pod hinter dem Ingress.
+  `<issuer>/.well-known/openid-configuration`, also vom Discovery-Pod hinter dem Gateway.
 - **Nicht zugeordneter Scope.** Keycloak lehnt mit `400 invalid_scope` („Invalid scopes: …“)
   ab und lässt den Scope nicht stillschweigend weg (AK2).
 - **Weitere Fehlerantworten.** Unregistrierte Workload und gefälschte Assertions (fremder
