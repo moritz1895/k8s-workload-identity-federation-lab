@@ -1,7 +1,7 @@
 # Configures the gateway controller k3s ships (Traefik); the chart creates the
 # GatewayClass `traefik`:
 #   - Service type NodePort with a fixed port; kube-proxy opens node ports only on the
-#     cluster-net address (--nodeport-addresses), where ingress-lb forwards to them
+#     cluster-net address (--nodeport-addresses), where load-balancer forwards to them
 #   - only the HTTPS entry point is exposed
 #   - routes come only from the Gateway API (Gateway + HTTPRoute): the Ingress provider
 #     and Traefik's own CRDs (IngressRoute & co.) are switched off, so the admission

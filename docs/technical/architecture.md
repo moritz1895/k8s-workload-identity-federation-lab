@@ -50,7 +50,7 @@ Definiert in `compose.yaml`. "Service" = eine Container-Definition in Compose.
 | `sa-keys` | `wif-lab/tools` | Signaturschlüssel des Clusters anlegen (`init`), in zwei Phasen wechseln (`stage`, `activate`) oder im Notfall den vorherigen entfernen (`retire`). Ohne Netz. | einmalig / auf Anforderung |
 | `server` | `rancher/k3s:v1.34.11-k3s1` | Der komplette Kubernetes-Cluster (k3s) mit Traefik als Gateway-Controller. Stellt die Pod-Tokens aus. Im Cluster laufen `issuer-discovery` (Discovery-Pod), `consumer`, `reader` und `stranger`. | dauerhaft |
 | `bootstrap` | `wif-lab/tools` | Einmal-Job mit Admin-Kubeconfig: Namespaces, Secret `issuer-tls` in `wif-issuer-discovery`, ConfigMap `internal-ca` in `wif-demo`, Manifeste anwenden. | einmalig, Exit 0 |
-| `ingress-lb` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor dem Cluster: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. „Ingress“ meint den eingehenden Verkehr, nicht das Kubernetes-Objekt. | dauerhaft |
+| `load-balancer` | `nginx:1.29-alpine` | Stellvertreter für den Load Balancer vor dem Cluster: reicht TCP 443 aus `relying-net` an Traefiks Node-Port durch. | dauerhaft |
 | `validator` | `wif-lab/validator` (aus `validator/`) | Der Dienst *außerhalb* des Clusters. Spring Boot 4 / Java 25. Prüft die Tokens offline. | dauerhaft |
 | `validator-foreign-ca` | `wif-lab/validator` | Negativtest: Validator mit fremder CA, muss beim Start scheitern. Profil `negative`. | auf Anforderung |
 | `keycloak` | `quay.io/keycloak/keycloak:26.8.2` | Autorisierungsserver des Fachbereichs (Realm `domain-rst`): tauscht ServiceAccount-Tokens gegen Access-Tokens. Siehe [autorisierungsserver.md](autorisierungsserver.md). | dauerhaft |
@@ -71,7 +71,7 @@ Host – alles steckt in den Containern.
  ┌────────────────────────────────────┐                ┌───────────────────────────────┐
  │ server  .2  (Alias k3s-server)     │                │                               │
  │  API-Server nur auf .2:6443        │  ┌──────────┐  │ validator  .10                │
- │  Traefik Node-Port nur .2:30443 ◄──┼──┤ingress-lb│◄─┼── GET Discovery + JWKS        │
+ │  Traefik Node-Port nur .2:30443 ◄──┼──┤load-balancer│◄─┼── GET Discovery + JWKS        │
  │   └─ Gateway issuer.wif.local      │  │.7.20     │  │   (https://issuer.wif.local)  │
  │       └─ Discovery-Pod (sync+web)  │  │ .8.20:443│  │ keycloak .30 (ebenso)         │
  │                                    │  └──────────┘  │                               │
@@ -88,13 +88,13 @@ Autorisierungs-Pfad (Details in [autorisierungsserver.md](autorisierungsserver.m
 
 ```
  workload-net                               relying-net
- Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► ingress-lb .8.20:443
+ Pods ── HTTPS keycloak:8443 ──► keycloak-gateway .9.30 │ .8.31 ──► keycloak .8.30:8443 ──► load-balancer .8.20:443
       │                          nur /realms/domain-rst/                ▲
       └── HTTPS :8443 ─────────► service-r .9.40 │ .8.40 ───────────────┘ Discovery + JWKS
                                                      keycloak-admin .8.32 (Profil admin, Host 127.0.0.1:18443)
 ```
 
-`ingress-lb` ist das einzige Bauteil, das `relying-net` mit `cluster-net` verbindet: Es
+`load-balancer` ist das einzige Bauteil, das `relying-net` mit `cluster-net` verbindet: Es
 lauscht nur auf `172.31.8.20:443` und leitet ausschließlich an `172.31.7.2:30443` weiter. Der
 API-Server und der Node-Port lauschen nur auf der `cluster-net`-Adresse des Servers. Die
 Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-Pods.
@@ -160,15 +160,15 @@ Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-
 - **`depends_on`:** `server → service_healthy`, `pki-init → service_completed_successfully`.
 - Was das Skript tut: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#toolsbootstrapsh-schritt-für-schritt).
 
-### `ingress-lb` – der Weg der Relying Parties in den Cluster
+### `load-balancer` – der Weg der Relying Parties in den Cluster
 
 - **Image:** `nginx:1.29-alpine` (über `${NGINX_IMAGE}` austauschbar),
-  `command: nginx -c /etc/nginx/ingress-lb.conf`; `mem_limit: 32m`.
+  `command: nginx -c /etc/nginx/load-balancer.conf`; `mem_limit: 32m`.
 - **Härtung:** `read_only: true` mit `tmpfs` für `/tmp` und `/var/cache/nginx`,
   `cap_drop: ALL`, nur `NET_BIND_SERVICE`, `SETUID`, `SETGID` zurück (Port 443, Wechsel der
   Worker auf den Benutzer `nginx`), `no-new-privileges`.
 - **`volumes`:** `ca-trust:/trust:ro` (nur für den Healthcheck), die Config
-  `./tools/nginx-ingress-lb.conf`.
+  `./tools/nginx-load-balancer.conf`.
 - **`networks`:** `cluster-net` mit `172.31.7.20`, `relying-net` mit `172.31.8.20` und Alias
   `issuer.wif.local`.
 - TCP-Pass-through `172.31.8.20:443` → `172.31.7.2:30443`; TLS endet bei Traefik im Cluster.
@@ -176,7 +176,7 @@ Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-
 - **`healthcheck`:** `curl` mit Lab-CA auf `https://issuer.wif.local/openid/v1/jwks` – gesund,
   sobald der Discovery-Pod das JWKS über das Gateway ausliefert (`retries: 120`, alle 5 s,
   `start_period: 30s`).
-- Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#gateway-traefik-gateway-httproute-und-ingress-lb).
+- Details: [bootstrap-und-issuer.md](bootstrap-und-issuer.md#gateway-traefik-gateway-httproute-und-load-balancer).
 
 ### `validator` – der Dienst außerhalb des Clusters
 
@@ -189,7 +189,7 @@ Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-
 - **`networks`:** `relying-net` mit `172.31.8.10`, `workload-net` mit `172.31.9.10`.
 - **`ports: "127.0.0.1:${VALIDATOR_HOST_PORT:-18080}:8443"`** – nur HTTPS, kein
   HTTP-Listener; vom Host unter `https://localhost:18080` (Lab-CA). Läuft als `USER 10001`.
-- **`depends_on: ingress-lb → service_healthy`**.
+- **`depends_on: load-balancer → service_healthy`**.
 - **`healthcheck`:** `curl -fsS --cacert /trust/ca.crt https://localhost:8443/healthz`,
   `start_period: 40s`.
 
@@ -210,7 +210,7 @@ Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-
   anderen Bridge-Netzen erreichbar, unabhängig von der Host-Adresse (im Lab gemessen).
 - **`volumes`:** `keycloak-tls:/tls:ro`, `ca-trust:/trust:ro`,
   `./keycloak/realm-domain-rst.json` (Realm-Import, ro).
-- **`depends_on`:** `pki-init → service_completed_successfully`, `ingress-lb → service_healthy`.
+- **`depends_on`:** `pki-init → service_completed_successfully`, `load-balancer → service_healthy`.
 - **`healthcheck`:** `GET /health/ready` auf `localhost:9000` per Bash-`/dev/tcp` (kein `curl`
   im Image).
 - Konfiguration im Detail: [autorisierungsserver.md](autorisierungsserver.md#keycloak).
@@ -255,7 +255,7 @@ Relying Parties erreichen damit vom Cluster nur die Gateway-Route des Discovery-
 - **`volumes`:** `kubeconfig:/kube:ro`, `ca-trust:/trust:ro`, `pki-demo:/pki-demo:ro`,
   `demo-state:/state` (Token und `kid`s zwischen den Phasen des Schlüsselwechsels).
 - **`networks`:** `cluster-net` (für `kubectl`) und `relying-net` (für
-  `https://issuer.wif.local` über `ingress-lb`, Validator und Keycloak).
+  `https://issuer.wif.local` über `load-balancer`, Validator und Keycloak).
 - **`depends_on`:** `validator`, `service-r` und `keycloak-gateway` → `service_healthy`.
 - Die Schritte: [../use-cases.md](../use-cases.md#verifikation-auf-einen-blick).
 
@@ -271,7 +271,7 @@ braucht.
 | Volume | Beschrieben von | Gelesen von | Inhalt |
 |---|---|---|---|
 | `pki-ca` | `pki-init` | – | Root-CA: `ca.crt`, `ca.key`. |
-| `ca-trust` | `pki-init` | `bootstrap`, `ingress-lb`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
+| `ca-trust` | `pki-init` | `bootstrap`, `load-balancer`, `validator`, `keycloak`, `keycloak-gateway`, `keycloak-admin`, `service-r`, `demo` | `ca.crt` – Stellvertreter für die anderweitige Verteilung des Root-Zertifikats. |
 | `issuer-tls` | `pki-init` | `bootstrap` (→ Secret `issuer-tls` in `wif-issuer-discovery`) | Serverzertifikat `tls.crt` / `tls.key` des Gateways (`CN=issuer.wif.local`, SAN `DNS:issuer.wif.local`). |
 | `pki-demo` | `pki-init` | `demo`, `validator-foreign-ca` | `foreign-ca.crt`. |
 | `keycloak-tls` | `pki-init` | `keycloak`, `keycloak-gateway`, `keycloak-admin` | Serverzertifikat `tls.crt` / `tls.key` (SAN `DNS:keycloak`, `DNS:localhost`, `IP:127.0.0.1`), Schlüssel gehört uid 1000. |
@@ -296,8 +296,8 @@ Discovery-Pod ausliefert, liegt in einem `emptyDir` im Pod, nicht in einem Docke
 
 | Netz | Subnetz | Mitglieder | Zweck |
 |---|---|---|---|
-| `cluster-net` | `172.31.7.0/24` | `server` (.2, Alias `k3s-server`), `ingress-lb` (.20), `bootstrap`, `demo` | Der Cluster: API-Server und Ingress-Node-Port lauschen nur hier. |
-| `relying-net` | `172.31.8.0/24` | `ingress-lb` (.20, Alias `issuer.wif.local`), `validator` (.10), `keycloak` (.30, Alias `keycloak`), `keycloak-gateway` (.31), `keycloak-admin` (.32), `service-r` (.40), `demo`, `validator-foreign-ca` | Relying Parties und Autorisierungsserver; Zugang zum Cluster nur über `ingress-lb :443`. |
+| `cluster-net` | `172.31.7.0/24` | `server` (.2, Alias `k3s-server`), `load-balancer` (.20), `bootstrap`, `demo` | Der Cluster: API-Server und Node-Port von Traefik lauschen nur hier. |
+| `relying-net` | `172.31.8.0/24` | `load-balancer` (.20, Alias `issuer.wif.local`), `validator` (.10), `keycloak` (.30, Alias `keycloak`), `keycloak-gateway` (.31), `keycloak-admin` (.32), `service-r` (.40), `demo`, `validator-foreign-ca` | Relying Parties und Autorisierungsserver; Zugang zum Cluster nur über `load-balancer :443`. |
 | `workload-net` | `172.31.9.0/24` | `server` (.2), `validator` (.10), `keycloak-gateway` (.30), `service-r` (.40) | Pods rufen Validator, Keycloak (über das Gateway) und `service-r` auf. |
 
 - **`driver: bridge`** – der Standard-Netzwerktyp von Docker: ein privates virtuelles LAN.
@@ -308,7 +308,7 @@ Discovery-Pod ausliefert, liegt in einem `emptyDir` im Pod, nicht in einem Docke
 
 Keycloak selbst hängt nicht in `workload-net`. Weil Docker veröffentlichte Ports auch aus
 anderen Bridge-Netzen erreichbar macht, veröffentlicht er keinen Port; nicht veröffentlichte
-Ports wie `ingress-lb :443` oder Keycloak `:9000` bleiben auf ihre Netze beschränkt.
+Ports wie `load-balancer :443` oder Keycloak `:9000` bleiben auf ihre Netze beschränkt.
 
 `tools/run-all-checks.sh` prüft die Trennung von Validator und `service-r` aus
 (`172.31.9.2:6443`, `172.31.7.2:6443`, `172.31.7.2:30443`, `172.31.9.2:30443` nicht
@@ -330,10 +330,10 @@ cluster-interne DNS (CoreDNS) kennt nur Dinge *im* Cluster. Die Pods lösen die 
 | `consumer`, `reader` | `service-r.wif.local` | `172.31.9.40` (`service-r` in `workload-net`) |
 
 Damit diese Einträge stimmen, **müssen** die Adressen fest sein. Weitere feste Adressen:
-`172.31.7.2` (Ziel in `tools/nginx-ingress-lb.conf`, Egress-Ziel der NetworkPolicy
-`issuer-discovery-to-api-server`), `172.31.8.20` (Bind-Adresse in `tools/nginx-ingress-lb.conf`,
-`INGRESS_LB_ADDR` in `tools/demo.sh`). Außerhalb des Clusters löst `issuer.wif.local` über
-den Compose-Alias von `ingress-lb` in `relying-net` auf. Die Namen unter `wif.local` sind frei
+`172.31.7.2` (Ziel in `tools/nginx-load-balancer.conf`, Egress-Ziel der NetworkPolicy
+`issuer-discovery-to-api-server`), `172.31.8.20` (Bind-Adresse in `tools/nginx-load-balancer.conf`,
+`LOAD_BALANCER_ADDR` in `tools/demo.sh`). Außerhalb des Clusters löst `issuer.wif.local` über
+den Compose-Alias von `load-balancer` in `relying-net` auf. Die Namen unter `wif.local` sind frei
 gewählt.
 
 ---
@@ -350,7 +350,7 @@ sa-keys      ─┤  completed
 server       healthy (kubectl get --raw /readyz)
               ├────────────────────────────────────────┐
               ▼   (+ pki-init completed)               ▼
-bootstrap    Namespaces, Secret, ConfigMap,       ingress-lb  startet, Healthcheck
+bootstrap    Namespaces, Secret, ConfigMap,       load-balancer  startet, Healthcheck
              Manifeste, Rollouts discovery,                   noch rot
              traefik, Gateway Programmed,              │
              consumer, reader, stranger, Exit 0        │
@@ -369,7 +369,7 @@ service-r    nach pki-init: entrypoint.sh baut Truststore, healthy (curl --cacer
 demo         nur bei "docker compose run --rm demo" (wartet auf validator, service-r, keycloak-gateway)
 ```
 
-`validator` und `keycloak` hängen beide an `ingress-lb` und starten parallel;
+`validator` und `keycloak` hängen beide an `load-balancer` und starten parallel;
 `service-r` wartet nur auf `pki-init`. `demo` wartet über `keycloak-gateway` indirekt auf Keycloaks Healthcheck;
 da `/health/ready` schon vor dem Abschluss des ersten Bootstraps UP meldet, wiederholt Prüfung 8
 die Realm-Discovery bis zu 60 s.

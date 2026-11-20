@@ -17,7 +17,7 @@ Probleme mit ihrer Lösung.
 | `wif-lab/service-r` | `service-r/Dockerfile` | wie `wif-lab/validator` | `service-r.jar` + `curl` + `entrypoint.sh` (baut den PKCS12-Truststore nur mit der Lab-CA). Tests laufen im Build. |
 | `keycloak` | – (Fremd-Image) | `quay.io/keycloak/keycloak:26.8.2` | Unverändertes Keycloak; Realm per Bind Mount, siehe [autorisierungsserver.md](autorisierungsserver.md). |
 | `server` | – (Fremd-Image) | `rancher/k3s:v1.34.11-k3s1` | k3s mit dem mitgelieferten Traefik. Wird nur gezogen, nicht gebaut. |
-| `ingress-lb`, `keycloak-gateway`, `keycloak-admin` | – (Fremd-Image) | `nginx:1.29-alpine` | Unveränderter nginx; Konfiguration per Bind Mount aus `tools/`. |
+| `load-balancer`, `keycloak-gateway`, `keycloak-admin` | – (Fremd-Image) | `nginx:1.29-alpine` | Unveränderter nginx; Konfiguration per Bind Mount aus `tools/`. |
 | `issuer-discovery` (Pod, `wif-issuer-discovery`) | – (Fremd-Image) | `curlimages/curl:8.23.0` (`sync`), `nginxinc/nginx-unprivileged:1.31.7-alpine` (`web`), beide per Digest gepinnt | Wird im Cluster gezogen; Skript und nginx-Config kommen aus ConfigMaps. |
 | `consumer`, `reader`, `stranger` (Pods) | – (Fremd-Image) | `curlimages/curl:8.11.1` | Wird im Cluster gezogen; Skripte kommen aus ConfigMaps. |
 
@@ -142,7 +142,7 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
   gestartet sind; `docker compose run --rm demo` wartet über `depends_on`, bis der Validator
   gesund ist. (`--wait` passt hier nicht: Compose wertet die beendeten Einmal-Jobs
   `pki-init`, `sa-keys` und `bootstrap` dabei als Fehler.)
-- Startet `pki-init`, `sa-keys`, `server`, `bootstrap`, `ingress-lb`, `validator`,
+- Startet `pki-init`, `sa-keys`, `server`, `bootstrap`, `load-balancer`, `validator`,
   `keycloak`, `keycloak-gateway` und `service-r` in der Reihenfolge aus
   [architecture.md](architecture.md#startreihenfolge). `keycloak-admin` startet nur mit
   `docker compose --profile admin up -d keycloak-admin` (Admin-Konsole unter
@@ -205,7 +205,7 @@ Im Notfall, etwa bei kompromittiertem vorherigem Schlüssel, entfernt
 Läuft auf dem Host und braucht nur `docker compose`. Es startet den Stack und führt
 nacheinander aus: `demo all`, `demo authz`, `demo hardening`, `demo resilience`, die
 Netztrennungsprüfung aus Sicht von Validator, `service-r` und Keycloak (kein Zugriff auf
-API-Server und Ingress-Node-Port, Keycloak erreicht nur `ingress-lb` in `relying-net`),
+API-Server und Node-Port von Traefik, Keycloak erreicht nur `load-balancer` in `relying-net`),
 `validator-foreign-ca` (muss mit Fehlercode enden, Timeout 180 s) und den Schlüsselwechsel
 wie oben. Bricht beim ersten Fehler mit `FAIL:` ab, sonst `PASS: all lab checks passed`.
 
@@ -232,10 +232,10 @@ Nach einem Lauf ist der Signaturschlüssel gewechselt. Für einen frischen Ausga
 |---|---|---|---|
 | `K3S_TOKEN` | `lab-not-a-secret-change-me` | Cluster-internes Beitrittsgeheimnis von k3s. Im Single-Node-Lab ohne echte Sicherheitsbedeutung – trotzdem **kein echtes Secret committen**. | Service `server` |
 | `K3S_IMAGE` | `rancher/k3s:v1.34.11-k3s1` | Pinnt die k3s-Version. Bei Änderung sollte `KUBECTL_VERSION` in `tools/Dockerfile` mitziehen. | Service `server` |
-| `WIF_ISSUER` | `https://issuer.wif.local` | Sollwert des `iss`-Claims **und** Basis-URL der OIDC-Discovery im Validator. Muss aus dem Validator-Container erreichbar sein (dort nur über `ingress-lb`, Alias `issuer.wif.local`) und zum SAN des Ingress-Zertifikats passen (`DNS:issuer.wif.local`). | Service `validator`, `validator/…/application.yaml:2` |
+| `WIF_ISSUER` | `https://issuer.wif.local` | Sollwert des `iss`-Claims **und** Basis-URL der OIDC-Discovery im Validator. Muss aus dem Validator-Container erreichbar sein (dort nur über `load-balancer`, Alias `issuer.wif.local`) und zum SAN des Serverzertifikats von Traefik passen (`DNS:issuer.wif.local`). | Service `validator`, `validator/…/application.yaml:2` |
 | `WIF_AUDIENCE` | `wif-demo-validator` | Audience, die der Validator verlangt und mit der die Demo Tokens prägt. Muss zum `audience` des `sa-token` im Pod-Manifest passen (`manifests/20-consumer.yaml`). | Services `validator`, `demo` |
 | `VALIDATOR_HOST_PORT` | `18080` | Host-Port (`127.0.0.1`) für den HTTPS-Port 8443 des Validators: `https://localhost:18080` (Lab-CA). Nur diese Zuordnung, keine Funktionsänderung. | Service `validator` |
-| `NGINX_IMAGE` | `nginx:1.29-alpine` | Image von `ingress-lb`, `keycloak-gateway` und `keycloak-admin`. | Services `ingress-lb`, `keycloak-gateway`, `keycloak-admin` |
+| `NGINX_IMAGE` | `nginx:1.29-alpine` | Image von `load-balancer`, `keycloak-gateway` und `keycloak-admin`. | Services `load-balancer`, `keycloak-gateway`, `keycloak-admin` |
 | `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Pinnt die Keycloak-Version. | Service `keycloak` |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | `admin` / `lab-not-a-secret-change-me` | Lab-Admin der Keycloak-Admin-Konsole. Kein Geheimnis, nur Lab. | Service `keycloak` |
 | `KEYCLOAK_HOST_PORT` | `18443` | Host-Port (`127.0.0.1`) des Admin-Proxys `keycloak-admin` (Profil `admin`); zugleich Port in `KC_HOSTNAME_ADMIN=https://localhost:<port>` von Keycloak. | Services `keycloak-admin`, `keycloak` |
@@ -282,7 +282,7 @@ allocated"*.
 `discovery document issuer '...' does not match configured issuer '...'`.
 
 Eine alte `.env` kann `WIF_ISSUER` auf eine andere URL als `https://issuer.wif.local` setzen.
-Der Validator erreicht vom Cluster nur `ingress-lb`, und das Ingress-Zertifikat gilt nur für
+Der Validator erreicht vom Cluster nur `load-balancer`, und das Serverzertifikat von Traefik gilt nur für
 `DNS:issuer.wif.local`.
 
 **Lösung:**
@@ -321,9 +321,9 @@ zueinander.
 
 **Lösung:** `docker compose down -v`, dann `docker compose up -d --build`.
 
-### `ingress-lb` wird nicht `healthy`
+### `load-balancer` wird nicht `healthy`
 
-`ingress-lb` wird erst gesund, wenn der Discovery-Pod das JWKS über das Gateway ausliefert. Bleibt
+`load-balancer` wird erst gesund, wenn der Discovery-Pod das JWKS über das Gateway ausliefert. Bleibt
 es `starting`:
 
 ```bash
@@ -331,7 +331,7 @@ docker compose logs bootstrap                                               # Ex
 docker compose exec server kubectl -n wif-issuer-discovery get pods,gateway          # Pods bereit? Gateway Programmed?
 docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer-discovery -c sync # REJECTED? API-Server lesbar?
 docker compose exec server kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik
-docker compose logs ingress-lb                                              # kommen Verbindungen an?
+docker compose logs load-balancer                                              # kommen Verbindungen an?
 ```
 
 Typische Ursachen: `bootstrap` ist gescheitert (kein Secret `issuer-tls`, Manifest abgelehnt),
@@ -345,7 +345,7 @@ Prüf-Reihenfolge:
 
 ```bash
 docker compose ps                       # welcher Service hängt?
-docker compose logs ingress-lb          # kommen Verbindungen an, Status?
+docker compose logs load-balancer          # kommen Verbindungen an, Status?
 docker compose logs validator           # Discovery-Fehler? PKIX? CA fehlt?
 docker compose exec validator printenv WIF_ISSUER WIF_AUDIENCE WIF_ISSUER_CA VALIDATOR_TLS_DIR
 ```

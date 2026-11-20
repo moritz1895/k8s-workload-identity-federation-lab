@@ -2,7 +2,7 @@
 <h2>Anhang: Prüfungen zu Veröffentlichung, Netzen und Rotation</h2>
 <table class="tbl small">
 <tr class="head"><th style="width:7%">Fall</th><th style="width:51%">Situation</th><th style="width:22%">Ausgelöst durch</th><th style="width:20%">Ergebnis</th></tr>
-<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über ingress-lb</td><td>demo</td><td class="fail">404 bei Traefik</td></tr>
+<tr><td>U1</td><td>PUT, POST, DELETE auf das JWKS über load-balancer</td><td>demo</td><td class="fail">404 bei Traefik</td></tr>
 <tr><td>U2</td><td>Fremder Host (SNI) oder Host-Header bei Traefik</td><td>demo</td><td class="fail">abgewiesen</td></tr>
 <tr><td>H1</td><td>Fremdes Gateway oder HTTPRoute für issuer.wif.local, Listener ohne Host</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>
 <tr><td>H2</td><td>Image ohne festen Digest in wif-issuer-discovery</td><td>demo hardening</td><td class="fail">abgelehnt</td></tr>

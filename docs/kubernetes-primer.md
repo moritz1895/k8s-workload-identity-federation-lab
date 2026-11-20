@@ -322,10 +322,9 @@ Außerdem ist Traefik so eingestellt:
 - Kein Standard-Gateway aus dem Helm-Chart; jedes Gateway wird ausdrücklich angelegt.
 - **Strict SNI**: Ein TLS-Handshake für einen Host ohne eigenes Zertifikat schlägt fehl.
 
-Von außen erreicht man Traefik nur über `ingress-lb` (ein nginx im TCP-Modus in Docker
+Von außen erreicht man Traefik nur über `load-balancer` (ein nginx im TCP-Modus in Docker
 Compose), der Port 443 aus `relying-net` an `172.31.7.2:30443` durchreicht - der
-Stellvertreter für den Load Balancer vor einem echten Cluster. „Ingress“ meint in diesem
-Namen den eingehenden Verkehr, nicht das Kubernetes-Objekt.
+Stellvertreter für den Load Balancer vor einem echten Cluster.
 
 ---
 

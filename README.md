@@ -27,7 +27,7 @@ Alles läuft in Containern. Auf dem Host wird **nur Docker + Compose v2** gebrau
 
 ```bash
 cp .env.example .env
-docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, ingress-lb, Validator, Keycloak + keycloak-gateway, service-r
+docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, load-balancer, Validator, Keycloak + keycloak-gateway, service-r
 docker compose run --rm demo          # Ende-zu-Ende-Verifikation (Validator)
 docker compose run --rm demo authz    # Autorisierungsserver + service-r
 tools/run-all-checks.sh               # alles: Demos, Härtung, Ausfall des API-Servers, Netztrennung, fremde CA, Schlüsselwechsel
@@ -70,7 +70,7 @@ docker compose stop keycloak-admin
  │  Pod consumer                                  │
  └────┬───────────────────────────▲───────────────┘
       │                           │ TCP 443 durchgereicht (TLS endet im Cluster)
-      │                      ingress-lb (Stellvertreter des Load Balancers)
+      │                      load-balancer (Stellvertreter des Load Balancers)
       │                           ▲
       │                           │ GET Discovery + JWKS, relying-net (172.31.8.0/24)
       │ Bearer-Token, GET /whoami │
@@ -78,9 +78,8 @@ docker compose stop keycloak-admin
       │ (172.31.9.0/24)           │
       └──────────────────►  validator (Spring Boot), vertraut nur der internen CA
 
- Der Validator erreicht vom Cluster nur die Route issuer.wif.local über ingress-lb, nie
+ Der Validator erreicht vom Cluster nur die Route issuer.wif.local über load-balancer, nie
  den API-Server; kein Volume ist zwischen Cluster-Seite und Validator geteilt.
- ("ingress" in ingress-lb meint den eingehenden Verkehr, nicht das Kubernetes-Objekt.)
 ```
 
 Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von
@@ -102,7 +101,7 @@ ist ein echtes Geheimnis.
 | `WIF_ISSUER` | `https://issuer.wif.local` | Issuer, den der Validator erwartet; Basis der OIDC-Discovery. |
 | `WIF_AUDIENCE` | `wif-demo-validator` | Audienz, die der Validator verlangt. |
 | `VALIDATOR_HOST_PORT` | `18080` | Host-Port (`127.0.0.1`) des HTTPS-Ports 8443 des Validators (`https://localhost:18080`). |
-| `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `ingress-lb`, `keycloak-gateway` und `keycloak-admin`. |
+| `NGINX_IMAGE` | `nginx:1.29-alpine` | Gepinntes nginx-Image für `load-balancer`, `keycloak-gateway` und `keycloak-admin`. |
 | `KEYCLOAK_IMAGE` | `quay.io/keycloak/keycloak:26.8.2` | Gepinntes Keycloak-Image. |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` | `admin` | Lab-Admin der Keycloak-Admin-Konsole. |
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | `lab-not-a-secret-change-me` | Passwort dazu (nur Lab). |
@@ -137,7 +136,7 @@ Bewusst offene Punkte des Labs:
 - **Lab-CA statt interner PKI.** `pki-init` erzeugt CA und Zertifikate selbst; real kommt
   das Root-Zertifikat aus der vorhandenen PKI, das Serverzertifikat des Gateways über
   cert-manager oder die PKI-Anbindung der Plattform statt über `bootstrap`.
-- **`ingress-lb` statt echtem Load Balancer.** Ein nginx im TCP-Modus reicht nur Port 443
+- **`load-balancer` statt echtem Load Balancer.** Ein nginx im TCP-Modus reicht nur Port 443
   an Traefiks Node-Port weiter.
 - **Der Namespace `wif-issuer-discovery` gehört zur Steuerung des Clusters.** Wer dort schreiben oder
   Traefik steuern kann, kann Tokens fälschen. RBAC, Admission-Regeln, NetworkPolicies und
@@ -174,7 +173,7 @@ manifests/                       Namespaces, Traefik-Konfiguration, Admission-Re
 validator/                       Spring Boot 4 / Java 25, Nimbus JOSE — der Offline-Prüfdienst
 keycloak/                        Realm-Import des Fachbereichs (realm-domain-rst.json)
 service-r/                       Spring Boot 4 / Java 25, Spring Security Resource Server — Dienst R
-tools/                           pki-init.sh, sa-keys.sh, bootstrap.sh, nginx-ingress-lb.conf,
+tools/                           pki-init.sh, sa-keys.sh, bootstrap.sh, nginx-load-balancer.conf,
                                  nginx-keycloak-gateway.conf, nginx-keycloak-admin.conf,
                                  demo.sh, run-all-checks.sh
 docs/                            die vollständige Dokumentation

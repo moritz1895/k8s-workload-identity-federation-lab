@@ -51,12 +51,12 @@ for service in validator service-r; do
     unreachable "$service" 172.31.9.2:30443  "gateway node port via workload-net"
 done
 timeout 8 docker compose exec -T keycloak bash -c "exec 3<>/dev/tcp/172.31.8.20/443" \
-    && pass "keycloak reaches the ingress route through ingress-lb (probe works)" \
-    || fail "keycloak cannot reach ingress-lb — TCP probe is broken"
+    && pass "keycloak reaches the issuer route through load-balancer (probe works)" \
+    || fail "keycloak cannot reach load-balancer — TCP probe is broken"
 unreachable_from_keycloak 172.31.9.2:6443  "API server via workload-net"
 unreachable_from_keycloak 172.31.7.2:6443  "API server via cluster-net"
 unreachable_from_keycloak 172.31.7.2:30443 "gateway node port via cluster-net"
-unreachable_from_keycloak 172.31.7.20:443  "ingress-lb's cluster-net side"
+unreachable_from_keycloak 172.31.7.20:443  "load-balancer's cluster-net side"
 
 section "3. validator with a foreign CA refuses to start"
 FOREIGN_LOG=$(mktemp)

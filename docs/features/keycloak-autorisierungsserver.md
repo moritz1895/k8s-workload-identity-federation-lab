@@ -243,7 +243,7 @@ Für `service-r` gelten dieselben projektlokalen Abweichungen wie für den `vali
 
 | Dienst | Netz | Adresse | Zweck |
 |---|---|---|---|
-| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `ingress-lb`); R liest JWKS von Keycloak |
+| `keycloak` | `relying-net` | 172.31.8.30, Alias `keycloak` | liest Discovery/JWKS von `issuer.wif.local` (über `load-balancer`); R liest JWKS von Keycloak |
 | `keycloak-gateway` | `relying-net` | 172.31.8.31 | Weiterleitung zu Keycloak |
 | `keycloak-gateway` | `workload-net` | 172.31.9.30 | Pods holen Tokens (nur `/realms/domain-rst/`) |
 | `keycloak-admin` | `relying-net` | 172.31.8.32 | Admin-Konsole vom Host, nur Profil `admin` |
@@ -451,9 +451,9 @@ genau eine Token-Anfrage an Keycloak (eine Log-Zeile „requested new access tok
 
 **AK12 – Netztrennung**
 Keycloak erreicht den API-Server weder über `172.31.7.2:6443` noch über `172.31.9.2:6443`,
-Traefiks Node-Port nicht direkt über `172.31.7.2:30443` und `ingress-lb` nicht über dessen
+Traefiks Node-Port nicht direkt über `172.31.7.2:30443` und `load-balancer` nicht über dessen
 `cluster-net`-Seite `172.31.7.20:443`. Der einzige Weg in den Cluster ist
-`172.31.8.20:443` (`ingress-lb`, Ingress-Route `issuer.wif.local`).
+`172.31.8.20:443` (`load-balancer`, HTTPRoute `issuer.wif.local`).
 
 **AK13 – bestehendes Verhalten**
 Alle bestehenden Prüfungen von `tools/run-all-checks.sh` laufen unverändert durch.
@@ -539,7 +539,7 @@ Client-Assertions per `client_assertion@-` bzw. `@<datei>`.
 - Abschnitt „1b. authorization server demo“: `docker compose run --rm demo authz`.
 - Abschnitt 2 prüft die Netztrennung auch aus Sicht von `service-r` und Keycloak (AK12);
   bei Keycloak mit `bash`-`/dev/tcp`, da das Image kein `curl` enthält, abgesichert durch
-  eine Positivprobe auf `ingress-lb` (`172.31.8.20:443`).
+  eine Positivprobe auf `load-balancer` (`172.31.8.20:443`).
 - Abschnitt 4 (Schlüsselwechsel in zwei Phasen): `staged` legt nach `sa-keys stage` eine
   Client-Assertion vor, die noch mit dem bisherigen Schlüssel signiert ist; `post-rotation`
   prägt nach `sa-keys activate` per `kubectl create token` ein Token mit Realm-Audienz und

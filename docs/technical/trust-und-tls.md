@@ -97,11 +97,11 @@ mit dem API-Server und erreichen ihn über kein Netz.
 
 ---
 
-## Beziehung B – `ingress-lb` und Traefik: wo TLS endet
+## Beziehung B – `load-balancer` und Traefik: wo TLS endet
 
 **Wer:** jeder Client von `https://issuer.wif.local` (Validator, Keycloak, `demo`).
-**Weg:** `ingress-lb` (`172.31.8.20:443`, Alias `issuer.wif.local` in `relying-net`) reicht
-die TCP-Verbindung unverändert an Traefiks Node-Port `172.31.7.2:30443` durch. `ingress-lb`
+**Weg:** `load-balancer` (`172.31.8.20:443`, Alias `issuer.wif.local` in `relying-net`) reicht
+die TCP-Verbindung unverändert an Traefiks Node-Port `172.31.7.2:30443` durch. `load-balancer`
 sieht nur verschlüsselte Daten und hält kein Zertifikat.
 
 **TLS-Endpunkt:** Traefik im Cluster, der Gateway-Controller. Der Listener `issuer-https` des
@@ -116,7 +116,7 @@ das Lab nutzt sie nicht.
 Für einen Hostnamen ohne Zertifikat scheitert schon der Handshake. Ergebnis im Lab
 (`demo.sh`, Prüfung 6):
 
-| Anfrage über `ingress-lb` | Ergebnis |
+| Anfrage über `load-balancer` | Ergebnis |
 |---|---|
 | SNI `issuer.wif.local` | Handshake mit dem Gateway-Zertifikat |
 | SNI `other.wif.local` | kein Handshake |
@@ -138,7 +138,7 @@ Serverzertifikat und entscheidet über das Routing – Traefik gehört damit zum
 
 **Wer:** der `validator`-Container (Java, Nimbus `DefaultResourceRetriever`).
 **Wohin:** `https://issuer.wif.local` – für OIDC-Discovery (`/.well-known/openid-configuration`)
-und den JWKS-Abruf (`/openid/v1/jwks`), über `ingress-lb` (Beziehung B).
+und den JWKS-Abruf (`/openid/v1/jwks`), über `load-balancer` (Beziehung B).
 
 **Vertrauensmaterial:** ausschließlich die PEM-Datei `/trust/ca.crt` – das Root-Zertifikat der
 internen CA aus dem Volume `ca-trust` (`WIF_ISSUER_CA=/trust/ca.crt`). Es erreicht den
@@ -184,7 +184,7 @@ gehört uid 1000 (`chmod 400`), weil Keycloak nicht als root läuft.
 
 | Beziehung | Wer → wohin | Vertrauensmaterial |
 |---|---|---|
-| D | Keycloak → `https://issuer.wif.local` (Discovery + JWKS des Clusters, über `ingress-lb`) | `KC_TRUSTSTORE_PATHS=/trust/ca.crt`: ergänzt Keycloaks Default-Truststore um die Lab-CA; öffentliche CAs bleiben dort vertraut |
+| D | Keycloak → `https://issuer.wif.local` (Discovery + JWKS des Clusters, über `load-balancer`) | `KC_TRUSTSTORE_PATHS=/trust/ca.crt`: ergänzt Keycloaks Default-Truststore um die Lab-CA; öffentliche CAs bleiben dort vertraut |
 | E | `service-r` → `https://keycloak:8443/realms/domain-rst` (Discovery + JWKS des Realms) | PKCS12-Truststore aus `service-r/entrypoint.sh`, enthält **nur** die Lab-CA und ist JVM-Default (`-Djavax.net.ssl.trustStore`) |
 | F | Pods `consumer`/`reader`/`stranger` → `https://keycloak:8443` (= `keycloak-gateway`), `demo` → Keycloak direkt | `--cacert /etc/internal-ca/ca.crt` aus der ConfigMap `internal-ca`, die `bootstrap` auch in `wif-demo` anlegt; im `demo`-Container `/trust/ca.crt` |
 | G | `keycloak-gateway` und `keycloak-admin` → Keycloak | `proxy_ssl_verify on` gegen `/trust/ca.crt`, `proxy_ssl_name keycloak` |
@@ -292,7 +292,7 @@ CA in `WIF_ISSUER_CA`. Genau das zeigt der Negativtest `validator-foreign-ca`
 | Falscher Hostname im SAN (Meldung: *No subject alternative DNS name matching …*) | `WIF_ISSUER` muss `https://issuer.wif.local` sein; das Zertifikat gilt nur für `DNS:issuer.wif.local` |
 
 Zeigt `WIF_ISSUER` auf einen anderen Host (etwa den API-Server), scheitert die Discovery
-schon vorher: Der Validator erreicht vom Cluster nur `ingress-lb :443`. Dann
+schon vorher: Der Validator erreicht vom Cluster nur `load-balancer :443`. Dann
 `cp .env.example .env` und `docker compose up -d --force-recreate validator`.
 
 ---
