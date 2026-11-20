@@ -23,9 +23,9 @@ Für Details zur Umsetzung:
 | Dokument | Inhalt |
 |---|---|
 | [technical/architecture.md](technical/architecture.md) | Compose-Topologie: alle Services inkl. `ingress-lb`, die Volumes, die drei Netze, Startreihenfolge. |
-| [technical/bootstrap-und-issuer.md](technical/bootstrap-und-issuer.md) | Lab-PKI (`pki-init.sh`), Signaturschlüssel und zweiphasiger Wechsel (`sa-keys.sh`), `bootstrap.sh`, der Issuer-Pod (`sync` + `web`), Traefik-Ingress und `ingress-lb`, Härtung von `wif-issuer`, Verhalten bei Fehlern. |
+| [technical/bootstrap-und-issuer.md](technical/bootstrap-und-issuer.md) | Lab-PKI (`pki-init.sh`), Signaturschlüssel und zweiphasiger Wechsel (`sa-keys.sh`), `bootstrap.sh`, der Discovery-Pod (`sync` + `web`), Gateway, HTTPRoute und `ingress-lb`, Härtung von `wif-issuer-discovery`, Verhalten bei Fehlern. |
 | [technical/validator.md](technical/validator.md) | Der Java-Dienst: Konfiguration, Startablauf, die Nimbus-Validierungskette, die Endpunkte, die Tests. |
-| [technical/trust-und-tls.md](technical/trust-und-tls.md) | Die TLS-Vertrauensbeziehungen inkl. strict SNI am Ingress; wie der Validator einen Truststore nur mit der internen CA baut; `PKIX path building failed`. |
+| [technical/trust-und-tls.md](technical/trust-und-tls.md) | Die TLS-Vertrauensbeziehungen inkl. strict SNI am Gateway; wie der Validator einen Truststore nur mit der internen CA baut; `PKIX path building failed`. |
 | [technical/build-und-betrieb.md](technical/build-und-betrieb.md) | Images & Multi-Stage-Build, die Betriebsbefehle, Schlüsselwechsel, `run-all-checks.sh`, alle `.env`-Variablen, häufige Fehlerbilder. |
 | [technical/autorisierungsserver.md](technical/autorisierungsserver.md) | Keycloak (Startmodus, föderierte Client-Authentisierung, Realm), `service-r` als Resource Server, `access-token.sh`, gemessenes Keycloak-Verhalten und Speicherbedarf. |
 
@@ -37,7 +37,8 @@ Für Details zur Umsetzung:
 | [adr/0002-eigenstaendiger-issuer-endpoint.md](adr/0002-eigenstaendiger-issuer-endpoint.md) | Warum ein eigener Issuer-Endpoint statt anonymem Zugriff auf den API-Server. |
 | [adr/0003-getrennte-vertrauensbereiche-interne-pki.md](adr/0003-getrennte-vertrauensbereiche-interne-pki.md) | Interne PKI als Vertrauensanker, getrennte Netze; der Veröffentlichungsweg (Push per mTLS) ist durch ADR 0005 abgelöst. |
 | [adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md](adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md) | Autorisierung getrennt von Identität: ein Keycloak-Realm pro Fachbereich, ServiceAccount-Token als Client-Nachweis, Scopes als Rechte. |
-| [adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) | Issuer-Pod im Cluster liefert Discovery-Dokument und JWKS per Pull hinter einem Ingress aus; Härtung des Namespace, Schlüsselwechsel in zwei Phasen. |
+| [adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) | Discovery-Pod im Cluster liefert Discovery-Dokument und JWKS per Pull aus; Härtung des Namespace, Schlüsselwechsel in zwei Phasen. |
+| [adr/0006-gateway-api-statt-ingress.md](adr/0006-gateway-api-statt-ingress.md) | Gateway API (eigenes `Gateway` + `HTTPRoute`) statt `Ingress` für die Route zum Discovery-Pod; Schutz der Issuer-Adresse über `allowedRoutes`/`allowedListeners` und Hostname-Pflicht. |
 
 ## Präsentation
 

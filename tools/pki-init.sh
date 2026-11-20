@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot lab PKI, standing in for the organisation's internal PKI:
 #   - a root CA (key stays in the pki-ca volume, nobody else mounts it)
-#   - the serving certificate of the issuer ingress (issuer.wif.local)
+#   - the serving certificate of the issuer Gateway (issuer.wif.local)
 #   - the serving certificate of the domain authorization server (keycloak)
 #   - the serving certificate of resource server R (service-r)
 #   - the serving certificate of the validator
@@ -71,7 +71,7 @@ cp "$CA_DIR/ca.crt" "$TRUST_DIR/ca.crt"
 
 if [ ! -s "$ISSUER_DIR/tls.crt" ] \
    || ! openssl x509 -in "$ISSUER_DIR/tls.crt" -noout -checkhost issuer.wif.local | grep -q 'does match'; then
-    echo "pki-init: issuing issuer ingress serving certificate (issuer.wif.local)"
+    echo "pki-init: issuing issuer Gateway serving certificate (issuer.wif.local)"
     issue_cert tls "/O=WIF Lab/CN=issuer.wif.local" "$SERVER_EXT" "$CA_DIR/ca.crt" "$CA_DIR/ca.key" "$ISSUER_DIR"
 fi
 

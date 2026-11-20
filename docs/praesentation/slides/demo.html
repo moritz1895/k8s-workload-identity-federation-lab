@@ -11,7 +11,7 @@
 <p class="cmt"># Token-Austausch und Zugriff auf Dienst R</p>
 <p class="cmd">docker compose run --rm demo authz</p>
 <div class="gap"></div>
-<p class="cmt"># Veröffentlichung über den Ingress, nur lesend</p>
+<p class="cmt"># Veröffentlichung über Traefik, nur GET</p>
 <p class="cmd">docker compose run --rm demo</p>
 <div class="gap"></div>
 <p class="cmt"># alles, inkl. Härtung, Netztrennung, Schlüsselwechsel</p>
@@ -23,7 +23,7 @@
 <li>consumer tauscht sein ServiceAccount-Token gegen ein Access-Token</li>
 <li>consumer → Dienst R: 200</li>
 <li>Recht fehlt: 403; unbekannte Workload: abgelehnt</li>
-<li>Keycloak-Administration über das Gateway nicht erreichbar</li>
+<li>Keycloak-Administration über keycloak-gateway nicht erreichbar</li>
 <li>Issuer-Endpunkt nur lesend: PUT, POST, DELETE abgelehnt, fremder Host abgewiesen</li>
 </ol>
 </div>

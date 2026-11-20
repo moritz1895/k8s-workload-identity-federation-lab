@@ -1,0 +1,108 @@
+# Admission rules that protect the issuer discovery endpoint. Whoever decides what is
+# served under the JWKS URL can forge ServiceAccount tokens for every ServiceAccount.
+#
+#   issuer-host-reserved — outside wif-issuer-discovery, every Gateway or ListenerSet
+#                          listener names a hostname, and neither a listener nor a
+#                          route (HTTPRoute, GRPCRoute, TLSRoute) uses the issuer host,
+#                          also not via a wildcard. A listener without a hostname
+#                          accepts every host, the issuer host included.
+#   issuer-discovery-image-digest — workloads in wif-issuer-discovery run only images
+#                          pinned by digest
+#
+# Traefik reads routes only from the Gateway API: its Ingress provider and its own CRDs
+# are switched off (01-traefik-config.yaml). Routes of other namespaces cannot attach to
+# the issuer's Gateway anyway (allowedRoutes: Same); this policy keeps other Gateways
+# from claiming the issuer host.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: issuer-host-reserved
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["gateways", "listenersets", "httproutes", "grpcroutes", "tlsroutes"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["wif-issuer-discovery"]
+  variables:
+    - name: issuerHost
+      expression: "'issuer.wif.local'"
+    - name: hasListeners
+      expression: "object.kind == 'Gateway' || object.kind == 'ListenerSet'"
+    - name: hostnames
+      expression: >-
+        variables.hasListeners
+          ? object.spec.listeners.filter(l, has(l.hostname)).map(l, l.hostname)
+          : (has(object.spec.hostnames) ? object.spec.hostnames : [])
+  validations:
+    - expression: >-
+        !variables.hasListeners
+        || object.spec.listeners.all(l, has(l.hostname) && l.hostname != '')
+      message: "outside wif-issuer-discovery every listener must name a hostname (a listener without one also accepts issuer.wif.local)"
+      reason: Forbidden
+    - expression: >-
+        variables.hostnames.all(h, h != variables.issuerHost
+          && !(h.startsWith('*') && variables.issuerHost.endsWith(h.substring(1))))
+      message: "the issuer host issuer.wif.local is reserved for namespace wif-issuer-discovery"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: issuer-host-reserved
+spec:
+  policyName: issuer-host-reserved
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: issuer-discovery-image-digest
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs", "cronjobs"]
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: wif-issuer-discovery
+  variables:
+    - name: podSpec
+      expression: >-
+        object.kind == 'Pod' ? object.spec
+        : object.kind == 'CronJob' ? object.spec.jobTemplate.spec.template.spec
+        : object.spec.template.spec
+    - name: images
+      expression: >-
+        variables.podSpec.containers.map(c, c.image)
+        + (has(variables.podSpec.initContainers) ? variables.podSpec.initContainers.map(c, c.image) : [])
+        + (has(variables.podSpec.ephemeralContainers) ? variables.podSpec.ephemeralContainers.map(c, c.image) : [])
+  validations:
+    - expression: "variables.images.all(i, i.matches('@sha256:[0-9a-f]{64}$'))"
+      messageExpression: "'images in wif-issuer-discovery must be pinned by digest: ' + variables.images.filter(i, !i.matches('@sha256:[0-9a-f]{64}$')).join(', ')"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: issuer-discovery-image-digest
+spec:
+  policyName: issuer-discovery-image-digest
+  validationActions: ["Deny"]

@@ -18,7 +18,7 @@ Probleme mit ihrer Lösung.
 | `keycloak` | – (Fremd-Image) | `quay.io/keycloak/keycloak:26.8.2` | Unverändertes Keycloak; Realm per Bind Mount, siehe [autorisierungsserver.md](autorisierungsserver.md). |
 | `server` | – (Fremd-Image) | `rancher/k3s:v1.34.11-k3s1` | k3s mit dem mitgelieferten Traefik. Wird nur gezogen, nicht gebaut. |
 | `ingress-lb`, `keycloak-gateway`, `keycloak-admin` | – (Fremd-Image) | `nginx:1.29-alpine` | Unveränderter nginx; Konfiguration per Bind Mount aus `tools/`. |
-| `issuer` (Pod, `wif-issuer`) | – (Fremd-Image) | `curlimages/curl:8.23.0` (`sync`), `nginxinc/nginx-unprivileged:1.31.7-alpine` (`web`), beide per Digest gepinnt | Wird im Cluster gezogen; Skript und nginx-Config kommen aus ConfigMaps. |
+| `issuer-discovery` (Pod, `wif-issuer-discovery`) | – (Fremd-Image) | `curlimages/curl:8.23.0` (`sync`), `nginxinc/nginx-unprivileged:1.31.7-alpine` (`web`), beide per Digest gepinnt | Wird im Cluster gezogen; Skript und nginx-Config kommen aus ConfigMaps. |
 | `consumer`, `reader`, `stranger` (Pods) | – (Fremd-Image) | `curlimages/curl:8.11.1` | Wird im Cluster gezogen; Skripte kommen aus ConfigMaps. |
 
 ### Das `tools/`-Image
@@ -155,7 +155,7 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
 
 - `run` startet einen einmaligen `demo`-Container und aktiviert dessen Profil automatisch.
 - `--rm` entfernt den Container nach dem Lauf.
-- `all` (Standard): Discovery + JWKS über den Ingress anzeigen, Token prägen und dekodieren,
+- `all` (Standard): Discovery + JWKS über das Gateway anzeigen, Token prägen und dekodieren,
   Happy-Path aus dem Pod (HTTP 200), Negativfälle falsche Audience / manipulierte Signatur
   (HTTP 401), Issuer-Endpunkt nur lesbar und nur für den eigenen Host (`PUT`/`POST`/`DELETE`
   `403`, fremder SNI ohne Handshake). Mit `DEMO_EXPIRY=1 docker compose run --rm demo` kommt
@@ -165,11 +165,11 @@ docker compose down -v               # alles wieder entfernen (inkl. Volumes)
   Admin-Oberfläche aus dem Pod unerreichbar). Mit `DEMO_EXPIRY=1` zusätzlich ein
   ~6-minütiger Ablauf-Test des Access-Tokens. Siehe
   [../features/keycloak-autorisierungsserver.md](../features/keycloak-autorisierungsserver.md#12-testfälle).
-- `hardening`: Schutz von `wif-issuer` (H1–H5): Admission Policies per
-  `kubectl apply --dry-run=server` (Issuer-Host, Wildcards, Regeln ohne Host, Router-Annotationen,
-  Default-Backend, Images ohne Digest), Priorität der Issuer-Route, Traefik ohne CRD- und
-  Gateway-Provider, RBAC per `kubectl auth can-i`, NetworkPolicies, Pod-Härtung.
-- `resilience`: Issuer-Pod ohne API-Server (R1) und mit implausiblem Stand (R2); stellt
+- `hardening`: Schutz von `wif-issuer-discovery` (H1–H5): Admission Policies per
+  `kubectl apply --dry-run=server` (Gateway-Listener und HTTPRoutes für den Issuer-Host,
+  Wildcards, Listener ohne Hostname, Images ohne Digest), Gateway `Programmed`, fremde
+  HTTPRoute mit `NotAllowedByListeners` abgewiesen, Traefik nur mit Gateway-Provider, RBAC per `kubectl auth can-i`, NetworkPolicies, Pod-Härtung.
+- `resilience`: Discovery-Pod ohne API-Server (R1) und mit implausiblem Stand (R2); stellt
   NetworkPolicy und Deployment danach wieder her.
 - `pre-rotation` / `staged` / `post-rotation`: die drei Prüfpunkte des Schlüsselwechsels,
   siehe unten; `staged` und `post-rotation` prüfen auch Keycloak.
@@ -189,8 +189,8 @@ docker compose up -d --wait server
 docker compose run --rm demo post-rotation   # erstes Token mit neuer kid ohne Wiederholung angenommen?
 ```
 
-`demo staged` wartet bis zu 180 s, bis der Issuer-Pod die neue `kid` ausliefert, und prüft,
-dass jeder Issuer-Pod sie geloggt hat. `activate` erst danach ausführen. Im Lab startet
+`demo staged` wartet bis zu 180 s, bis der Discovery-Pod die neue `kid` ausliefert, und prüft,
+dass jeder Discovery-Pod sie geloggt hat. `activate` erst danach ausführen. Im Lab startet
 ein Neustart von `server` den ganzen Knoten neu; `demo post-rotation` wartet deshalb zuerst,
 bis der Issuer wieder ausliefert, und prüft am Ende, dass das JWKS genau zwei Schlüssel
 enthält: den neuen und den vorherigen. Hintergrund:
@@ -323,20 +323,20 @@ zueinander.
 
 ### `ingress-lb` wird nicht `healthy`
 
-`ingress-lb` wird erst gesund, wenn der Issuer-Pod das JWKS über den Ingress ausliefert. Bleibt
+`ingress-lb` wird erst gesund, wenn der Discovery-Pod das JWKS über das Gateway ausliefert. Bleibt
 es `starting`:
 
 ```bash
 docker compose logs bootstrap                                               # Exit 0? Rollouts ok?
-docker compose exec server kubectl -n wif-issuer get pods                   # issuer bereit?
-docker compose exec server kubectl -n wif-issuer logs deploy/issuer -c sync # REJECTED? API-Server lesbar?
+docker compose exec server kubectl -n wif-issuer-discovery get pods,gateway          # Pods bereit? Gateway Programmed?
+docker compose exec server kubectl -n wif-issuer-discovery logs deploy/issuer-discovery -c sync # REJECTED? API-Server lesbar?
 docker compose exec server kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik
 docker compose logs ingress-lb                                              # kommen Verbindungen an?
 ```
 
 Typische Ursachen: `bootstrap` ist gescheitert (kein Secret `issuer-tls`, Manifest abgelehnt),
 Traefik läuft noch nicht, `sync` lehnt den Stand als implausibel ab (`REJECTED state`, z. B.
-weil `service-account-issuer` nicht `https://issuer.wif.local` ist), oder das Ingress-Zertifikat
+weil `service-account-issuer` nicht `https://issuer.wif.local` ist), oder das Gateway-Zertifikat
 passt nicht zur CA in `ca-trust` (siehe vorheriger Abschnitt).
 
 ### Der Validator ist dauerhaft `unhealthy`
@@ -376,6 +376,6 @@ Git Bash): `bash tools/run-all-checks.sh`.
 - [validator.md](validator.md) – der Java-Service, Startablauf, Endpunkte
 - [autorisierungsserver.md](autorisierungsserver.md) – Keycloak und `service-r`
 - [trust-und-tls.md](trust-und-tls.md) – `PKIX path building failed` im Detail
-- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap, Issuer-Pod
+- [bootstrap-und-issuer.md](bootstrap-und-issuer.md) – PKI, Signaturschlüssel, Bootstrap, Discovery-Pod
 - [../use-cases.md](../use-cases.md) – die Abläufe end to end
 - [../kubernetes-primer.md](../kubernetes-primer.md) – Kubernetes-Grundbegriffe

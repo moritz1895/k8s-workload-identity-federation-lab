@@ -125,9 +125,9 @@ const W = 1280, H = 720;
 const N = {
   pki: { x: 290, y: 20,  w: 250, h: 84, t: "Interne PKI", a: "Beglaubigung", s: "Lab-CA · beglaubigt die Stellen" },
   api: { x: 60,  y: 158, w: 220, h: 86, t: "API-Server", a: "Passamt", s: "stellt „Pässe“ aus" },
-  iss: { x: 290, y: 300, w: 230, h: 100, t: "Issuer-Pod", a: "Aushang", s: "zeigt die Prüfmerkmale" },
+  iss: { x: 290, y: 300, w: 230, h: 100, t: "Discovery-Pod", a: "Aushang", s: "zeigt die Prüfmerkmale" },
   pod: { x: 60,  y: 508, w: 250, h: 92, t: "Pod „consumer“", a: "Reisende:r", s: "ServiceAccount consumer" },
-  ing: { x: 530, y: 150, w: 186, h: 110, t: "Ingress", a: "Schalter", s: "Traefik · issuer.wif.local" },
+  ing: { x: 530, y: 150, w: 186, h: 110, t: "Traefik", a: "Schalter", s: "Gateway-Controller", s2: "Gateway + HTTPRoute" },
   kc:  { x: 900, y: 150, w: 300, h: 110, t: "Keycloak", a: "Botschaft", s: "stellt „Visa“ aus · nur Realm-Pfade" },
   r:   { x: 960, y: 500, w: 220, h: 92, t: "Dienst R", a: "Grenze", s: "service-r · prüft das „Visum“" }
 };
@@ -152,8 +152,8 @@ const STEPS = [
     fx: null },
 
   { ph: 1, title: "Die interne PKI sichert die Verbindungen",
-    text: "Die interne PKI (im Lab: pki-init) ist die „Beglaubigung“: Sie bestätigt, dass die Stellen echt sind, und stellt dafür Serverzertifikate für den Ingress des Clusters, Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Ein Client-Zertifikat bekommt niemand – weder eine Workload noch eine Komponente des Clusters. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
-    il: "Wer bekommt was", inspect: "Ingress    Server-Zert. issuer.wif.local\nKeycloak   Server-Zert. + Root-CA\nDienst R   Server-Zert. + Root-CA\nPod        nur Root-CA\nIssuer-Pod nichts von der PKI\nClient-Zertifikate: keine\n(Pfeile im Bild vereinfacht)",
+    text: "Die interne PKI (im Lab: pki-init) ist die „Beglaubigung“: Sie bestätigt, dass die Stellen echt sind, und stellt dafür Serverzertifikate für Traefik im Cluster (Host issuer.wif.local), Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Ein Client-Zertifikat bekommt niemand – weder eine Workload noch eine Komponente des Clusters. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "Traefik    Server-Zert. issuer.wif.local\n           (am Gateway issuer-discovery)\nKeycloak   Server-Zert. + Root-CA\nDienst R   Server-Zert. + Root-CA\nPod        nur Root-CA\nDiscovery-Pod  nichts von der PKI\nClient-Zertifikate: keine\n(Pfeile im Bild vereinfacht)",
     segs: [par(mv("pki", "ing", "Server-Zert.", "trust"), mv("pki", "kc", "", "trust"))],
     fx: s => { ["ing", "kc", "r"].forEach(n => s.cert.add(n)); ["pod", "kc", "r"].forEach(n => s.ca.add(n)); } },
   { ph: 1, title: "Der Cluster signiert mit eigenem Schlüssel",
@@ -161,9 +161,9 @@ const STEPS = [
     il: "Startparameter des API-Servers", inspect: "service-account-issuer\n  = https://issuer.wif.local\nservice-account-jwks-uri\n  = https://issuer.wif.local/openid/v1/jwks",
     segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer.wif.local"], "right")],
     fx: s => { s.apiKey = 1; } },
-  { ph: 1, title: "Der Issuer-Pod hängt die Prüfmerkmale aus",
-    text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Issuer-Pod („Aushang“), alle 15 Sekunden die Prüfmerkmale – Discovery-Dokument und JWKS – beim API-Server. Die Kopie liefert er nur lesend über den Ingress aus, den einzigen „Schalter“ nach außen. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen. Es gibt keinen Schreibweg von außen und kein Client-Zertifikat. Der private Schlüssel verlässt den API-Server nie.",
-    il: "Details", inspect: "Issuer-Pod (Namespace wif-issuer):\n  sync: GET beim API-Server, alle 15 s\n        darf nur Discovery lesen\n  web:  nginx, nur GET, kein Token\nIngress (Traefik):\n  Host issuer.wif.local, nur 2 Pfade\n  Serverzert. der internen PKI\nAusgeliefert werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen",
+  { ph: 1, title: "Der Discovery-Pod hängt die Prüfmerkmale aus",
+    text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Discovery-Pod („Aushang“), alle 15 Sekunden die Prüfmerkmale – Discovery-Dokument und JWKS – beim API-Server. Nach außen geht die Kopie nur über Traefik, den einzigen „Schalter“: Gateway und HTTPRoute lassen nur GET auf die zwei Pfade durch, nur GET erreicht den Pod. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen. Es gibt keinen Schreibweg von außen und kein Client-Zertifikat. Der private Schlüssel verlässt den API-Server nie.",
+    il: "Details", inspect: "Discovery-Pod (Namespace wif-issuer-discovery):\n  sync: GET beim API-Server, alle 15 s\n        darf nur Discovery lesen\n  web:  nginx, nur GET, kein Token\nTraefik (Gateway-Controller):\n  Gateway: Listener issuer.wif.local,\n    Serverzert. der internen PKI\n  HTTPRoute: nur GET, nur 2 Pfade\nAusgeliefert werden:\n  JWKS: öffentliche Schlüssel + Key-ID\n  Discovery: sagt, wo die JWKS liegen",
     segs: [mv("api", "iss", "GET · JWKS", "key", undefined, true), chk("iss", ["Aussteller und jwks_uri stimmen", "mindestens ein Schlüssel", "neue Key-ID → Warnung im Log"], "below")],
     fx: s => { s.issJwks = 1; } },
 
@@ -174,12 +174,12 @@ const STEPS = [
     fx: s => { s.files.push("„Pass“"); } },
 
   { ph: 3, title: "Der Pod fragt bei Keycloak nach Rechten",
-    text: "Der Pod ruft Keycloak auf, die „Botschaft“ seines Fachbereichs. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Vor Keycloak sitzt ein Gateway (im Bild nicht eigens gezeigt): Es lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
+    text: "Der Pod ruft Keycloak auf, die „Botschaft“ seines Fachbereichs. Statt Passwort oder Client-Zertifikat legt er seinen „Pass“ vor und nennt die Rechte (Scopes), die er für Dienst R möchte. Vor Keycloak sitzt keycloak-gateway, ein nginx (im Bild nicht eigens gezeigt): Er lässt nur Anfragen an den Bereich (Realm) des Fachbereichs durch, die Verwaltung von Keycloak bleibt für Pods unerreichbar.",
     il: "Anfrage (gekürzt)", inspect: "POST …/realms/domain-rst/…/token\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion=<„Pass“>\n  ← der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R",
-    segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["Gateway: nur Realm-Pfade"], "below")], fx: null },
+    segs: [mv("pod", "kc", "POST /token · TLS", "token"), chk("kc", ["keycloak-gateway: nur Realm-Pfade"], "below")], fx: null },
   { ph: 3, title: "Keycloak holt die Prüfmerkmale des Clusters",
-    text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die Prüfmerkmale (JWKS) am „Schalter“, dem Ingress, beim Issuer-Pod und merkt sie sich. Das Serverzertifikat am Ingress muss von der internen CA stammen. Den API-Server fragt Keycloak nie.",
-    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab ingress-lb,\nnur TCP) → Ingress, dort endet TLS\n→ Issuer-Pod, nur GET",
+    text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die Prüfmerkmale (JWKS) am „Schalter“ – bei Traefik – vom Discovery-Pod und merkt sie sich. Das Serverzertifikat, das Traefik für issuer.wif.local zeigt, muss von der internen CA stammen. Den API-Server fragt Keycloak nie.",
+    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab ingress-lb,\nnur TCP) → Traefik, dort endet TLS\n→ HTTPRoute: nur GET → Discovery-Pod",
     segs: [mv("kc", "ing", "GET · TLS", "token"), mv("ing", "iss", "", "token"), mv("iss", "ing", "", "key"), mv("ing", "kc", "Prüfmerkmale (JWKS)", "key")],
     fx: s => { s.jwks.add("kc"); } },
   { ph: 3, title: "Keycloak prüft den „Pass“",
@@ -197,7 +197,7 @@ const STEPS = [
     il: "Anfrage", inspect: "GET https://service-r.wif.local:8443/orders\nAuthorization: Bearer <„Visum“>",
     segs: [mv("pod", "r", "GET /orders · TLS", "token")], fx: null },
   { ph: 4, title: "Dienst R holt die Prüfmerkmale des Realms",
-    text: "Beim ersten „Visum“ lädt Dienst R die Prüfmerkmale der Visa – die öffentlichen Schlüssel des Realms (Realm-JWKS) – bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne Gateway. Den Ingress des Clusters braucht Dienst R nicht.",
+    text: "Beim ersten „Visum“ lädt Dienst R die Prüfmerkmale der Visa – die öffentlichen Schlüssel des Realms (Realm-JWKS) – bei Keycloak und merkt sie sich. Dienst R liegt im Fachbereich und erreicht Keycloak direkt, ohne keycloak-gateway. Traefik im Cluster braucht Dienst R nicht.",
     il: "", inspect: "",
     segs: [mv("r", "kc", "GET · TLS", "token"), mv("kc", "r", "Prüfmerkmale (Realm-JWKS)", "key")],
     fx: s => { s.jwks.add("r"); } },
@@ -214,12 +214,12 @@ const STEPS = [
     text: "Löschen verlangt SCOPE_r:orders:admin. Dieses Recht hat der Fachbereich der Workload nicht gegeben, also antwortet Dienst R mit 403. Das „Visum“ ist gültig, es reicht nur nicht für diese Aktion.",
     il: "", inspect: "",
     segs: [mv("pod", "r", "DELETE /orders/7", "token"), mv("r", "pod", "403", "bad")], fx: null },
-  { ph: 5, title: "Gegenprobe: nur die Ingress-Route, kein Weg zum API-Server",
-    text: "Vom Cluster erreicht Keycloak nur den „Schalter“: die Ingress-Route mit den zwei Pfaden für Discovery-Dokument und JWKS, und auch die nur lesend. Ein anderer Host wird am Ingress abgewiesen. Zum API-Server führt kein Netzweg, und Zugangsdaten dafür hat Keycloak nicht – es braucht sie auch nicht. Dienst R braucht nur Keycloak.",
-    il: "Geprüft im Lab", inspect: "GET über ingress-lb       erlaubt\nPUT, POST, DELETE         403\nanderer Pfad              404\nanderer Host (SNI)        kein TLS\nAPI-Server, Node-Port     kein Netzweg",
+  { ph: 5, title: "Gegenprobe: nur die HTTPRoute, kein Weg zum API-Server",
+    text: "Vom Cluster erreicht Keycloak nur den „Schalter“: Traefik mit der HTTPRoute für die zwei Pfade Discovery-Dokument und JWKS, und auch die nur per GET. Ein anderer Host wird bei Traefik abgewiesen; den Host issuer.wif.local darf außer dem Gateway issuer-discovery keines beanspruchen. Zum API-Server führt kein Netzweg, und Zugangsdaten dafür hat Keycloak nicht – es braucht sie auch nicht. Dienst R braucht nur Keycloak.",
+    il: "Geprüft im Lab", inspect: "GET über ingress-lb       erlaubt\nPUT, POST, DELETE         404\nanderer Pfad              404\nanderer Host (SNI)        kein TLS\nAPI-Server, Node-Port     kein Netzweg",
     segs: [par(mv("kc", "ing", "nur GET", "ok"), blkTo("kc", 752, 330, "left", "kein Weg zum API-Server"), blkTo("r", 752, 630, "left", "kein Weg zum API-Server"))], fx: null },
   { ph: 5, title: "Betrieb: Schlüsselwechsel in zwei Phasen",
-    text: "Phase 1 (sa-keys stage): Das „Passamt“ hängt das Prüfmerkmal für den neuen Schlüssel B vorab aus, also ins JWKS; signiert wird weiter mit A. Der Issuer-Pod übernimmt B beim nächsten Abgleich und meldet die neue Key-ID im Log. Phase 2 (sa-keys activate), erst wenn B ausgeliefert wird: Ab jetzt signiert B. Kommt ein „Pass“ mit der neuen Key-ID, lädt Keycloak neu und findet sie schon – bereits der erste wird angenommen. A bleibt für noch gültige Pässe im JWKS und fällt beim nächsten Wechsel weg.",
+    text: "Phase 1 (sa-keys stage): Das „Passamt“ hängt das Prüfmerkmal für den neuen Schlüssel B vorab aus, also ins JWKS; signiert wird weiter mit A. Der Discovery-Pod übernimmt B beim nächsten Abgleich und meldet die neue Key-ID im Log. Phase 2 (sa-keys activate), erst wenn B ausgeliefert wird: Ab jetzt signiert B. Kommt ein „Pass“ mit der neuen Key-ID, lädt Keycloak neu und findet sie schon – bereits der erste wird angenommen. A bleibt für noch gültige Pässe im JWKS und fällt beim nächsten Wechsel weg.",
     il: "Schlüssel im Verlauf", inspect: "Zeitpunkt       signiert  im JWKS\nvorher          A         A\nnach stage      A         A, B\nnach activate   B         B, A\n(jeweils Neustart des API-Servers)",
     segs: [chk("api", ["stage: B vorab im JWKS", "signiert weiter mit A"], "right"), mv("api", "iss", "JWKS A + B", "key"), chk("iss", ["liefert B aus", "Warnung im Log: neue Key-ID"], "below"), mv("api", "pod", "„Pass“ (B)", "token"), mv("kc", "ing", "GET (neue Key-ID)", "token"), mv("ing", "kc", "JWKS B + A", "key")],
     fx: s => { s.apiKey = 2; s.issJwks = 2; } }
@@ -369,6 +369,7 @@ const sketch = p => {
       p.textAlign(p.LEFT, p.TOP);
     }
     p.textStyle(p.NORMAL); p.textSize(14); p.fill(col("muted")); p.text(b.s, b.x + 12, b.y + 30);
+    if (b.s2) p.text(b.s2, b.x + 12, b.y + 48);
     // Merkmale, bei Platzmangel in einer zweiten Zeile
     const bl = [];
     if (st.cert.has(n)) bl.push(["Zert.", "trust"]);
@@ -379,7 +380,7 @@ const sketch = p => {
     if (n === "kc" && st.files.includes("„Visum“")) bl.push(["Realm-Schlüssel", "accent"]);
     if (n === "r" && st.jwks.has("r")) bl.push(["Realm-JWKS", "accent"]);
     if (n === "pki") bl.push(["CA-Schlüssel", "trust"]);
-    let bx = b.x + 12, by = b.y + 54;
+    let bx = b.x + 12, by = b.y + (b.s2 ? 74 : 54);
     p.textSize(13); p.textStyle(p.BOLD);
     bl.forEach(([label, tone]) => {
       const w = p.textWidth(label) + 16;

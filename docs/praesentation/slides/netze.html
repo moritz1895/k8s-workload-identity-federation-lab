@@ -2,9 +2,9 @@
 <h2>Anhang: Verbindungen, Netze und TLS</h2>
 <table class="tbl">
 <tr class="head"><th style="width:36%">Verbindung</th><th style="width:20%">Netz</th><th style="width:44%">Absicherung</th></tr>
-<tr><td>Issuer-Pod → API-Server (Discovery + JWKS)</td><td>im Cluster</td><td>TLS mit der Cluster-CA; ServiceAccount, der nur diese zwei Pfade lesen darf</td></tr>
-<tr><td>Keycloak, Validator → ingress-lb → Ingress (Port 443)</td><td>relying-net, cluster-net</td><td>TLS bis zum Ingress, Serverzertifikat der internen CA; ingress-lb reicht nur TCP durch</td></tr>
-<tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; Gateway leitet nur /realms/domain-rst/ weiter</td></tr>
+<tr><td>Discovery-Pod → API-Server (Discovery + JWKS)</td><td>im Cluster</td><td>TLS mit der Cluster-CA; ServiceAccount, der nur diese zwei Pfade lesen darf</td></tr>
+<tr><td>Keycloak, Validator → ingress-lb → Traefik (Port 443)</td><td>relying-net, cluster-net</td><td>TLS bis Traefik, Serverzertifikat der internen CA; ingress-lb reicht nur TCP durch</td></tr>
+<tr><td>Pod → keycloak-gateway → Keycloak</td><td>workload-net, relying-net</td><td>TLS; keycloak-gateway leitet nur /realms/domain-rst/ weiter</td></tr>
 <tr><td>Pod → Dienst R (/orders)</td><td>workload-net</td><td>TLS; Bearer: Access-Token</td></tr>
 <tr><td>Dienst R → Keycloak (Realm-JWKS)</td><td>relying-net</td><td>TLS, Serverzertifikat der internen CA</td></tr>
 <tr><td>Pod → Validator (Variante, /whoami)</td><td>workload-net</td><td>TLS; Bearer: ServiceAccount-Token</td></tr>
@@ -15,5 +15,5 @@
 <li>Kein Client-Zertifikat: Die Schlüssel des Clusters sind öffentlich, geschützt wird, wer bestimmt, was ausgeliefert wird</li>
 <li>run-all-checks.sh prüft die Netztrennung aus Sicht von Keycloak, Dienst R und Validator</li>
 </ul>
-<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Ingress-Knoten: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
+<aside>Drei Docker-Netze bilden die Vertrauensbereiche ab: cluster-net für den Cluster, relying-net für die prüfenden Dienste, workload-net für die Aufrufe der Pods. ingress-lb steht im Lab für den Load Balancer vor den Knoten des Clusters: Er hört nur in relying-net auf Port 443 und reicht an Traefiks Node-Port in cluster-net weiter; TLS endet erst im Cluster. kube-proxy öffnet Node-Ports nur auf der Adresse in cluster-net. Im Namespace wif-issuer-discovery lässt eine NetworkPolicy eingehend nur Traefik zu und ausgehend nur den API-Server. Keycloak hat keinen Host-Port, weil Docker veröffentlichte Ports auch aus anderen Netzen erreichbar macht; die Admin-Konsole läuft nur bei Bedarf über einen eigenen Proxy. TLS ist durchgehend einseitig; real kämen mTLS oder sender-gebundene Tokens als Option dazu.</aside>
 </section>

@@ -1,10 +1,12 @@
-# Configures the ingress controller k3s ships (Traefik):
+# Configures the gateway controller k3s ships (Traefik); the chart creates the
+# GatewayClass `traefik`:
 #   - Service type NodePort with a fixed port; kube-proxy opens node ports only on the
 #     cluster-net address (--nodeport-addresses), where ingress-lb forwards to them
 #   - only the HTTPS entry point is exposed
-#   - only plain Ingress objects define routes: Traefik's own CRDs and the Gateway
-#     API provider are switched off, so the admission policies in
-#     05-issuer-admission.yaml cover every route
+#   - routes come only from the Gateway API (Gateway + HTTPRoute): the Ingress provider
+#     and Traefik's own CRDs (IngressRoute & co.) are switched off, so the admission
+#     policies in 05-issuer-discovery-admission.yaml cover every route
+#   - no default Gateway from the chart; each Gateway is created explicitly
 #   - strict SNI: a TLS handshake for a host without a configured certificate fails
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -23,10 +25,12 @@ spec:
       websecure:
         nodePort: 30443
     providers:
+      kubernetesIngress:
+        enabled: false
       kubernetesCRD:
         enabled: false
       kubernetesGateway:
-        enabled: false
+        enabled: true
       file:
         enabled: true
         content: |
@@ -35,6 +39,11 @@ spec:
               default:
                 sniStrict: true
                 minVersion: VersionTLS12
+    gateway:
+      enabled: false
+    gatewayClass:
+      enabled: true
+      name: traefik
     resources:
       requests:
         cpu: 10m

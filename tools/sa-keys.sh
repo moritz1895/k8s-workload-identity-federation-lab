@@ -9,7 +9,7 @@
 #   retire   — emergency: drop the previous key from the verify set at once, e.g.
 #              when it is compromised; tokens signed with it stop being accepted
 #              once the relying parties refresh their keys
-# Phase 1 exists because the relying parties get keys with a delay (issuer pod sync,
+# Phase 1 exists because the relying parties get keys with a delay (discovery pod sync,
 # caches): run `activate` only after the staged key is served at the JWKS URL, so no
 # relying party sees a token whose kid it cannot find yet. Between two `activate` runs lie at
 # least the maximum token lifetime plus the relying parties' key cache time.

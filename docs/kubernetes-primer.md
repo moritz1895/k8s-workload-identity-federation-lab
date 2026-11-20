@@ -34,7 +34,7 @@ Node in einem - läuft als ein einziger Docker-Container namens `server`, siehe
 **k3s** ist eine besonders schlanke, in einer einzelnen ausführbaren Datei gebündelte
 Kubernetes-Distribution, mit der sich hier der ganze Cluster als **ein Container** betreiben
 lässt - ideal für ein Lab, ohne dass auf dem Host irgendetwas außer Docker installiert sein
-muss. k3s bringt den Ingress-Controller Traefik mit (siehe [Ingress](#service-und-ingress)).
+muss. k3s bringt Traefik mit, hier als Gateway-Controller (siehe [Service, Ingress und Gateway API](#service-ingress-und-gateway-api)).
 
 In [`compose.yaml`](../compose.yaml) wird k3s mit ein paar Extras gestartet:
 
@@ -50,7 +50,7 @@ In [`compose.yaml`](../compose.yaml) wird k3s mit ein paar Extras gestartet:
 | `--tls-san=k3s-server` | Trägt den Namen `k3s-server` ins Serverzertifikat des API-Servers ein, damit `kubectl` aus `bootstrap` und `demo` ihn unter diesem Namen erreicht. |
 
 Der Cluster verweist mit `service-account-issuer` und `service-account-jwks-uri` also **auf
-den Issuer-Endpoint hinter dem Ingress**, nicht auf den API-Server selbst. kube-apiserver
+den Issuer-Endpoint hinter dem Gateway**, nicht auf den API-Server selbst. kube-apiserver
 liest die Schlüsseldateien nur beim Start; jede Phase eines Schlüsselwechsels braucht
 deshalb einen Neustart von `server`.
 
@@ -69,8 +69,8 @@ lassen sich pro Namespace vergeben.
 **In diesem PoC:** Zwei Namespaces, angelegt in
 [`manifests/00-namespace.yaml`](../manifests/00-namespace.yaml): `wif-demo` für die
 Workloads `consumer`, `reader` und `stranger` - deshalb enthält der `sub`-Claim ihrer
-Tokens den Namespace, z. B. `system:serviceaccount:wif-demo:consumer` - und `wif-issuer`
-für den Issuer-Pod. `wif-issuer` trägt das Label
+Tokens den Namespace, z. B. `system:serviceaccount:wif-demo:consumer` - und `wif-issuer-discovery`
+für den Discovery-Pod. `wif-issuer-discovery` trägt das Label
 `pod-security.kubernetes.io/enforce: restricted` (siehe [Pod-Härtung](#pod-härtung-und-readiness)).
 
 ---
@@ -97,10 +97,10 @@ von selbst, er wartet nur. Die eigentliche Anfrage an den Validator wird von au�
 `kubectl exec` ausgelöst (durch [`tools/demo.sh`](../tools/demo.sh)). Der Pod ist hier
 schlicht der Ort, an dem das projizierte Token liegt.
 
-Das Deployment `issuer` in [`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml) läuft
+Das Deployment `issuer-discovery` in [`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml) läuft
 mit `replicas: 2`. Jeder Pod hat zwei Container, die sich ein `emptyDir` (ein leeres
 Verzeichnis, das so lange lebt wie der Pod) teilen: `sync` (`curlimages/curl`, Skript aus
-der ConfigMap `issuer-sync`) liest alle 15 Sekunden Discovery-Dokument und JWKS vom
+der ConfigMap `issuer-discovery-sync`) liest alle 15 Sekunden Discovery-Dokument und JWKS vom
 API-Server und schreibt einen plausiblen Stand dorthin; `web`
 (`nginxinc/nginx-unprivileged`) liefert ihn nur per `GET` aus. Ein Rollout ersetzt Pods
 erst, wenn der neue bereit ist (`maxUnavailable: 0`).
@@ -113,8 +113,8 @@ erst, wenn der neue bereit ist (`maxUnavailable: 0`).
 für vertrauliche Daten (Schlüssel, Passwörter). Beide lassen sich als Dateien in einen Pod
 einhängen.
 
-**In diesem PoC:** `bootstrap` legt in `wif-issuer` das Secret `issuer-tls`
-(Serverzertifikat und Schlüssel für `issuer.wif.local`, das der Ingress verwendet) und in
+**In diesem PoC:** `bootstrap` legt in `wif-issuer-discovery` das Secret `issuer-tls`
+(Serverzertifikat und Schlüssel für `issuer.wif.local`, das der Gateway-Listener verwendet) und in
 `wif-demo` die ConfigMap `internal-ca` (Root-Zertifikat der internen CA, im Pod unter
 `/etc/internal-ca`) an. In einem echten Cluster liefert diese cert-manager oder die
 PKI-Anbindung der Plattform. Das Skript von `sync` und die nginx-Konfiguration von `web`
@@ -137,7 +137,7 @@ ServiceAccount `consumer` an. Das Deployment referenziert ihn mit
 `serviceAccountName: consumer`. Auffällig: `automountServiceAccountToken: false`. Das schaltet
 das *automatische* Standard-Token ab - der Pod bekommt **nur** die ausdrücklich per
 `projected` Volume angeforderten Tokens (siehe unten), nichts sonst. Genauso beim
-ServiceAccount `issuer`: Dort bekommt nur der Container `sync` ein Token für den
+ServiceAccount `issuer-discovery`: Dort bekommt nur der Container `sync` ein Token für den
 API-Server, `web` keines.
 
 ---
@@ -251,13 +251,13 @@ oder `ClusterRole` (clusterweit) und weist sie per `RoleBinding` / `ClusterRoleB
 Subjekt zu.
 
 **In diesem PoC:** Es gibt genau **ein** RBAC-Objekt, die ClusterRoleBinding
-`wif-issuer-discovery` in [`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml):
+`wif-issuer-discovery` in [`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml):
 
-- Der ServiceAccount `issuer` bekommt die eingebaute ClusterRole
+- Der ServiceAccount `issuer-discovery` bekommt die eingebaute ClusterRole
   `system:service-account-issuer-discovery`. Sie erlaubt nur `GET` auf
   `/.well-known/openid-configuration` und `/openid/v1/jwks` - genau das, was `sync` liest.
   Keine weiteren Rechte, insbesondere keine im eigenen Namespace.
-- Kein RoleBinding gewährt Rechte in `wif-issuer`. Dort schreiben nur Cluster-Admins (im
+- Kein RoleBinding gewährt Rechte in `wif-issuer-discovery`. Dort schreiben nur Cluster-Admins (im
   echten Betrieb der GitOps-Prozess).
 - Der `consumer`-ServiceAccount **braucht keine Rechte**. Der Pod ruft den API-Server
   überhaupt nicht auf - er benutzt sein Token nur, um sich beim *externen* Validator
@@ -267,42 +267,65 @@ Subjekt zu.
   und braucht keine zusätzliche Rolle.
 
 Der Validator bekommt die Discovery-Metadaten **ohne** jedes Cluster-Recht, weil sie vom
-Issuer-Pod hinter dem Ingress ausgeliefert werden und nicht vom API-Server. Die Leserolle
-bekommt nur der Issuer-Pod im Cluster, nicht anonyme Aufrufer von außen
+Discovery-Pod hinter dem Gateway ausgeliefert werden und nicht vom API-Server. Die Leserolle
+bekommt nur der Discovery-Pod im Cluster, nicht anonyme Aufrufer von außen
 ([ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md),
-[ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md)).
+[ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md)).
 
 ---
 
-## Service und Ingress
+## Service, Ingress und Gateway API
 
 **Was ist ein Service:** Ein stabiler Name und eine stabile Adresse im Cluster für eine
-Gruppe gleichartiger Pods. Wer `issuer.wif-issuer.svc` anspricht, landet bei einem der
-bereiten Pods des Deployments `issuer`, egal wie diese gerade heißen.
+Gruppe gleichartiger Pods. Wer `issuer-discovery.wif-issuer-discovery.svc` anspricht,
+landet bei einem der bereiten Pods des Deployments `issuer-discovery`, egal wie diese gerade
+heißen. Ein Service ist nur *im* Cluster erreichbar.
 
-**Was ist ein Ingress:** Ein Objekt, das beschreibt, unter welchem **Host** und welchem
-**Pfad** ein Service von außerhalb des Clusters per HTTP(S) erreichbar ist, und mit welchem
-TLS-Zertifikat. Umgesetzt wird das von einem **Ingress-Controller**, einem Reverse Proxy im
-Cluster - hier **Traefik**, das k3s mitbringt.
+**Wie kommt Verkehr von außen hinein?** Dafür braucht es zwei Dinge, die man leicht
+verwechselt:
 
-**In diesem PoC:** Der Ingress `issuer` in
-[`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml) veröffentlicht unter dem Host
-`issuer.wif.local` genau zwei Pfade (`/.well-known/openid-configuration` und
-`/openid/v1/jwks`, jeweils `pathType: Exact`) zum Service `issuer`, mit dem Zertifikat aus
-dem Secret `issuer-tls`. Traefik ordnet Routen sonst nach der Länge ihrer Regel; die
-Annotation `traefik.ingress.kubernetes.io/router.priority: "1000000000"` setzt die
-Issuer-Route über jede so abgeleitete Priorität. Traefik ist in
-[`manifests/01-traefik-config.yaml`](../manifests/01-traefik-config.yaml) so eingestellt:
+- **Den Controller** - den eigentlichen Reverse Proxy. Er läuft als normaler Pod im
+  Cluster, nimmt Verbindungen an, beendet TLS und leitet an Services weiter. Hier ist das
+  **Traefik** in `kube-system`, das k3s mitbringt. Je nachdem, welche Beschreibung er liest,
+  heißt er Ingress-Controller oder **Gateway-Controller**.
+- **Die Beschreibung** - Kubernetes-Objekte, die festlegen, welcher Host und welcher Pfad zu
+  welchem Service führt. Sie tun selbst nichts; der Controller liest sie und richtet sich
+  danach.
+
+Für die Beschreibung gibt es zwei APIs:
+
+| | `Ingress` | Gateway API (`Gateway`, `HTTPRoute`) |
+|---|---|---|
+| Stand | stabil, aber eingefroren; Kubernetes entwickelt sie nicht weiter | der Nachfolger, stabil seit v1.0; im Lab v1.5.1, von k3s mitgeliefert |
+| Aufbau | ein Objekt: Host, Pfade, Zertifikat | getrennt: Das **Gateway** legt Listener fest (Port, Hostname, Zertifikat, welche Namespaces Routen anhängen dürfen); die **HTTPRoute** hängt sich an einen Listener und leitet Pfade und Methoden an einen Service |
+| Rollen | alle Ingress-Objekte aller Namespaces landen in einer gemeinsamen Tabelle | Gateway = Plattform-Betrieb, Route = Anwendung |
+| Sonderwünsche | herstellerspezifische Annotationen (bei Traefik z. B. Priorität) | in der Spezifikation geregelt, z. B. Vorrang und Methodenfilter |
+
+**In diesem PoC** liest Traefik **nur die Gateway API**; der Ingress-Provider und Traefiks
+eigene Routen-CRDs (`IngressRoute` u. a.) sind abgeschaltet
+([`manifests/01-traefik-config.yaml`](../manifests/01-traefik-config.yaml)). Warum:
+[ADR 0006](adr/0006-gateway-api-statt-ingress.md). In
+[`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml) stehen:
+
+- das **Gateway** `issuer-discovery` (GatewayClass `traefik`) mit einem HTTPS-Listener nur
+  für `issuer.wif.local`, TLS mit dem Secret `issuer-tls`. `allowedRoutes: Same` lässt nur
+  Routen aus `wif-issuer-discovery` zu; eine HTTPRoute aus einem anderen Namespace weist es
+  mit `NotAllowedByListeners` ab. `allowedListeners: None` verhindert, dass jemand über ein
+  `ListenerSet` weitere Listener anhängt.
+- die **HTTPRoute** `issuer-discovery`: nur `GET` auf `/.well-known/openid-configuration`
+  und `/openid/v1/jwks` (Typ `Exact`) zum Service `issuer-discovery`. Jede andere Methode und
+  jeder andere Pfad endet bei Traefik mit `404`, der Pod sieht sie nie.
+
+Außerdem ist Traefik so eingestellt:
 
 - Service vom Typ `NodePort` mit festem Port `30443`, nur der HTTPS-Eingang ist offen.
-- Routen kommen nur aus `Ingress`-Objekten; Traefiks eigene Routen-CRDs (`IngressRoute`
-  u. a.) und die Gateway API sind abgeschaltet, damit die Admission-Regeln unten jede Route
-  erfassen.
+- Kein Standard-Gateway aus dem Helm-Chart; jedes Gateway wird ausdrücklich angelegt.
 - **Strict SNI**: Ein TLS-Handshake für einen Host ohne eigenes Zertifikat schlägt fehl.
 
 Von außen erreicht man Traefik nur über `ingress-lb` (ein nginx im TCP-Modus in Docker
 Compose), der Port 443 aus `relying-net` an `172.31.7.2:30443` durchreicht - der
-Stellvertreter für den Load Balancer vor den Ingress-Knoten eines echten Clusters.
+Stellvertreter für den Load Balancer vor einem echten Cluster. „Ingress“ meint in diesem
+Namen den eingehenden Verkehr, nicht das Kubernetes-Objekt.
 
 ---
 
@@ -313,16 +336,16 @@ Netzwerkebene reden dürfen - eingehend (`Ingress`) und ausgehend (`Egress`). So
 Policy einen Pod erfasst, ist alles verboten, was nicht ausdrücklich erlaubt ist. k3s setzt
 NetworkPolicies selbst durch.
 
-**In diesem PoC** ([`manifests/10-issuer.yaml`](../manifests/10-issuer.yaml)), alle im
-Namespace `wif-issuer`:
+**In diesem PoC** ([`manifests/10-issuer-discovery.yaml`](../manifests/10-issuer-discovery.yaml)), alle im
+Namespace `wif-issuer-discovery`:
 
 | Policy | Wirkung |
 |---|---|
 | `default-deny` | Kein Verkehr rein oder raus, solange keine andere Policy ihn erlaubt. |
-| `issuer-from-ingress-controller` | Eingehend nur von den Traefik-Pods in `kube-system`, nur Port 8080. |
-| `issuer-to-api-server` | Ausgehend nur zum API-Server (`172.31.7.2:6443`). |
+| `issuer-discovery-from-gateway` | Eingehend nur von den Traefik-Pods in `kube-system`, nur Port 8080. |
+| `issuer-discovery-to-api-server` | Ausgehend nur zum API-Server (`172.31.7.2:6443`). |
 
-Workloads aus `wif-demo` erreichen den Issuer-Pod also nicht direkt, und der Issuer-Pod
+Workloads aus `wif-demo` erreichen den Discovery-Pod also nicht direkt, und der Discovery-Pod
 erreicht nichts außer dem API-Server.
 
 ---
@@ -333,16 +356,15 @@ erreicht nichts außer dem API-Server.
 ablehnen. Eine **`ValidatingAdmissionPolicy`** formuliert eine solche Regel als Ausdruck
 (in der Sprache CEL); eine `ValidatingAdmissionPolicyBinding` schaltet sie scharf.
 
-**In diesem PoC** ([`manifests/05-issuer-admission.yaml`](../manifests/05-issuer-admission.yaml)):
+**In diesem PoC** ([`manifests/05-issuer-discovery-admission.yaml`](../manifests/05-issuer-discovery-admission.yaml)):
 
-- **`issuer-host-reserved`**: Außerhalb von `wif-issuer` muss jede Ingress-Regel einen
-  Host nennen, und der darf weder `issuer.wif.local` sein noch ihn per Wildcard abdecken
-  (`*.wif.local`, `*.local`) - weder in den Regeln noch im TLS-Abschnitt. Default-Backends
-  und Traefik-Router-Annotationen (`traefik.ingress.kubernetes.io/router.*`, etwa Priorität
-  oder Pfad-Matcher) sind verboten. Eine Regel ohne Host passt auf jeden Host; zusammen mit
-  einer langen Pfad-Regex könnte sie die Issuer-Route überholen und ein anderer Namespace
-  die Route auf eigene Pods umbiegen.
-- **`issuer-image-digest`**: In `wif-issuer` laufen nur Images mit festem Digest
+- **`issuer-host-reserved`** (für Gateways, ListenerSets und Routen außerhalb von
+  `wif-issuer-discovery`): Jeder Listener muss einen Hostnamen nennen - ein Listener ohne
+  Hostnamen nähme jeden Host an, auch `issuer.wif.local`. Weder Listener noch Routen dürfen
+  `issuer.wif.local` oder eine Wildcard verwenden, die ihn abdeckt (`*.wif.local`,
+  `*.local`). An das Gateway des Issuers kann sich ohnehin keine fremde Route hängen; die
+  Regel verhindert, dass ein *anderes* Gateway den Host beansprucht.
+- **`issuer-discovery-image-digest`**: In `wif-issuer-discovery` laufen nur Images mit festem Digest
   (`@sha256:…`), egal ob als Pod, Deployment, Job oder anderes Objekt angelegt.
 
 ---
@@ -355,7 +377,7 @@ abgeben. Der `securityContext` eines Containers legt das fest. Eine **Readiness-
 fragt regelmäßig, ob ein Container Anfragen annehmen kann; erst dann schickt der Service
 ihm Verkehr.
 
-**In diesem PoC:** Beide Container des Issuer-Pods laufen als Nutzer `101`, mit
+**In diesem PoC:** Beide Container des Discovery-Pods laufen als Nutzer `101`, mit
 schreibgeschütztem Root-Dateisystem (`readOnlyRootFilesystem: true`), ohne
 `allowPrivilegeEscalation` und mit `capabilities.drop: ["ALL"]`. Die Readiness-Probe von
 `web` ruft `/openid/v1/jwks` ab; solange `sync` noch keinen plausiblen Stand abgelegt hat,
@@ -382,9 +404,9 @@ Cluster-Zugriff passieren muss:
 2. Secret `issuer-tls` und ConfigMap `internal-ca` aus den Volumes der Lab-PKI anlegen (die
    Dateien liegen außerhalb des Clusters, im Auto-Deploy-Ordner hätte k3s sie nicht),
 3. die Lab-Manifeste anwenden (`kubectl apply -f /manifests`) und auf die Rollouts von
-   `issuer`, Traefik und den Workloads warten.
+   `issuer-discovery`, Traefik und den Workloads warten.
 
-Die Auslieferung der Metadaten ist **nicht** seine Aufgabe; die übernimmt der Issuer-Pod im
+Die Auslieferung der Metadaten ist **nicht** seine Aufgabe; die übernimmt der Discovery-Pod im
 Cluster. Der `bootstrap`-Service läuft bei jedem `docker compose up` einmal durch und beendet
 sich dann (`restart: "no"`); die Aktionen sind idempotent.
 
@@ -437,4 +459,5 @@ Plattform.
 - [Use Cases](use-cases.md) - der komplette Ablauf Schritt für Schritt, inklusive Bootstrap und aller Fehlerfälle.
 - [Domain / Konzepte](domain.md) - falls du zurück zu den Grundbegriffen willst (Trust Anchor, offline vs. online).
 - [ADR 0002](adr/0002-eigenstaendiger-issuer-endpoint.md) - warum die Metadaten von einem eigenen Issuer-Endpoint statt vom API-Server kommen.
-- [ADR 0005](adr/0005-issuer-pod-im-cluster-pull-ueber-ingress.md) - warum ein Pod im Cluster sie hinter einem Ingress ausliefert und wie der Namespace geschützt ist.
+- [ADR 0005](adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) - warum ein Pod im Cluster sie ausliefert und wie der Namespace geschützt ist.
+- [ADR 0006](adr/0006-gateway-api-statt-ingress.md) - warum die Route mit der Gateway API statt mit einem Ingress beschrieben ist.
