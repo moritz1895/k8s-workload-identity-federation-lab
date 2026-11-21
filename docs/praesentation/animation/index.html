@@ -86,7 +86,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* Einbettung in eine Präsentation (?embed): nur Bühne und Erklärung, Steuerung über postMessage */
 body.embed { background: transparent; }
 body.embed header, body.embed .controls, body.embed .hint, body.embed .steps { display: none; }
-body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 420px; }
+body.embed .stage { padding: 0; gap: 16px; grid-template-columns: minmax(0, 1fr) 380px; }
 body.embed .panel { max-height: 100vh; overflow-y: auto; padding: 14px 16px; gap: 10px; }
 body.embed .panel h2 { font-size: 18px; }
 body.embed .panel .text { font-size: 14.5px; line-height: 1.45; }
@@ -170,8 +170,8 @@ const STEPS = [
     fx: null },
 
   { ph: 1, title: "Die interne PKI sichert die Verbindungen",
-    text: "Die interne PKI (im Lab: pki-init) ist die „Beglaubigung“: Sie bestätigt, dass die Stellen echt sind, und stellt dafür Serverzertifikate für Traefik im Cluster (Host issuer.wif.local), Keycloak und Dienst R aus. Alle, die eine Gegenstelle prüfen, bekommen das Root-Zertifikat der CA fest hinterlegt. Ein Client-Zertifikat bekommt niemand – weder eine Workload noch eine Komponente des Clusters. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
-    il: "Wer bekommt was", inspect: "Traefik    Server-Zert. issuer.wif.local\n           (am Gateway issuer-discovery)\nKeycloak   Server-Zert. + Root-CA\nDienst R   Server-Zert. + Root-CA\nPod        nur Root-CA\nDiscovery-Pod  nichts von der PKI\nClient-Zertifikate: keine\n(Pfeile im Bild vereinfacht)",
+    text: "Die interne PKI (im Lab: pki-init) ist die „Beglaubigung“: Sie stellt Serverzertifikate für Traefik (Host issuer.wif.local), Keycloak und Dienst R aus. Wer eine Gegenstelle prüft, hat das Root-Zertifikat der CA fest hinterlegt. Wichtig: Die PKI sichert nur die Verbindungen (TLS). Wer der Pod ist, steht später im „Pass“, nicht in einem Zertifikat.",
+    il: "Wer bekommt was", inspect: "Server-Zert.  Traefik, Keycloak, Dienst R\nRoot-CA       Keycloak, Dienst R, Pod\nClient-Zert.  niemand",
     obj: { fmt: "X.509-Zertifikat", note: "zeigt Traefik im TLS-Handshake",
       body: "Subject  O=WIF Lab, CN=issuer.wif.local\nSAN      DNS:issuer.wif.local\nIssuer   O=WIF Lab,\n         CN=WIF Lab Internal Root CA\nEKU      serverAuth\nPrüfer vergleichen mit dem hinterlegten\nRoot-Zertifikat." },
     segs: [par(mv("pki", "ing", "Server-Zert.", "trust", "X.509"), mv("pki", "kc", "", "trust"))],
@@ -184,7 +184,7 @@ const STEPS = [
     segs: [chk("api", ["privater Schlüssel geladen", "Aussteller: https://issuer.wif.local"], "right")],
     fx: s => { s.apiKey = 1; } },
   { ph: 1, title: "Der Discovery-Pod hängt die Prüfmerkmale aus",
-    text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Discovery-Pod („Aushang“), alle 15 Sekunden die Prüfmerkmale – Discovery-Dokument und JWKS – beim API-Server. Nach außen geht die Kopie nur über Traefik, den einzigen „Schalter“: Gateway und HTTPRoute lassen nur GET auf die zwei Pfade durch, nur GET erreicht den Pod. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen. Es gibt keinen Schreibweg von außen und kein Client-Zertifikat. Der private Schlüssel verlässt den API-Server nie.",
+    text: "Keycloak soll den API-Server nicht erreichen. Deshalb holt sich ein Pod im Cluster, der Discovery-Pod („Aushang“), alle 15 Sekunden die Prüfmerkmale – Discovery-Dokument und JWKS – beim API-Server. Nach außen geht die Kopie nur über Traefik, den einzigen „Schalter“: Gateway und HTTPRoute lassen nur GET auf die zwei Pfade durch, nur GET erreicht den Pod. Er übernimmt nur einen plausiblen Stand; ist der API-Server nicht erreichbar, bleibt der letzte gültige Stand stehen.",
     il: "Details", inspect: "sync:    GET beim API-Server, alle 15 s,\n         darf nur Discovery lesen\nweb:     nginx im Pod, nur GET\nTraefik: Gateway issuer.wif.local,\n         HTTPRoute nur GET auf 2 Pfade",
     obj: { fmt: "JWKS (JSON)", note: "nicht signiert, geschützt durch TLS",
       body: "GET /openid/v1/jwks\nAuthorization: Bearer <SA-Token des\n               Discovery-Pods>\n\n{\"keys\": [{\"kty\": \"RSA\", \"alg\": \"RS256\",\n  \"use\": \"sig\", \"kid\": \"RKm3ye…G1BM\",\n  \"n\": \"vkyuCh…\", \"e\": \"AQAB\"}]}" },
@@ -206,15 +206,15 @@ const STEPS = [
       body: "POST /realms/domain-rst/protocol/\n     openid-connect/token\n\ngrant_type=client_credentials\n  ← Rechte für die Workload selbst\nclient_assertion_type=urn:ietf:params:\n  oauth:client-assertion-type:jwt-bearer\nclient_assertion=eyJhbGciOiJSUzI1NiIs…\n  ← der „Pass“ als JWT, der Nachweis\nscope=r:orders:read r:orders:write\n  ← „r:“ steht für Dienst R" },
     segs: [mv("pod", "kc", "POST /token", "token", "Form + JWT"), chk("kc", ["keycloak-gateway: nur Realm-Pfade"], "below")], fx: null },
   { ph: 3, title: "Keycloak holt die Prüfmerkmale des Clusters",
-    text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die Prüfmerkmale (JWKS) am „Schalter“ – bei Traefik – vom Discovery-Pod und merkt sie sich. Das Serverzertifikat, das Traefik für issuer.wif.local zeigt, muss von der internen CA stammen. Den API-Server fragt Keycloak nie.",
-    il: "Eintrag im Realm", inspect: "Vertrauenswürdiger Aussteller\n„lab-cluster“:\n  Issuer:\n    https://issuer.wif.local\n  Schlüssel:\n    https://issuer.wif.local/openid/v1/jwks\n\nWeg: Load Balancer (im Lab load-balancer,\nnur TCP) → Traefik, dort endet TLS\n→ HTTPRoute: nur GET → Discovery-Pod",
+    text: "Im „Pass“ steht als Aussteller https://issuer.wif.local. Diesen Aussteller hat der Fachbereich in seinem Realm als vertrauenswürdig eingetragen – das ist das Gegenstück zu „wir vertrauen dieser CA“. Keycloak lädt die Prüfmerkmale (JWKS) am „Schalter“ – bei Traefik – vom Discovery-Pod und merkt sie sich. Den API-Server fragt Keycloak nie.",
+    il: "Eintrag im Realm", inspect: "Aussteller „lab-cluster“\n  Issuer:   https://issuer.wif.local\n  JWKS-URL: …/openid/v1/jwks",
     obj: { fmt: "JWKS (JSON)", note: "nicht signiert – echt, weil TLS mit Zertifikat der internen CA",
       body: "GET https://issuer.wif.local/openid/v1/jwks\n\n{\"keys\": [{\"kid\": \"RKm3ye…G1BM\",\n  \"kty\": \"RSA\", \"alg\": \"RS256\", \"use\": \"sig\",\n  \"n\": \"vkyuCh…\", \"e\": \"AQAB\"}]}" },
     segs: [mv("kc", "ing", "GET · TLS", "token"), mv("ing", "iss", "", "token"), mv("iss", "ing", "", "key"), mv("ing", "kc", "Prüfmerkmale", "key", "JWKS")],
     fx: s => { s.jwks.add("kc"); } },
   { ph: 3, title: "Keycloak prüft den „Pass“",
     text: "Keycloak prüft die Signatur mit dem passenden Schlüssel, ob der Pass für Keycloak ausgestellt wurde und ob er noch gilt. Dann sucht es den Eintrag (Client), der zu genau diesem Aussteller und diesem „wer“ gehört. Vergleich zu heute: Statt Merkmalen im Subject-DN ordnet Keycloak über Aussteller + sub zu. Gibt es keinen Eintrag, ist hier Schluss.",
-    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer\n    im Namespace wif-demo\n  Aussteller: lab-cluster\n    (= https://issuer.wif.local)\n  erlaubte Scopes:\n    r:orders:read\n    r:orders:write",
+    il: "Client im Realm", inspect: "Client workload-a\n  = ServiceAccount consumer (wif-demo)\n  Aussteller: lab-cluster\n  Scopes: r:orders:read, r:orders:write",
     obj: { fmt: "JWS-Prüfung", note: "lokal in Keycloak, nichts übertragen",
       body: "Header.kid  RKm3ye…G1BM\n  → passender Schlüssel im JWKS\nSignatur    RS256 über Header.Payload\niss         https://issuer.wif.local\naud         enthält …/realms/domain-rst\nnbf ≤ jetzt < exp\niss + sub   → Client workload-a" },
     segs: [chk("kc", ["Signatur passt", "für Keycloak ausgestellt", "noch gültig", "sub consumer → Client workload-a"], "below")], fx: s => { s.client = 1; } },
