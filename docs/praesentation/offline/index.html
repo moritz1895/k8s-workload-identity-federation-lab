@@ -349,6 +349,13 @@ section.cover { justify-content: center; gap: 28px; }
 <aside>Kubernetes kann den Schlüssel an einen externen Signer abgeben (KEP-740, External Service Account Token Signer): Der API-Server spricht über einen lokalen Socket mit einem Plugin, das den Schlüssel in HSM, TPM oder KMS hält und ihn nie herausgibt. Bei drei Control-Plane-Nodes bekommt jeder Node seinen eigenen Schlüssel im TPM; im JWKS stehen dann drei öffentliche Schlüssel, das ist für die Prüfer kein Problem. Auf virtuellen Maschinen ist das ein virtuelles TPM, dem der Betreiber des Hypervisors vertrauen muss. Ein Netzwerk-HSM verschiebt das Problem auf die Zugangsdaten, die auf dem Node liegen; ein TPM nicht. Pragmatische Reihenfolge: erst Datei mit Härtung, Abgleich der jti und regelmäßigem Wechsel; dann TPM über den externen Signer. Dazu gehört ein Schlüssel-Prozess: wer Wechsel auslöst, wie neue Nodes ihren Schlüssel bekommen, was bei Verdacht passiert.</aside>
 </section>
 
+<section id="backup" class="cover">
+<p class="kicker">BACKUP</p>
+<h1>Zusatzfolien</h1>
+<p class="lead">Für Rückfragen: Offline- vs. Online-Prüfung · Ausbaustufe SPIFFE/SPIRE</p>
+<aside>Hier endet der eigentliche Vortrag. Die folgenden Folien nur bei passenden Rückfragen zeigen.</aside>
+</section>
+
 <section id="offline-online">
 <h2>Prüfen ohne Rückfrage (dieser PoC) vs. online beim Cluster</h2>
 <div class="cols">
