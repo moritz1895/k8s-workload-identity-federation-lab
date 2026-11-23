@@ -1,35 +1,47 @@
 # k8s-workload-identity-federation-lab
 
-Ein lauffähiges Labor für **Workload Identity Federation**: Ein Pod in einem
-Kubernetes-Cluster bekommt ein kurzlebiges, audience-gebundenes ServiceAccount-Token (ein
-JWT) und weist sich damit gegenüber einem Dienst **außerhalb** des Clusters aus. Dieser Dienst
-prüft das Token **offline** — Signatur gegen die veröffentlichte JWKS des Ausstellers plus
-`iss`, `aud`, `exp` — und ruft dafür nie den Kubernetes-API-Server.
+Ein lauffähiges Labor für **Workload Identity Federation**: Eine Workload in Kubernetes ruft
+Dienste **außerhalb** des Clusters auf, ohne Client-Zertifikat, Passwort oder privaten
+Schlüssel. Sie besitzt nur, was die Plattform ihr ausstellt.
 
-Cluster, Issuer-Endpoint und Validator liegen in getrennten Vertrauens- und Netzbereichen:
-Ein **Discovery-Pod im Cluster** spiegelt Discovery-Dokument und JWKS des API-Servers und
-liefert sie über ein **Gateway** (Gateway API) nur lesend aus. Validator und Keycloak holen sie dort ab
-und erreichen nur diese Route, nicht den API-Server. Sie vertrauen nur dem Root-Zertifikat
-einer **internen PKI** (im Lab eine Lab-CA). Es gibt weder ein Client-Zertifikat noch einen
-Schreibweg für die Schlüssel. Begründung:
+Der Ablauf, im Bild der Präsentation „Pass und Visum“:
+
+1. **Pass:** Der API-Server legt dem Pod ein kurzlebiges ServiceAccount-Token ab (JWT,
+   600 s, Audienz = Realm von Keycloak). Es sagt, *wer* die Workload ist: Namespace und
+   ServiceAccount.
+2. **Visum:** Der Pod zeigt den Pass bei **Keycloak**, dem Autorisierungsserver seines
+   Fachbereichs. Keycloak prüft ihn per föderierter Client-Authentisierung
+   (Identity-Provider `kubernetes`, Client-Authentisierung `federated-jwt`) gegen die
+   veröffentlichten Schlüssel des Clusters, ordnet ihn einem Client zu und stellt ein
+   Access-Token mit Scopes aus, z. B. `r:orders:read`.
+3. **Aufruf:** Mit dem Access-Token ruft der Pod den Ressourcendienst **`service-r`** auf;
+   der prüft Signatur, Audienz und Scope (Spring Security Resource Server).
+
+Identität (Cluster) und Rechte (Keycloak, ein Realm pro Fachbereich) sind getrennt.
+Begründung: [ADR 0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md),
+Ablauf: [Feature-Spezifikation](docs/features/keycloak-autorisierungsserver.md).
+
+Niemand außerhalb des Clusters fragt dafür den API-Server. Ein **Discovery-Pod im Cluster**
+spiegelt Discovery-Dokument und JWKS und liefert sie über ein **Gateway** (Gateway API) nur
+lesend aus; Keycloak und der Validator holen sie dort ab und vertrauen nur dem Root-Zertifikat
+einer **internen PKI** (im Lab eine Lab-CA). Begründung:
 [ADR 0005](docs/adr/0005-discovery-pod-im-cluster-pull-ueber-ingress.md) (Veröffentlichung),
-[ADR 0006](docs/adr/0006-gateway-api-statt-ingress.md) (Gateway API) und
-[ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (PKI, Netze).
+[ADR 0006](docs/adr/0006-gateway-api-statt-ingress.md) (Gateway API),
+[ADR 0003](docs/adr/0003-getrennte-vertrauensbereiche-interne-pki.md) (PKI, Netze) und
+[ADR 0001](docs/adr/0001-offline-jwks-statt-tokenreview.md) (offline statt TokenReview).
 
-Darauf aufbauend trennt das Lab **Authentisierung von Autorisierung**: Ein Keycloak als
-Autorisierungsserver des Fachbereichs nimmt das ServiceAccount-Token als Client-Nachweis an
-und stellt Access-Tokens mit Scopes aus; der Ressourcendienst `service-r` schützt seine
-Endpunkte nach Scope. Begründung:
-[ADR 0004](docs/adr/0004-keycloak-als-autorisierungsserver-pro-fachbereich.md), Ablauf:
-[Feature-Spezifikation](docs/features/keycloak-autorisierungsserver.md).
+Daneben steht der **Validator**: ein minimaler Spring-Boot-Dienst, der das
+ServiceAccount-Token direkt und ohne Keycloak prüft (Signatur gegen die JWKS, `iss`, `aud`,
+`exp`). Er zeigt die Offline-Prüfung in Reinform und dient als Referenz für Dienste, die
+Workload-Tokens selbst prüfen wollen.
 
 Alles läuft in Containern. Auf dem Host wird **nur Docker + Compose v2** gebraucht.
 
 ```bash
 cp .env.example .env
-docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, load-balancer, Validator, Keycloak + keycloak-gateway, service-r
-docker compose run --rm demo          # Ende-zu-Ende-Verifikation (Validator)
-docker compose run --rm demo authz    # Autorisierungsserver + service-r
+docker compose up -d --build          # PKI, k3s + Traefik, Discovery-Pod, load-balancer, Keycloak + keycloak-gateway, service-r, Validator
+docker compose run --rm demo authz    # Hauptablauf: Pass → Keycloak → Visum → service-r, inkl. Gegenproben
+docker compose run --rm demo          # Offline-Prüfung des ServiceAccount-Tokens im Validator
 tools/run-all-checks.sh               # alles: Demos, Härtung, Ausfall des API-Servers, Netztrennung, fremde CA, Schlüsselwechsel
 docker compose down -v                # alles wieder entfernen
 ```
@@ -58,35 +70,32 @@ docker compose stop keycloak-admin
  cluster-net (172.31.7.0/24)
  ┌────────────────────────────────────────────────┐
  │ server (k3s), API-Server nur hier              │
- │  stellt Tokens aus                             │
- │  ┌ Namespace wif-issuer-discovery ───────────┐ │
- │  │ Pod issuer-discovery:                     │ │
- │  │   sync ── GET ─► API-Server               │ │
- │  │   web (nur GET) ◄── Traefik               │ │
- │  │ Gateway + HTTPRoute für issuer.wif.local  │ │
- │  └───────────────────────────────────────────┘ │
- │  Traefik (Gateway-Controller, kube-system)     │
- │   Node-Port 30443, nur in cluster-net          │
- │  Pod consumer                                  │
- └────┬───────────────────────────▲───────────────┘
-      │                           │ TCP 443 durchgereicht (TLS endet im Cluster)
-      │                      load-balancer (Stellvertreter des Load Balancers)
-      │                           ▲
-      │                           │ GET Discovery + JWKS, relying-net (172.31.8.0/24)
-      │ Bearer-Token, GET /whoami │
-      │ workload-net              │
-      │ (172.31.9.0/24)           │
-      └──────────────────►  validator (Spring Boot), vertraut nur der internen CA
+ │  stellt die „Pässe“ aus (ServiceAccount-Token) │
+ │  Pod consumer, reader, stranger                │
+ │  Pod issuer-discovery: spiegelt Discovery+JWKS │
+ │  Traefik: Gateway issuer.wif.local, nur GET    │
+ └──┬─────────────────────────────────────▲───────┘
+    │ workload-net (172.31.9.0/24)        │ TCP 443 über load-balancer
+    │                                     │ (TLS endet im Cluster)
+    │ (1) POST /token, Pass               │
+    ├──────► keycloak-gateway ──► keycloak ── GET Discovery + JWKS ─┤
+    │        nur Realm domain-rst    │     relying-net (172.31.8.0/24)
+    │ ◄──── Access-Token („Visum“) ──┘                              │
+    │                                  Realm-JWKS                   │
+    │ (2) GET /orders, Visum           ▼                            │
+    ├──────────────────────────────► service-r                      │
+    │                                                               │
+    │ GET /whoami, Pass                                             │
+    └──────────────────────────────► validator ─────────────────────┘
 
- Der Validator erreicht vom Cluster nur die Route issuer.wif.local über load-balancer, nie
- den API-Server; kein Volume ist zwischen Cluster-Seite und Validator geteilt.
+ Keycloak, service-r und der Validator erreichen vom Cluster nur die Route
+ issuer.wif.local, nie den API-Server. Alle vertrauen nur der internen CA.
 ```
 
-Keycloak hängt nur in `relying-net` und lädt dort die Cluster-Schlüssel von
-`https://issuer.wif.local`.
-Pods erreichen ihn ausschließlich über `keycloak-gateway` (nginx in `workload-net`), das nur
-die Endpunkte des Realms `domain-rst` weiterleitet. `service-r` hängt in `relying-net`
-(Realm-Schlüssel von Keycloak) und `workload-net` (Aufrufe der Pods). Topologie:
+Keycloak hängt nur in `relying-net`. Pods erreichen ihn ausschließlich über
+`keycloak-gateway` (nginx in `workload-net`), das nur die Endpunkte des Realms `domain-rst`
+weiterleitet. `service-r` hängt in `relying-net` (Realm-Schlüssel von Keycloak) und
+`workload-net` (Aufrufe der Pods). Topologie:
 [docs/technical/autorisierungsserver.md](docs/technical/autorisierungsserver.md).
 
 ## Konfiguration
@@ -120,6 +129,13 @@ jemanden ohne Kubernetes-Vorwissen — steht in **[`docs/`](docs/README.md)**.
 
 Schnelleinstieg: **[docs/walkthrough.md](docs/walkthrough.md)** (geführte Tour mit echten
 Log-Ausgaben).
+
+## Präsentation
+
+[`docs/praesentation/`](docs/praesentation/README.md) enthält einen Foliensatz für
+Kolleginnen und Kollegen ohne Kubernetes-Vorwissen, mit animiertem Gesamtablauf und
+Backup-Folien. Zum Vortragen `docs/praesentation/offline/index.html` im Browser öffnen;
+sie läuft ohne Internet.
 
 ## Was außerhalb eines Labors anders sein muss
 
@@ -161,7 +177,15 @@ Bewusst offene Punkte des Labs:
 - **TLS nur einseitig.** Alle Dienste außerhalb des Clusters sprechen TLS mit Zertifikaten der
   internen PKI; real kommen mTLS oder sender-gebundene Tokens (z. B. DPoP) als Option dazu.
 - **Cluster-RBAC ist Teil der Autorisierung.** Wer Tokens für einen ServiceAccount anfordern
-  oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes.
+  oder Pods mit dessen `serviceAccountName` anlegen darf, bekommt dessen Scopes. Real gehört
+  dazu ein Prozess: Deploy-Rechte in einem Namespace genehmigt nur der Fachbereich, dem er
+  gehört; Admin-Rechte nur befristet und mit zweiter Person.
+- **Signierschlüssel des API-Servers als Datei.** Wer ihn kopiert, kann für jede Workload
+  Pässe ausstellen. Real kommt er in ein TPM oder HSM, angebunden über den externen
+  Token-Signer von Kubernetes.
+- **Kein Abgleich mit dem Audit-Log.** Real wird jede `jti`, die Keycloak sieht, mit den
+  Token-Ausstellungen im Audit-Log des API-Servers abgeglichen; eine fehlende `jti` zeigt
+  einen gefälschten Pass, dieselbe `jti` aus zwei Quellen einen kopierten.
 
 ## Projektstruktur
 
