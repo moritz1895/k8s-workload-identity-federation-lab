@@ -1,0 +1,16 @@
+<section id="signierschluessel">
+<h2>Der Signierschlüssel des API-Servers</h2>
+<p class="note">Wer ihn hat, kann für jede Workload Pässe ausstellen – er ist das Gegenstück zum CA-Schlüssel.</p>
+<table class="tbl small">
+<tr class="head"><th style="width:22%">Ablage</th><th style="width:28%">Schlüssel kopierbar?</th><th style="width:30%">Wer kann damit signieren?</th><th style="width:20%">Aufwand</th></tr>
+<tr><td>Datei auf den Control-Plane-Nodes (Lab)</td><td>ja – einmal kopiert, lässt sich überall und dauerhaft fälschen</td><td>Root auf den Nodes, wer Backups lesen kann</td><td>gering</td></tr>
+<tr><td>Netzwerk-HSM</td><td>nein</td><td>Root auf dem Node – und wer dessen HSM-Zugangsdaten kopiert, von überall</td><td>hoch</td></tr>
+<tr><td>TPM in jedem Control-Plane-Node</td><td>nein, an die Maschine gebunden</td><td>nur, wer auf diesem Node ist</td><td>mittel: Signer-Plugin, ein Schlüssel je Node</td></tr>
+</table>
+<ul class="pts">
+<li>HSM und TPM verhindern das Kopieren, nicht den Missbrauch durch Root auf dem Node: Wer fälschen will, muss dort bleiben und hinterlässt Spuren</li>
+<li>Fälschungen erkennen, egal wo der Schlüssel liegt: Jeder echte Pass steht mit seiner jti im Audit-Log des API-Servers – eine jti, die dort fehlt, ist gefälscht</li>
+<li>Regelmäßig wechseln (Wechsel in zwei Phasen wie im Lab): Ein gestohlener Schlüssel taugt nur bis zum nächsten Wechsel</li>
+</ul>
+<aside>Kubernetes kann den Schlüssel an einen externen Signer abgeben (KEP-740, External Service Account Token Signer): Der API-Server spricht über einen lokalen Socket mit einem Plugin, das den Schlüssel in HSM, TPM oder KMS hält und ihn nie herausgibt. Bei drei Control-Plane-Nodes bekommt jeder Node seinen eigenen Schlüssel im TPM; im JWKS stehen dann drei öffentliche Schlüssel, das ist für die Prüfer kein Problem. Auf virtuellen Maschinen ist das ein virtuelles TPM, dem der Betreiber des Hypervisors vertrauen muss. Ein Netzwerk-HSM verschiebt das Problem auf die Zugangsdaten, die auf dem Node liegen; ein TPM nicht. Pragmatische Reihenfolge: erst Datei mit Härtung, Abgleich der jti und regelmäßigem Wechsel; dann TPM über den externen Signer. Dazu gehört ein Schlüssel-Prozess: wer Wechsel auslöst, wie neue Nodes ihren Schlüssel bekommen, was bei Verdacht passiert.</aside>
+</section>
