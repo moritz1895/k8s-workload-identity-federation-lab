@@ -846,57 +846,6 @@ new p5(sketch, &quot;canvas-wrap&quot;);
 "></iframe></div>
 <aside>Weiterklicken wie bei den übrigen Folien: Jeder Klick ist ein Schritt der Animation, nach dem letzten Schritt geht es zur nächsten Folie. Die Animation ist eine eigene Seite und wird dort weiter gepflegt; der Link öffnet sie im Browser. Zu jedem Schritt zeigt sie einen Erklärtext und den Inhalt der Tokens und Anfragen. Wer den Link öffnen soll, braucht Zugriff: Die Seite muss dafür auf claude.ai geteilt sein.</aside>
 </section>
-<section id="tokens">
-<h2>Zwei Tokens, zwei Aufgaben</h2>
-<table class="tbl">
-<tr class="head"><th style="width:16%">Merkmal</th><th style="width:42%">ServiceAccount-Token („Pass“)</th><th style="width:42%">Access-Token („Visum“)</th></tr>
-<tr><td>Ausgestellt von</td><td>Cluster (API-Server)</td><td>Keycloak, Realm domain-rst</td></tr>
-<tr><td>iss</td><td>https://issuer.wif.local</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
-<tr><td>aud</td><td>Issuer-URL des Realms</td><td>service-r (Dienst R)</td></tr>
-<tr><td>Wer</td><td>sub = system:serviceaccount:wif-demo:consumer</td><td>azp = workload-a (Client für consumer)</td></tr>
-<tr><td>Rechte</td><td>keine</td><td>scope = r:orders:read r:orders:write</td></tr>
-<tr><td>Laufzeit</td><td>600 s, der Cluster erneuert es</td><td>300 s, die Workload cacht und erneuert es</td></tr>
-<tr><td>Geprüft von</td><td>Keycloak: Signatur, iss, aud, exp; iss + sub → Client</td><td>Dienst R: Signatur, iss, aud, exp; Scope → Authority</td></tr>
-</table>
-<ul class="pts">
-<li>Gestohlenes ServiceAccount-Token: höchstens 10 min lang Access-Tokens holen – nur mit den Rechten dieser Workload</li>
-<li>Dienst R akzeptiert nur Tokens, deren einzige Audienz R ist – ein Token für einen anderen Dienst nützt bei R nichts</li>
-</ul>
-<aside>Beide Tokens sind ganz normale JWTs, signiert mit RS256. Das ServiceAccount-Token geht nur an Keycloak; Dienst R lehnt es ab. workload-a ist nur der Name des Clients im Realm; verbunden mit der Workload ist er ausschließlich über iss und sub. ServiceAccount-Tokens haben keinen Replay-Schutz; das begrenzen die kurze Laufzeit und die Bindung an den Realm.</aside>
-</section>
-
-<section id="vertrauen">
-<h2>Vertrauenskette ohne Rückfrage beim Cluster</h2>
-<!-- host 1664x480
- A1 0,0,380,170 (bottom mid 190,170)          A2 428,0,808,170 (bottom mid 832,170)
- chain top 330 h 150: C1 0 ; C2 428 ; C3 856 ; C4 1284 ; width 380 ; mid y 405 ; centers 190, 618, 1046, 1474
- A1->C1 190,170->190,330 ; A2 drop 832,170->832,300 ; bar 618..1046 @300 ; stubs 618,1046 300->330
- chain 380->428, 808->856, 1236->1284 @405
--->
-<div class="host" style="height:480px">
-<div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: Aussteller</p><p class="d">Issuer des Clusters, im Realm eingetragen</p></div>
-<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">Traefik muss für issuer.wif.local ein Zertifikat dieser CA vorweisen – kein Abschalten der Prüfung</p></div>
-<div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss ein eingetragener Aussteller sein</p></div>
-<div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">Steckbrief des Ausstellers: wo liegen die Schlüssel?</p></div>
-<div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
-<div class="box ok" style="left:1284px; top:330px; width:380px; height:150px"><p class="t">Signatur gültig</p><p class="d">passender Schlüssel gewählt und verifiziert</p></div>
-<x-connector class="ln" x1="190" y1="170" x2="190" y2="330"></x-connector>
-<x-connector class="ln" x1="832" y1="170" x2="832" y2="300" head="none"></x-connector>
-<x-connector class="ln" x1="618" y1="300" x2="1046" y2="300" head="none"></x-connector>
-<x-connector class="ln" x1="618" y1="300" x2="618" y2="330"></x-connector>
-<x-connector class="ln" x1="1046" y1="300" x2="1046" y2="330"></x-connector>
-<x-connector class="ln" x1="380" y1="405" x2="428" y2="405"></x-connector>
-<x-connector class="ln" x1="808" y1="405" x2="856" y2="405"></x-connector>
-<x-connector class="ln" x1="1236" y1="405" x2="1284" y2="405"></x-connector>
-</div>
-<ul class="pts">
-<li>Nur zwei Dingen wird ohne weiteren Beweis vertraut: dem Issuer des Clusters und der internen CA</li>
-<li>Alles Weitere wird daraus abgeleitet, ohne Rückfrage beim Cluster</li>
-<li>Dienst R prüft Access-Tokens nach demselben Muster – mit dem Realm als Issuer</li>
-</ul>
-<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt Keycloak über eine TLS-Verbindung, deren Zertifikat von der internen CA stammen muss, das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
-</section>
-
 <section id="wer-pass">
 <h2>Wer kommt an den „Pass“ einer Workload?</h2>
 <table class="tbl">
@@ -952,8 +901,59 @@ new p5(sketch, &quot;canvas-wrap&quot;);
 <section id="backup" class="cover">
 <p class="kicker">BACKUP</p>
 <h1>Zusatzfolien</h1>
-<p class="lead">Für Rückfragen: Offline- vs. Online-Prüfung · Ausbaustufe SPIFFE/SPIRE</p>
+<p class="lead">Tokens im Detail · Vertrauenskette · offline vs. online · SPIFFE/SPIRE</p>
 <aside>Hier endet der eigentliche Vortrag. Die folgenden Folien nur bei passenden Rückfragen zeigen.</aside>
+</section>
+
+<section id="tokens">
+<h2>Zwei Tokens, zwei Aufgaben</h2>
+<table class="tbl">
+<tr class="head"><th style="width:16%">Merkmal</th><th style="width:42%">ServiceAccount-Token („Pass“)</th><th style="width:42%">Access-Token („Visum“)</th></tr>
+<tr><td>Ausgestellt von</td><td>Cluster (API-Server)</td><td>Keycloak, Realm domain-rst</td></tr>
+<tr><td>iss</td><td>https://issuer.wif.local</td><td>https://keycloak:8443/realms/domain-rst</td></tr>
+<tr><td>aud</td><td>Issuer-URL des Realms</td><td>service-r (Dienst R)</td></tr>
+<tr><td>Wer</td><td>sub = system:serviceaccount:wif-demo:consumer</td><td>azp = workload-a (Client für consumer)</td></tr>
+<tr><td>Rechte</td><td>keine</td><td>scope = r:orders:read r:orders:write</td></tr>
+<tr><td>Laufzeit</td><td>600 s, der Cluster erneuert es</td><td>300 s, die Workload cacht und erneuert es</td></tr>
+<tr><td>Geprüft von</td><td>Keycloak: Signatur, iss, aud, exp; iss + sub → Client</td><td>Dienst R: Signatur, iss, aud, exp; Scope → Authority</td></tr>
+</table>
+<ul class="pts">
+<li>Gestohlenes ServiceAccount-Token: höchstens 10 min lang Access-Tokens holen – nur mit den Rechten dieser Workload</li>
+<li>Dienst R akzeptiert nur Tokens, deren einzige Audienz R ist – ein Token für einen anderen Dienst nützt bei R nichts</li>
+</ul>
+<aside>Beide Tokens sind ganz normale JWTs, signiert mit RS256. Das ServiceAccount-Token geht nur an Keycloak; Dienst R lehnt es ab. workload-a ist nur der Name des Clients im Realm; verbunden mit der Workload ist er ausschließlich über iss und sub. ServiceAccount-Tokens haben keinen Replay-Schutz; das begrenzen die kurze Laufzeit und die Bindung an den Realm.</aside>
+</section>
+
+<section id="vertrauen">
+<h2>Vertrauenskette ohne Rückfrage beim Cluster</h2>
+<!-- host 1664x480
+ A1 0,0,380,170 (bottom mid 190,170)          A2 428,0,808,170 (bottom mid 832,170)
+ chain top 330 h 150: C1 0 ; C2 428 ; C3 856 ; C4 1284 ; width 380 ; mid y 405 ; centers 190, 618, 1046, 1474
+ A1->C1 190,170->190,330 ; A2 drop 832,170->832,300 ; bar 618..1046 @300 ; stubs 618,1046 300->330
+ chain 380->428, 808->856, 1236->1284 @405
+-->
+<div class="host" style="height:480px">
+<div class="box anchor" style="left:0px; top:0px; width:380px; height:170px"><p class="t">Anker 1: Aussteller</p><p class="d">Issuer des Clusters, im Realm eingetragen</p></div>
+<div class="box anchor" style="left:428px; top:0px; width:808px; height:170px"><p class="t">Anker 2: interne CA</p><p class="d">Traefik muss für issuer.wif.local ein Zertifikat dieser CA vorweisen – kein Abschalten der Prüfung</p></div>
+<div class="box" style="left:0px; top:330px; width:380px; height:150px"><p class="t">iss im Token</p><p class="d">muss ein eingetragener Aussteller sein</p></div>
+<div class="box" style="left:428px; top:330px; width:380px; height:150px"><p class="t">Discovery-Dokument</p><p class="d">Steckbrief des Ausstellers: wo liegen die Schlüssel?</p></div>
+<div class="box" style="left:856px; top:330px; width:380px; height:150px"><p class="t">JWKS</p><p class="d">öffentliche Schlüssel des Clusters</p></div>
+<div class="box ok" style="left:1284px; top:330px; width:380px; height:150px"><p class="t">Signatur gültig</p><p class="d">passender Schlüssel gewählt und verifiziert</p></div>
+<x-connector class="ln" x1="190" y1="170" x2="190" y2="330"></x-connector>
+<x-connector class="ln" x1="832" y1="170" x2="832" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="1046" y2="300" head="none"></x-connector>
+<x-connector class="ln" x1="618" y1="300" x2="618" y2="330"></x-connector>
+<x-connector class="ln" x1="1046" y1="300" x2="1046" y2="330"></x-connector>
+<x-connector class="ln" x1="380" y1="405" x2="428" y2="405"></x-connector>
+<x-connector class="ln" x1="808" y1="405" x2="856" y2="405"></x-connector>
+<x-connector class="ln" x1="1236" y1="405" x2="1284" y2="405"></x-connector>
+</div>
+<ul class="pts">
+<li>Nur zwei Dingen wird ohne weiteren Beweis vertraut: dem Issuer des Clusters und der internen CA</li>
+<li>Alles Weitere wird daraus abgeleitet, ohne Rückfrage beim Cluster</li>
+<li>Dienst R prüft Access-Tokens nach demselben Muster – mit dem Realm als Issuer</li>
+</ul>
+<aside>Von links nach rechts gelesen: Das Token nennt seinen Aussteller. Unter dieser URL holt Keycloak über eine TLS-Verbindung, deren Zertifikat von der internen CA stammen muss, das Discovery-Dokument, daraus die JWKS, daraus den passenden Schlüssel. Die beiden orangefarbenen Anker sind die einzigen Dinge, denen ohne weiteren Beweis vertraut wird.</aside>
 </section>
 
 <section id="offline-online">
