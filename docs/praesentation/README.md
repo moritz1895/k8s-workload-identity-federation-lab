@@ -1,10 +1,10 @@
 # Präsentation: Kurzvorstellung des PoC
 
-Quelldateien eines Foliensatzes (12 Folien), der den PoC für Kolleginnen und Kollegen ohne
+Quelldateien eines Foliensatzes (13 Folien), der den PoC für Kolleginnen und Kollegen ohne
 tieferes Kubernetes-Wissen vorstellt: Ausgangssituation mit mTLS-Client-Zertifikaten, Idee als
 „Pass und Visum“, zwei Ebenen (Identität und Rechte), Vergleich mit heute, der Ablauf als
 Animation, die zwei Tokens, die Vertrauenskette, wer an den „Pass“ einer Workload kommt, was sich davon erzwingen und was sich nur erkennen lässt, der Schutz des Signierschlüssels
-und Prüfen ohne Rückfrage vs. online.
+und Prüfen ohne Rückfrage vs. online; dazu optional eine Ausbaustufe mit SPIFFE/SPIRE.
 
 Dazu kommt `animation/index.html`: eine eigenständige Seite (p5.js), die den Ende-zu-Ende-Ablauf
 in 16 Schritten animiert, jeder Schritt per Klick – vom Überblick über PKI, Discovery-Pod, „Pass“
@@ -33,7 +33,8 @@ anzeigbare Seite.
 ## Reihenfolge
 
 `cover` → `problem` → `idee` → `ebenen` → `motivation` → `gesamtablauf` → `tokens` →
-`vertrauen` → `wer-pass` → `erzwingen` → `signierschluessel` → `offline-online`
+`vertrauen` → `wer-pass` → `erzwingen` → `signierschluessel` → `offline-online` →
+`spiffe-ausbau` (optional)
 
 ## Offline-Präsentation
 

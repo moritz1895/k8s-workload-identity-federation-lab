@@ -402,6 +402,59 @@ section.cover { justify-content: center; gap: 28px; }
 <aside>Der PoC prüft Tokens ohne Rückfrage beim Aussteller: Die öffentlichen Schlüssel werden vorab geladen und gecacht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen. Taucht eine unbekannte kid auf, laden die Prüfer das JWKS neu; der alte Schlüssel muss trotzdem lange genug im JWKS bleiben, damit ältere Tokens gültig bleiben.</aside>
 </section>
 
+<section id="spiffe-ausbau">
+<h2>Ausbaustufe: SPIFFE und SPIRE</h2>
+<!-- host 1664x476
+ bundle line y10: SPIRE top 180,56 -> 180,10 -> 1432,10 -> Keycloak top 1432,106 ; label 420,16
+ colA: SPIRE 0,56,360,150 (mid y 171) ; PKI 0,336,360,120 ; PKI->SPIRE 180,336->180,206
+ panel cluster 420,56,720,200 ; agent 444,106,280,130 (mid 171) ; pod 780,106,336,130
+ panel bare 420,276,720,200 ; agent 444,326,280,130 (mid 391) ; app 780,326,336,130
+ panel fach 1200,56,464,420 ; keycloak 1224,106,416,130 ; dienst R 1224,326,416,130 (center x 1432)
+ SPIRE->agents: 360,171->392,171 ; 392,171->444,171 ; 392,171->392,391 ; 392,391->444,391
+ app->keycloak: 1116,391->1170,391->1170,216->1224,216
+-->
+<div class="host" style="height:476px">
+<div class="panel" style="left:420px; top:56px; width:720px; height:200px"></div>
+<div class="panel" style="left:420px; top:276px; width:720px; height:200px"></div>
+<div class="panel blue" style="left:1200px; top:56px; width:464px; height:420px"></div>
+<p class="ph" style="left:444px; top:66px; width:680px">Kubernetes-Cluster</p>
+<p class="ph" style="left:444px; top:286px; width:680px">Bare-Metal-Server, andere Plattform</p>
+<p class="ph" style="left:1224px; top:66px; width:420px">Fachbereich</p>
+<div class="box accent" style="left:0px; top:56px; width:360px; height:150px"><p class="t">SPIRE-Server</p><p class="d">stellt SVIDs aus – ein „Passamt“ für alle Plattformen</p></div>
+<div class="box anchor" style="left:0px; top:336px; width:360px; height:120px"><p class="t">Interne PKI</p><p class="d">CA über dem SPIRE-Server</p></div>
+<div class="box accent" style="left:444px; top:106px; width:280px; height:130px"><p class="t">SPIRE-Agent</p><p class="d">je Node · fragt das kubelet, wer anfragt</p></div>
+<div class="box" style="left:780px; top:106px; width:336px; height:130px"><p class="t">Pod „consumer“</p><p class="d">holt sein SVID über die Workload API</p></div>
+<div class="box accent" style="left:444px; top:326px; width:280px; height:130px"><p class="t">SPIRE-Agent</p><p class="d">Dienst auf dem Host, Nachweis per TPM</p></div>
+<div class="box" style="left:780px; top:326px; width:336px; height:130px"><p class="t">Anwendung „batch“</p><p class="d">kein Kubernetes – gleicher Weg zum SVID</p></div>
+<div class="box" style="left:1224px; top:106px; width:416px; height:130px"><p class="t">Keycloak</p><p class="d">SPIFFE-Identity-Provider: prüft SVIDs, stellt „Visa“ aus</p></div>
+<div class="box" style="left:1224px; top:326px; width:416px; height:130px"><p class="t">Dienst R</p><p class="d">prüft das „Visum“ – unverändert</p></div>
+<x-connector class="ln" x1="180" y1="56" x2="180" y2="10" head="none"></x-connector>
+<x-connector class="ln" x1="180" y1="10" x2="1432" y2="10" head="none"></x-connector>
+<x-connector class="ln" x1="1432" y1="10" x2="1432" y2="106"></x-connector>
+<p class="lbl" style="left:420px; top:16px; width:760px">Bundle-Endpoint: Prüfschlüssel der Trust Domain</p>
+<x-connector class="ln" x1="180" y1="336" x2="180" y2="206"></x-connector>
+<p class="lbl" style="left:196px; top:255px; width:200px">Zwischen-CA</p>
+<x-connector class="ln" x1="360" y1="171" x2="392" y2="171" head="none"></x-connector>
+<x-connector class="ln" x1="392" y1="171" x2="444" y2="171"></x-connector>
+<x-connector class="ln" x1="392" y1="171" x2="392" y2="391" head="none"></x-connector>
+<x-connector class="ln" x1="392" y1="391" x2="444" y2="391"></x-connector>
+<x-connector class="ln" x1="724" y1="171" x2="780" y2="171"></x-connector>
+<x-connector class="ln" x1="724" y1="391" x2="780" y2="391"></x-connector>
+<x-connector class="ln" x1="1116" y1="171" x2="1224" y2="171"></x-connector>
+<x-connector class="ln" x1="1116" y1="391" x2="1170" y2="391" head="none"></x-connector>
+<x-connector class="ln" x1="1170" y1="391" x2="1170" y2="216" head="none"></x-connector>
+<x-connector class="ln" x1="1170" y1="216" x2="1224" y2="216"></x-connector>
+<x-connector class="ln dash" x1="1432" y1="236" x2="1432" y2="326"></x-connector>
+<p class="lbl" style="left:1448px; top:262px; width:240px">„Visum“ wie bisher</p>
+</div>
+<ul class="pts">
+<li>Neu (blau): Ein SPIRE-Server stellt allen Plattformen denselben Pass aus – spiffe://bank/…; Keycloak prüft Pod und Bare-Metal-Anwendung gleich</li>
+<li>Zusätzlich gibt es kurzlebige Zertifikate (X.509-SVID) für mTLS zwischen Diensten – mit Besitznachweis statt reinem Bearer-Token</li>
+<li>Preis: ein zweites Identitätssystem im Betrieb, kein jti-Abgleich mit dem Audit-Log des API-Servers, Standard für OAuth noch im Entwurf</li>
+</ul>
+<aside>Optionale Folie: ein Ausblick, kein Teil des PoC. SPIFFE ist ein Standard für Workload-Identitäten, SPIRE seine Referenzimplementierung. Der SPIRE-Server übernimmt die Rolle des API-Servers als „Passamt“; der Pass heißt SVID und trägt eine SPIFFE-ID wie spiffe://bank/ns/wif-demo/sa/consumer. Auf jedem Node und jedem anderen Host läuft ein SPIRE-Agent. Er weist sich beim Server aus – auf Bare Metal zum Beispiel über das TPM – und prüft lokal, welcher Prozess anfragt: im Cluster über das kubelet, auf dem Host über Benutzer, Pfad oder Hash des Programms. Welche Workload welche SPIFFE-ID bekommt, steht in Registrierungseinträgen; die können in Git liegen und brauchen dieselbe Genehmigung durch den Fachbereich wie heute die Deploy-Rechte. Keycloak bringt einen SPIFFE-Identity-Provider mit und holt die Prüfschlüssel über den Bundle-Endpoint. Discovery-Pod und Traefik-Route für den Aussteller entfallen dann. Den Signierschlüssel hält jetzt der SPIRE-Server; die Fragen von der Folie zum Signierschlüssel gelten für ihn genauso. Lohnt sich vor allem, wenn Anwendungen außerhalb von Kubernetes dazukommen, mTLS gefordert ist oder mehrere Cluster zusammenspielen. Der SPIRE-Server kann auch selbst im Cluster laufen.</aside>
+</section>
+
 <div id="hud"></div>
 <div id="notes"></div>
 <div id="help">→ / Leertaste weiter · ← zurück · F Vollbild · N Notizen</div>
