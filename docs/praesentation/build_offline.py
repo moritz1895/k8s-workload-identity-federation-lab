@@ -2,14 +2,21 @@
 """Builds a stand-alone, offline presentation from the deck sources.
 
 Input:  deck.json, deck.css, slides/<id>.html, animation/index.html, vendor/
-Output: offline/  (open offline/index.html in a browser, press F for full screen)
+Output: offline/index.html     the whole deck in one file (open it, press F for full screen)
+        offline/animation.html the animation on its own, also in one file
+        offline/licenses/      licenses of the embedded fonts and of p5.js
 
 The slide files are the single source; this script only packages them. Arrows
 (<x-connector>) and click steps (.fragment) are rendered by a small runtime in
 the generated page. The slide "gesamtablauf" is replaced by the live animation.
+
+Fonts and p5.js are embedded, and the animation sits in an iframe via srcdoc, so
+the page never loads another local file. Browsers restrict file:// subresources
+and file:// frames differently; a single file works in all of them.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
@@ -19,7 +26,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "offline"
+VENDOR = HERE / "vendor"
 ANIMATION_SLIDE = "gesamtablauf"
+P5_CDN_TAG = '<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>'
+EMBED_DETECTION = 'new URLSearchParams(location.search).has("embed")'
 
 FONT_FACES = [
     ("Inter", 400, "inter-latin-400-normal.woff2"),
@@ -186,22 +196,35 @@ show(Number.isFinite(start) ? start - 1 : 0, false);
 """
 
 
-def font_css(faces, prefix):
+def font_data_uri(file: str) -> str:
+    data = base64.b64encode((VENDOR / "fonts" / file).read_bytes()).decode("ascii")
+    return f"data:font/woff2;base64,{data}"
+
+
+def font_css(faces) -> str:
     return "\n".join(
         f'@font-face {{ font-family: "{fam}"; font-weight: {wt}; font-style: normal; font-display: swap; '
-        f'src: url("{prefix}{file}") format("woff2"); }}'
+        f'src: url("{font_data_uri(file)}") format("woff2"); }}'
         for fam, wt, file in faces
     )
 
 
-def animation_slide(original: str) -> str:
+def inline_p5() -> str:
+    code = (VENDOR / "p5.min.js").read_text(encoding="utf-8")
+    if "</script" in code.lower():
+        sys.exit("vendor/p5.min.js contains '</script' and cannot be inlined")
+    return "<script>\n" + code + "\n</script>"
+
+
+def animation_slide(original: str, embedded_animation: str) -> str:
     title = re.search(r"<h2>(.*?)</h2>", original, re.S)
     notes = re.search(r"<aside>(.*?)</aside>", original, re.S)
     heading = title.group(1).replace(" (Animation)", "") if title else "Gesamtablauf"
     return (
         f'<section id="{ANIMATION_SLIDE}" data-anim style="padding:64px 128px; gap:24px">\n'
         f"<h2>{heading}</h2>\n"
-        '<div class="anim-box"><iframe class="anim" src="animation.html?embed" title="Animierter Gesamtablauf, Schritt für Schritt"></iframe></div>\n'
+        '<div class="anim-box"><iframe class="anim" title="Animierter Gesamtablauf, Schritt für Schritt" '
+        f'srcdoc="{escape(embedded_animation, quote=True)}"></iframe></div>\n'
         "<aside>Weiterklicken wie bei den übrigen Folien: Jeder Klick ist ein Schritt der Animation, "
         "nach dem letzten Schritt geht es zur nächsten Folie. "
         + (notes.group(1) if notes else "")
@@ -209,11 +232,18 @@ def animation_slide(original: str) -> str:
     )
 
 
-def offline_animation(src: str) -> str:
+def offline_animation(src: str, embedded: bool) -> str:
+    """Self-contained animation; embedded=True is the variant inside the deck (no URL, so no ?embed)."""
     src = re.sub(r'<link rel="preconnect"[^>]*>\s*', "", src)
-    src = re.sub(r'<link href="https://fonts\.googleapis\.com[^>]*>',
-                 "<style>\n" + font_css(ANIMATION_FONT_FACES, "fonts/") + "\n</style>", src)
-    src = src.replace('src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"', 'src="lib/p5.min.js"')
+    fonts = "<style>\n" + font_css(ANIMATION_FONT_FACES) + "\n</style>"
+    src = re.sub(r'<link href="https://fonts\.googleapis\.com[^>]*>', lambda _: fonts, src)
+    if P5_CDN_TAG not in src:
+        sys.exit("animation/index.html: p5.js script tag not found")
+    src = src.replace(P5_CDN_TAG, inline_p5())
+    if embedded:
+        if EMBED_DETECTION not in src:
+            sys.exit("animation/index.html: embed detection not found")
+        src = src.replace(EMBED_DETECTION, "true")
     if "cdnjs.cloudflare.com" in src or "fonts.googleapis.com" in src:
         sys.exit("animation/index.html still references the network – check the replacements")
     return src
@@ -222,15 +252,17 @@ def offline_animation(src: str) -> str:
 def main() -> None:
     deck = json.loads((HERE / "deck.json").read_text(encoding="utf-8"))
     css = (HERE / "deck.css").read_text(encoding="utf-8")
+    anim_src = (HERE / "animation" / "index.html").read_text(encoding="utf-8")
     sections = []
     for slide_id in deck["order"]:
         html = (HERE / "slides" / f"{slide_id}.html").read_text(encoding="utf-8")
-        sections.append(animation_slide(html) if slide_id == ANIMATION_SLIDE else html)
+        sections.append(animation_slide(html, offline_animation(anim_src, embedded=True))
+                        if slide_id == ANIMATION_SLIDE else html)
     page = (
         "<!DOCTYPE html>\n<html lang=\"de\">\n<head>\n<meta charset=\"utf-8\">\n"
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{escape(deck.get('title', 'Präsentation'))}</title>\n"
-        "<style>\n" + font_css(FONT_FACES, "fonts/") + "\n" + BASE_CSS + "\n" + css + "\n</style>\n"
+        "<style>\n" + font_css(FONT_FACES) + "\n" + BASE_CSS + "\n" + css + "\n</style>\n"
         "</head>\n<body>\n" + "\n".join(sections) + "\n"
         '<div id="hud"></div>\n<div id="notes"></div>\n'
         '<div id="help">→ / Leertaste weiter · ← zurück · F Vollbild · N Notizen</div>\n'
@@ -241,15 +273,12 @@ def main() -> None:
 
     if OUT.exists():
         shutil.rmtree(OUT)
-    (OUT / "fonts").mkdir(parents=True)
-    (OUT / "lib").mkdir()
+    (OUT / "licenses").mkdir(parents=True)
     (OUT / "index.html").write_text(page, encoding="utf-8")
-    anim_src = (HERE / "animation" / "index.html").read_text(encoding="utf-8")
-    (OUT / "animation.html").write_text(offline_animation(anim_src), encoding="utf-8")
-    for f in (HERE / "vendor" / "fonts").iterdir():
-        shutil.copy2(f, OUT / "fonts" / f.name)
-    shutil.copy2(HERE / "vendor" / "p5.min.js", OUT / "lib" / "p5.min.js")
-    shutil.copy2(HERE / "vendor" / "p5-LICENSE.txt", OUT / "lib" / "p5-LICENSE.txt")
+    (OUT / "animation.html").write_text(offline_animation(anim_src, embedded=False), encoding="utf-8")
+    for f in (VENDOR / "fonts").glob("LICENSE-*.txt"):
+        shutil.copy2(f, OUT / "licenses" / f.name)
+    shutil.copy2(VENDOR / "p5-LICENSE.txt", OUT / "licenses" / "p5-LICENSE.txt")
     print(f"written: {OUT / 'index.html'} ({len(deck['order'])} slides)")
 
 

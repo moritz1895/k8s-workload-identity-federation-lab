@@ -39,7 +39,11 @@ anzeigbare Seite.
 ## Offline-Präsentation
 
 `offline/` ist eine eigenständige Fassung zum Vortragen ohne Internet und ohne claude.ai:
-`offline/index.html` im Browser öffnen, `F` für Vollbild.
+`offline/index.html` im Browser öffnen, `F` für Vollbild. Die Datei enthält alles – Folien,
+Schriften, p5.js und die Animation – und lädt keine weiteren Dateien nach, auch keine lokalen.
+Sie funktioniert deshalb auch in Browsern, die von `file://`-Seiten aus keine Frames oder
+Skripte nachladen, und lässt sich einzeln weitergeben. `offline/animation.html` ist die
+Animation allein, ebenfalls in einer Datei.
 
 | Taste | Wirkung |
 |---|---|
@@ -57,5 +61,6 @@ dem letzten Schritt geht es zur nächsten Folie.
 python3 docs/praesentation/build_offline.py
 ```
 
-Das Skript nimmt `deck.json`, `deck.css`, `slides/` und `animation/index.html` und legt
-p5.js und die Schriften aus `vendor/` daneben (Lizenzen liegen bei).
+Das Skript nimmt `deck.json`, `deck.css`, `slides/` und `animation/index.html` und bettet
+p5.js und die Schriften aus `vendor/` ein; die Animation steckt per `srcdoc` im Frame der
+Folie `gesamtablauf`. Die Lizenzen von Schriften und p5.js liegen in `offline/licenses/`.
