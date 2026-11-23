@@ -3,7 +3,7 @@
 <p class="note">Der echte Weg zum Pass ist immer gleich: Das kubelet fordert ihn für einen Pod an, den GitOps angelegt hat. Alles andere lässt sich abweisen.</p>
 <table class="tbl small">
 <tr class="head"><th style="width:34%">Regel</th><th style="width:36%">hart erzwungen durch</th><th style="width:30%">Alarm, wenn …</th></tr>
-<tr><td>Pässe stellt nur das kubelet aus, an einen Pod gebunden, höchstens 10 min gültig</td><td>Rechte: sonst darf niemand Tokens anfordern; Admission-Regel auf die Token-Anforderung</td><td>der Notfallzugang genutzt wird</td></tr>
+<tr><td>Pässe fordert nur das kubelet an, an einen Pod gebunden, höchstens 10 min gültig</td><td>Rechte: sonst darf niemand Tokens anfordern; Admission-Regel auf die Token-Anforderung</td><td>der Notfallzugang genutzt wird</td></tr>
 <tr><td>Pods entstehen nur über GitOps, mit freigegebenem Image</td><td>Admission-Regeln: nur die Controller legen Pods an, Image muss signiert sein</td><td>eine Regel geändert oder gelöscht wird</td></tr>
 <tr><td>Niemand liest in laufenden Pods mit</td><td>Rechte: kein exec, attach oder Debug-Container im Namespace</td><td>der Notfallzugang genutzt wird</td></tr>
 <tr><td>Ein Pass wird nur aus dem Cluster vorgelegt</td><td>Gateway vor Keycloak lässt nur die IP-Adressen des Clusters durch</td><td>jemand von außen abgewiesen wird – sein Pass ist gestohlen</td></tr>
