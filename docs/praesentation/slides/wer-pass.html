@@ -4,7 +4,7 @@
 <tr class="head"><th style="width:22%">Frage</th><th style="width:36%">Heute: Client-Zertifikat</th><th style="width:42%">Neu: ServiceAccount-Token</th></tr>
 <tr><td>Was ist die Identität?</td><td>Merkmale im Subject-DN</td><td>Namespace + ServiceAccount (sub)</td></tr>
 <tr><td>Wer bekommt sie?</td><td>wer bei der RA ein Zertifikat für diesen DN genehmigt bekommt</td><td>wer im Namespace deployen oder Tokens anfordern darf</td></tr>
-<tr><td>Wer kann mitlesen?</td><td>wer die Ablage des Keystores lesen kann – im besten Fall nur Root, oft auch andere Anwendungen</td><td>wer in den Pod darf (exec), Cluster-Admin, der Node des Pods</td></tr>
+<tr><td>Wer kann mitlesen?</td><td>wer die Ablage des Keystores lesen kann – im besten Fall nur Root, manchmal auch andere Anwendungen</td><td>wer in den Pod darf (exec), Cluster-Admin, der Node des Pods</td></tr>
 <tr><td>Wer kann alles fälschen?</td><td>wer den CA-Schlüssel hat</td><td>wer den Signierschlüssel des API-Servers hat</td></tr>
 </table>
 <ul class="pts">
