@@ -136,7 +136,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="box" style="left:40px; top:60px; width:360px; height:130px"><p class="t">PKI / Enrollment</p><p class="d">Zertifikat beantragen und ausrollen</p></div>
 <div class="box" style="left:40px; top:230px; width:360px; height:130px"><p class="t">Client</p><p class="d">Keystore mit privatem Schlüssel</p></div>
 <div class="box" style="left:40px; top:400px; width:360px; height:130px"><p class="t">Server</p><p class="d">mappt Subject-DN auf Authorities</p></div>
-<div class="box accent" style="left:904px; top:60px; width:360px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster</p></div>
+<div class="box" style="left:904px; top:60px; width:360px; height:130px"><p class="t">Plattform</p><p class="d">Kubernetes-Cluster</p></div>
 <div class="box" style="left:904px; top:230px; width:360px; height:130px"><p class="t">Workload</p><p class="d">kein privater Schlüssel, kein Enrollment</p></div>
 <div class="box" style="left:904px; top:400px; width:360px; height:130px"><p class="t">Keycloak + Dienst</p><p class="d">prüfen Token, vergeben Rechte</p></div>
 <x-connector class="ln" x1="220" y1="190" x2="220" y2="230"></x-connector>
@@ -307,7 +307,7 @@ section.cover { justify-content: center; gap: 28px; }
 <div class="box ok" style="left:0px; top:40px; width:260px; height:120px"><p class="t">Prüfer</p><p class="d">z. B. Keycloak</p></div>
 <div class="box" style="left:540px; top:40px; width:260px; height:120px"><p class="t">Discovery-Pod</p><p class="d">über Traefik lesbar</p></div>
 <x-connector class="ln" x1="260" y1="100" x2="540" y2="100"></x-connector>
-<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, 5 min Cache</p>
+<p class="lbl" style="left:276px; top:30px; width:248px; text-align:center">einmal laden, neu bei unbekannter kid</p>
 </div>
 <p class="sh">Stärken</p>
 <ul class="pts">
@@ -348,27 +348,6 @@ section.cover { justify-content: center; gap: 28px; }
 <li>Mit Keycloak kommt eine Laufzeitabhängigkeit hinzu: Ohne erreichbaren Keycloak gibt es nach Ablauf kein neues Access-Token</li>
 </ul>
 <aside>Der PoC prüft Tokens ohne Rückfrage beim Aussteller: Die öffentlichen Schlüssel werden vorab geladen und gecacht (ADR 0001). Der wichtigste Preis dafür: Ein einmal ausgestelltes Token lässt sich vor Ablauf nicht zurückziehen. Taucht eine unbekannte kid auf, laden die Prüfer das JWKS neu; der alte Schlüssel muss trotzdem lange genug im JWKS bleiben, damit ältere Tokens gültig bleiben.</aside>
-</section>
-
-<section id="lab-vs-prod">
-<h2>Was im Lab bewusst vereinfacht ist</h2>
-<table class="tbl small">
-<tr class="head"><th style="width:22%">Thema</th><th style="width:36%">Im PoC</th><th style="width:42%">Für einen echten Einsatz</th></tr>
-<tr><td>Issuer-Endpoint</td><td>Discovery-Pod hinter Traefik (Gateway API) von k3s; davor ein nginx als Load Balancer</td><td>stabile HTTPS-URL; eigenes Gateway für den Issuer, wie im Lab; ggf. eigener Gateway-Controller</td></tr>
-<tr><td>TLS-Vertrauen</td><td>Lab-CA als Stellvertreter der internen PKI</td><td>interne PKI, Root-CA auf allen Systemen verteilt</td></tr>
-<tr><td>JWKS veröffentlichen</td><td>Discovery-Pod holt alle 15 s, prüft Plausibilität, meldet neue kid im Log</td><td>gleiches Muster; Alarm bei unangekündigter kid im Monitoring</td></tr>
-<tr><td>Namespace des Issuers</td><td>eigenes Gateway, nur GET zum Pod; RBAC, Admission-Regeln, NetworkPolicies</td><td>Änderungen nur per GitOps; schützt nicht vor einem Cluster-Admin</td></tr>
-<tr><td>Schlüsselwechsel</td><td>zwei Phasen: erst veröffentlichen, dann signieren</td><td>zwischen zwei Wechseln mindestens Token-Laufzeit + Cache-Dauer</td></tr>
-<tr><td>Widerruf</td><td>ausgestellte Tokens gelten bis exp</td><td>kurze Laufzeit, ggf. jti-Sperrliste oder hybride Online-Prüfung</td></tr>
-<tr><td>Transport zum Dienst</td><td>TLS (einseitig) mit Zertifikat der Lab-CA</td><td>TLS mit Zertifikat der internen PKI; optional mTLS oder sender-gebundene Tokens (DPoP)</td></tr>
-<tr><td>Keycloak</td><td>Einzelknoten, Datei-Datenbank, Realm per JSON-Import</td><td>gemeinsamer HA-Keycloak; Realm als Code per CI, 4-Augen-Review, Audit</td></tr>
-</table>
-<ul class="pts">
-<li>Das Muster selbst ist produktionsnah – vereinfacht sind Betrieb und Verteilung der Metadaten</li>
-<li>Keycloak ist austauschbar; die Alternative Spring Authorization Server bräuchte eine eigene Prüfung des ServiceAccount-Tokens</li>
-<li>Die Entscheidungen sind als ADRs 0001–0006 im Repo dokumentiert</li>
-</ul>
-<aside>Hier lohnt sich die Diskussion mit den Kolleginnen und Kollegen: Wo würden wir Discovery-Dokument und JWKS in unserer Umgebung veröffentlichen, und wie gehen wir mit Rotation und Widerruf um?</aside>
 </section>
 
 <div id="hud"></div>
